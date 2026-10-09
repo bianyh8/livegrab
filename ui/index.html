@@ -1,0 +1,1966 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>直播录制台 LiveGrab · UI 原型</title>
+<style>
+/* ================= 设计令牌 ================= */
+:root{
+  --bg:#0a0d13; --bg-2:#0e131b; --panel:#141a24; --panel-2:#1a2230; --panel-3:#202a3a;
+  --line:#232d3d; --line-2:#2e3a4d;
+  --txt:#e8eef7; --txt-2:#98a6ba; --txt-3:#66748a;
+  --dy:#fe2c55; --dy-2:#25f4ee; --bili:#fb7299; --bili-2:#00aeec;
+  --ok:#2ee6a8; --warn:#f7b23b; --err:#f2545b; --accent:#5b8cff; --purple:#a97bff;
+  --r-s:8px; --r:12px; --r-l:16px;
+  --sd:0 8px 28px rgba(0,0,0,.45);
+  --sp:15px;
+}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{
+  margin:0;background:
+    radial-gradient(1100px 600px at 12% -8%,rgba(254,44,85,.10),transparent 60%),
+    radial-gradient(900px 500px at 88% 0%,rgba(0,174,236,.10),transparent 55%),
+    var(--bg);
+  color:var(--txt);
+  font:14px/1.55 "PingFang SC","Microsoft YaHei","Segoe UI",system-ui,sans-serif;
+  -webkit-font-smoothing:antialiased;
+}
+::-webkit-scrollbar{width:9px;height:9px}
+::-webkit-scrollbar-thumb{background:#2b3648;border-radius:9px}
+::-webkit-scrollbar-thumb:hover{background:#3a4761}
+::-webkit-scrollbar-track{background:transparent}
+
+/* ================= 布局 ================= */
+.app{display:flex;min-height:100vh}
+.sidebar{
+  width:236px;flex:0 0 236px;background:rgba(14,19,27,.92);border-right:1px solid var(--line);
+  display:flex;flex-direction:column;position:sticky;top:0;height:100vh;backdrop-filter:blur(8px);
+}
+.brand{display:flex;gap:11px;align-items:center;padding:18px 18px 16px}
+.brand .logo{
+  width:34px;height:34px;border-radius:10px;position:relative;flex:0 0 34px;
+  background:linear-gradient(135deg,var(--dy),#ff6a8a 45%,var(--dy-2));
+  display:grid;place-items:center;font-weight:800;font-size:15px;color:#0a0d13;
+  box-shadow:0 6px 18px rgba(254,44,85,.32);
+}
+.brand h1{margin:0;font-size:15px;letter-spacing:.3px}
+.brand small{display:block;color:var(--txt-3);font-size:11px;font-weight:400;letter-spacing:.6px}
+.nav{padding:6px 10px;overflow:auto;flex:1}
+.nav-group{color:var(--txt-3);font-size:11px;letter-spacing:1.2px;padding:14px 10px 6px;font-weight:600}
+.nav-item{
+  display:flex;align-items:center;gap:10px;padding:9px 11px;border-radius:var(--r-s);
+  color:var(--txt-2);cursor:pointer;user-select:none;margin-bottom:2px;position:relative;
+  transition:.16s;border:1px solid transparent;
+}
+.nav-item svg{width:17px;height:17px;stroke-width:1.9}
+.nav-item:hover{background:var(--panel-2);color:var(--txt)}
+.nav-item.active{
+  background:linear-gradient(90deg,rgba(254,44,85,.16),rgba(37,244,238,.07));
+  color:#fff;border-color:rgba(254,44,85,.30);
+}
+.nav-item.active::before{
+  content:"";position:absolute;left:-10px;top:8px;bottom:8px;width:3px;border-radius:3px;
+  background:linear-gradient(var(--dy),var(--dy-2));
+}
+.nav-item .badge{
+  margin-left:auto;font-size:10.5px;padding:1px 7px;border-radius:20px;
+  background:rgba(254,44,85,.18);color:#ff8ba4;border:1px solid rgba(254,44,85,.28);
+}
+.nav-item .badge.gray{background:var(--panel-3);color:var(--txt-2);border-color:var(--line-2)}
+.side-foot{border-top:1px solid var(--line);padding:12px 14px;font-size:12px;color:var(--txt-3)}
+.disk-mini{height:5px;border-radius:5px;background:#1e2634;overflow:hidden;margin:7px 0 6px}
+.disk-mini i{display:block;height:100%;width:41%;background:linear-gradient(90deg,var(--dy-2),var(--accent))}
+
+.main{flex:1;min-width:0;display:flex;flex-direction:column}
+.topbar{
+  height:62px;flex:0 0 62px;border-bottom:1px solid var(--line);display:flex;align-items:center;
+  gap:14px;padding:0 22px;background:rgba(10,13,19,.75);backdrop-filter:blur(10px);
+  position:sticky;top:0;z-index:30;
+}
+.topbar h2{margin:0;font-size:16px;font-weight:600}
+.topbar .sub{color:var(--txt-3);font-size:12px;margin-left:2px}
+.spacer{flex:1}
+.content{padding:20px 22px 40px;display:block}
+.page{display:none;animation:fade .22s ease}
+.page.active{display:block}
+@keyframes fade{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+
+/* ================= 基础组件 ================= */
+.btn{
+  display:inline-flex;align-items:center;gap:7px;padding:8px 14px;border-radius:var(--r-s);
+  border:1px solid var(--line-2);background:var(--panel-2);color:var(--txt);cursor:pointer;
+  font-size:13px;font-family:inherit;transition:.15s;white-space:nowrap;
+}
+.btn:hover{background:var(--panel-3);border-color:#3b4a61}
+.btn svg{width:15px;height:15px;stroke-width:2}
+.btn.primary{
+  background:linear-gradient(135deg,var(--dy),#ff5f7e);border-color:transparent;color:#fff;font-weight:600;
+  box-shadow:0 6px 18px rgba(254,44,85,.28);
+}
+.btn.primary:hover{filter:brightness(1.08)}
+.btn.ghost{background:transparent}
+.btn.sm{padding:5px 10px;font-size:12px}
+.btn.danger{color:#ffb3b8;border-color:rgba(242,84,91,.35);background:rgba(242,84,91,.10)}
+.btn.danger:hover{background:rgba(242,84,91,.18)}
+.btn.ok{color:#9bf3d3;border-color:rgba(46,230,168,.3);background:rgba(46,230,168,.1)}
+.btn:disabled{opacity:.45;cursor:not-allowed}
+
+.card{background:linear-gradient(180deg,var(--panel),var(--bg-2));border:1px solid var(--line);border-radius:var(--r-l);box-shadow:var(--sd)}
+.card-h{display:flex;align-items:center;gap:10px;padding:14px 16px;border-bottom:1px solid var(--line)}
+.card-h h3{margin:0;font-size:14px;font-weight:600}
+.card-h .hint{color:var(--txt-3);font-size:12px}
+.card-b{padding:16px}
+
+.chip{
+  display:inline-flex;align-items:center;gap:5px;font-size:11.5px;padding:2.5px 9px;border-radius:20px;
+  border:1px solid var(--line-2);color:var(--txt-2);background:var(--panel-2);white-space:nowrap;
+}
+.chip .dot{width:6px;height:6px;border-radius:50%;background:currentColor}
+.chip.dy{color:#ff7391;border-color:rgba(254,44,85,.35);background:rgba(254,44,85,.10)}
+.chip.bili{color:#7fd0f5;border-color:rgba(0,174,236,.35);background:rgba(0,174,236,.10)}
+.chip.on{color:#8ff0cc;border-color:rgba(46,230,168,.35);background:rgba(46,230,168,.10)}
+.chip.wait{color:#ffd08a;border-color:rgba(247,178,59,.35);background:rgba(247,178,59,.10)}
+.chip.err{color:#ffa3a8;border-color:rgba(242,84,91,.35);background:rgba(242,84,91,.10)}
+.chip.off{color:var(--txt-3)}
+
+.plat{display:inline-flex;align-items:center;gap:7px}
+.plat i{
+  width:20px;height:20px;border-radius:6px;display:grid;place-items:center;font-style:normal;
+  font-size:10.5px;font-weight:800;color:#0a0d13;flex:0 0 20px;
+}
+/* 平台徽标：统一用 --p1/--p2 渐变，新增平台只需加一行 */
+.plat.dy   {--p1:#fe2c55;--p2:#25f4ee}
+.plat.bili {--p1:#fb7299;--p2:#00aeec}
+.plat.xhs  {--p1:#ff2442;--p2:#ff8095}
+.plat.wb   {--p1:#e6162d;--p2:#ff9a3c}
+.plat.ks   {--p1:#ff5000;--p2:#ffb100}
+.plat.huya {--p1:#ff9c00;--p2:#ffd76a}
+.plat.douyu{--p1:#ff5d23;--p2:#ffa06a}
+.plat.wx   {--p1:#07c160;--p2:#5ad58c}
+.plat.ac   {--p1:#fd4c5b;--p2:#ff8f9a}
+.plat.cc   {--p1:#e60012;--p2:#ff6b73}
+.plat.yy   {--p1:#ff6a00;--p2:#ffb066}
+.plat.more {--p1:#5b8cff;--p2:#a97bff}
+.plat i{background:linear-gradient(135deg,var(--p1),var(--p2))}
+.plat.plain i{background:#2b3648;color:var(--txt-2)}
+
+.tag{font-size:11px;padding:2px 7px;border-radius:5px;background:var(--panel-3);color:var(--txt-2);border:1px solid var(--line-2)}
+.mono{font-family:"JetBrains Mono",Consolas,"Courier New",monospace}
+
+label.fl{display:block;font-size:12.5px;color:var(--txt-2);margin:0 0 7px}
+.input,.select,textarea.input{
+  width:100%;padding:9px 12px;border-radius:var(--r-s);border:1px solid var(--line-2);
+  background:#0d1219;color:var(--txt);font:13px/1.5 inherit;outline:none;transition:.15s;
+}
+.input:focus,.select:focus,textarea.input:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(91,140,255,.14)}
+.select{appearance:none;background-image:linear-gradient(45deg,transparent 50%,var(--txt-3) 50%),linear-gradient(135deg,var(--txt-3) 50%,transparent 50%);
+  background-position:calc(100% - 16px) 18px,calc(100% - 11px) 18px;background-size:5px 5px;background-repeat:no-repeat}
+.row{display:flex;gap:14px}
+.row.wrap{flex-wrap:wrap}
+.f1{flex:1;min-width:0}
+.form-row{margin-bottom:16px}
+.hintline{font-size:11.5px;color:var(--txt-3);margin-top:6px}
+
+.switch{width:42px;height:23px;border-radius:20px;background:#28313f;border:1px solid var(--line-2);position:relative;cursor:pointer;flex:0 0 42px;transition:.18s}
+.switch i{position:absolute;top:2px;left:2px;width:17px;height:17px;border-radius:50%;background:#7b8798;transition:.18s}
+.switch.on{background:linear-gradient(90deg,rgba(254,44,85,.55),rgba(254,44,85,.85));border-color:transparent}
+.switch.on i{left:21px;background:#fff}
+.sw-row{display:flex;align-items:center;gap:12px;padding:11px 0;border-bottom:1px dashed var(--line)}
+.sw-row:last-child{border-bottom:0}
+.sw-row .t{font-size:13px}
+.sw-row .d{font-size:11.5px;color:var(--txt-3)}
+
+/* 统计卡 */
+.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:16px}
+.stat{padding:15px 16px;border-radius:var(--r-l);border:1px solid var(--line);background:linear-gradient(160deg,var(--panel),var(--bg-2));position:relative;overflow:hidden}
+.stat::after{content:"";position:absolute;right:-30px;top:-30px;width:110px;height:110px;border-radius:50%;background:radial-gradient(circle,rgba(254,44,85,.13),transparent 70%)}
+.stat.b::after{background:radial-gradient(circle,rgba(0,174,236,.14),transparent 70%)}
+.stat.g::after{background:radial-gradient(circle,rgba(46,230,168,.13),transparent 70%)}
+.stat.p::after{background:radial-gradient(circle,rgba(169,123,255,.14),transparent 70%)}
+.stat .k{color:var(--txt-3);font-size:12px;display:flex;align-items:center;gap:7px}
+.stat .v{font-size:26px;font-weight:700;letter-spacing:.5px;margin:6px 0 2px}
+.stat .v small{font-size:12px;font-weight:400;color:var(--txt-3);margin-left:4px}
+.stat .d{font-size:11.5px;color:var(--txt-3)}
+.stat .d b{color:var(--ok);font-weight:600}
+.stat .d b.down{color:var(--warn)}
+
+.grid2{display:grid;grid-template-columns:minmax(0,1.55fr) minmax(0,1fr);gap:16px}
+.grid2b{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,340px);gap:16px}
+
+/* ================= 登录页 ================= */
+.login{position:fixed;inset:0;z-index:300;display:grid;grid-template-columns:minmax(0,1.02fr) minmax(430px,.98fr);background:var(--bg)}
+.login.hide{display:none}
+.login-visual{position:relative;overflow:hidden;display:flex;flex-direction:column;justify-content:space-between;padding:44px 48px;
+  background:
+    radial-gradient(900px 620px at 18% -5%,rgba(254,44,85,.24),transparent 62%),
+    radial-gradient(720px 520px at 88% 92%,rgba(37,244,238,.18),transparent 60%),
+    linear-gradient(160deg,#0e131c,#0a0d13)}
+.login-visual::after{content:"";position:absolute;inset:0;pointer-events:none;
+  background-image:linear-gradient(rgba(255,255,255,.035) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.035) 1px,transparent 1px);
+  background-size:46px 46px;
+  -webkit-mask-image:radial-gradient(620px 460px at 32% 26%,#000,transparent 76%);
+  mask-image:radial-gradient(620px 460px at 32% 26%,#000,transparent 76%)}
+.login-visual>*{position:relative;z-index:1}
+.lv-head{display:flex;align-items:center;gap:12px}
+.login-visual h1{font-size:30px;margin:0 0 10px;letter-spacing:.5px;line-height:1.3}
+.login-visual .lead{color:var(--txt-2);font-size:13.5px;max-width:430px;margin:0 0 22px}
+.lv-feats{display:flex;flex-direction:column;gap:13px;max-width:440px}
+.lv-feat{display:flex;gap:11px;align-items:flex-start}
+.lv-feat i{width:26px;height:26px;flex:0 0 26px;border-radius:8px;display:grid;place-items:center;
+  background:rgba(255,255,255,.06);border:1px solid var(--line-2);font-style:normal;font-size:13px;color:#8fe9f7}
+.lv-feat b{display:block;font-size:13.5px;font-weight:600}
+.lv-feat span{font-size:12px;color:var(--txt-3)}
+.lv-foot{display:flex;align-items:center;gap:9px;flex-wrap:wrap;color:var(--txt-3);font-size:11.5px}
+.login-panel{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;padding:40px 32px;background:var(--bg-2);border-left:1px solid var(--line)}
+.login-card{width:100%;max-width:390px;background:linear-gradient(180deg,var(--panel),var(--bg-2));border:1px solid var(--line);border-radius:18px;padding:26px 24px;box-shadow:var(--sd)}
+.login-card h2{margin:0 0 6px;font-size:19px}
+.login-card .sub2{color:var(--txt-3);font-size:12.5px;margin:0 0 20px}
+.login-row{display:flex;align-items:center;justify-content:space-between;gap:10px;margin:2px 0 16px}
+.login-row a{color:#8fb4ff;font-size:12.5px;cursor:pointer;text-decoration:none}
+.login-row a:hover{text-decoration:underline}
+.checks{display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--txt-2);cursor:pointer;user-select:none}
+.pw-wrap{position:relative}
+.pw-toggle{position:absolute;right:6px;top:50%;transform:translateY(-50%);background:transparent;border:0;color:var(--txt-3);
+  font:12px/1 inherit;padding:5px 8px;border-radius:7px;cursor:pointer}
+.pw-toggle:hover{background:var(--panel-3);color:var(--txt)}
+.login-btn{width:100%;justify-content:center;padding:11px 16px;font-size:14px}
+.login-err{display:none;align-items:center;gap:8px;margin-bottom:14px;padding:9px 12px;border-radius:9px;
+  background:rgba(242,84,91,.10);border:1px solid rgba(242,84,91,.35);color:#ffb0b5;font-size:12.5px}
+.login-err.show{display:flex}
+.login-err svg{width:15px;height:15px;flex:0 0 15px}
+.login-foot{margin-top:18px;padding-top:16px;border-top:1px dashed var(--line);font-size:12.5px;color:var(--txt-3);display:flex;flex-direction:column;gap:9px;align-items:center;text-align:center}
+.login-foot a{color:#8fb4ff;cursor:pointer}
+.login-foot a:hover{text-decoration:underline}
+.login-meta{color:var(--txt-3);font-size:11.5px;text-align:center}
+.user-row{display:flex;align-items:center;gap:9px;padding-top:11px;border-top:1px solid var(--line)}
+.user-row .ava{width:26px;height:26px;flex:0 0 26px;border-radius:50%;display:grid;place-items:center;font-size:12px;font-weight:800;color:#0a0d13;
+  background:linear-gradient(135deg,var(--dy),var(--dy-2))}
+.user-row .un{font-size:12.5px;font-weight:600}
+.user-row .ur{font-size:11px;color:var(--txt-3)}
+@media (max-width:900px){.login{grid-template-columns:1fr}.login-visual{display:none}}
+
+/* 页签（系统设置内部分区） */
+.tabs{display:flex;gap:6px;border-bottom:1px solid var(--line);margin-bottom:18px;flex-wrap:wrap}
+.tab{padding:9px 15px;border-radius:9px 9px 0 0;color:var(--txt-2);cursor:pointer;font-size:13px;
+  border:1px solid transparent;border-bottom:0;margin-bottom:-1px;transition:.15s;user-select:none}
+.tab:hover{color:var(--txt);background:var(--panel-2)}
+.tab.on{color:#fff;background:linear-gradient(180deg,rgba(254,44,85,.18),transparent);border-color:rgba(254,44,85,.35);font-weight:600}
+.tabpane{display:none}
+.tabpane.active{display:block;animation:fade .22s ease}
+.stack{display:flex;flex-direction:column;gap:16px}
+
+/* 录制中条目 */
+.rec-item{display:flex;gap:13px;align-items:center;padding:13px 16px;border-bottom:1px solid var(--line)}
+.rec-item:last-child{border-bottom:0}
+.thumb{
+  width:74px;height:44px;flex:0 0 74px;border-radius:var(--r-s);position:relative;overflow:hidden;
+  background:linear-gradient(135deg,#26313f,#171d27);display:grid;place-items:center;color:var(--txt-3);font-size:10px;
+  border:1px solid var(--line-2);
+}
+.thumb::after{content:"";position:absolute;inset:0;background:linear-gradient(120deg,transparent 40%,rgba(255,255,255,.06))}
+.rec-main{flex:1;min-width:0}
+.rec-main .ttl{font-size:13.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.rec-main .meta{display:flex;gap:10px;align-items:center;margin-top:5px;font-size:11.5px;color:var(--txt-3);flex-wrap:wrap}
+.rec-right{text-align:right;flex:0 0 auto}
+.rec-right .tm{font-size:15px;font-weight:600;letter-spacing:.5px}
+.pulse{display:inline-flex;align-items:center;gap:6px;color:#ff7a95;font-size:11.5px;font-weight:600}
+.pulse b{width:7px;height:7px;border-radius:50%;background:var(--dy);animation:pl 1.3s infinite}
+@keyframes pl{0%{box-shadow:0 0 0 0 rgba(254,44,85,.7)}70%{box-shadow:0 0 0 7px rgba(254,44,85,0)}100%{box-shadow:0 0 0 0 rgba(254,44,85,0)}}
+.bar{height:5px;border-radius:5px;background:#1d2531;overflow:hidden;margin-top:8px}
+.bar i{display:block;height:100%;background:linear-gradient(90deg,var(--dy),var(--dy-2));border-radius:5px}
+.bar.b i{background:linear-gradient(90deg,var(--bili),var(--bili-2))}
+.seg-track{display:flex;gap:3px;margin-top:7px}
+.seg{height:5px;border-radius:3px;background:#222b39;flex:1}
+.seg.done{background:rgba(37,244,238,.55)}
+.seg.cur{background:linear-gradient(90deg,var(--dy),#ff7590);box-shadow:0 0 8px rgba(254,44,85,.5)}
+
+/* 图表 */
+.chart{display:flex;align-items:flex-end;gap:4px;height:118px;padding:6px 2px 0}
+.chart i{flex:1;background:linear-gradient(180deg,rgba(254,44,85,.85),rgba(254,44,85,.18));border-radius:4px 4px 2px 2px;position:relative;transition:.2s;min-height:4px}
+.chart i:hover{filter:brightness(1.35)}
+.chart i.cy{background:linear-gradient(180deg,rgba(37,244,238,.85),rgba(37,244,238,.15))}
+.chart-x{display:flex;gap:4px;color:var(--txt-3);font-size:10px;margin-top:8px}
+.chart-x span{flex:1;text-align:center}
+
+/* 环形 */
+.donut{width:132px;height:132px;border-radius:50%;position:relative;margin:0 auto 12px;
+  background:conic-gradient(var(--dy) 0 38%,var(--bili-2) 38% 62%,var(--purple) 62% 78%,#2a3444 78% 100%);
+  display:grid;place-items:center}
+.donut::after{content:"";position:absolute;inset:17px;border-radius:50%;background:var(--bg-2)}
+.donut div{position:relative;z-index:1;text-align:center}
+.donut .n{font-size:19px;font-weight:700}
+.donut .l{font-size:10.5px;color:var(--txt-3)}
+.legend{display:flex;flex-direction:column;gap:8px;font-size:12px}
+.legend span{display:flex;align-items:center;gap:8px;color:var(--txt-2)}
+.legend em{width:8px;height:8px;border-radius:3px;font-style:normal}
+.legend b{margin-left:auto;color:var(--txt);font-weight:600}
+
+/* 时间线 */
+.tl{position:relative;padding-left:20px}
+.tl::before{content:"";position:absolute;left:5px;top:6px;bottom:6px;width:1px;background:var(--line-2)}
+.tl-item{position:relative;padding:0 0 14px}
+.tl-item:last-child{padding-bottom:0}
+.tl-item::before{content:"";position:absolute;left:-19px;top:5px;width:9px;height:9px;border-radius:50%;background:var(--panel-3);border:2px solid var(--line-2)}
+.tl-item.e::before{background:var(--err);border-color:rgba(242,84,91,.4)}
+.tl-item.s::before{background:var(--ok);border-color:rgba(46,230,168,.4)}
+.tl-item.i::before{background:var(--accent);border-color:rgba(91,140,255,.4)}
+.tl-item .tx{font-size:12.5px}
+.tl-item .tm{font-size:11px;color:var(--txt-3)}
+
+/* 表格 */
+.toolbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:13px 16px;border-bottom:1px solid var(--line)}
+table{width:100%;border-collapse:collapse}
+th{
+  text-align:left;font-size:11.5px;color:var(--txt-3);font-weight:600;letter-spacing:.4px;
+  padding:10px 14px;border-bottom:1px solid var(--line);background:rgba(255,255,255,.015);white-space:nowrap;
+}
+td{padding:12px 14px;border-bottom:1px solid var(--line);font-size:13px;vertical-align:middle}
+tbody tr:hover{background:rgba(255,255,255,.022)}
+tbody tr:last-child td{border-bottom:0}
+td .sub{font-size:11.5px;color:var(--txt-3);margin-top:3px}
+.acts{display:flex;gap:6px;justify-content:flex-end}
+.cb{width:15px;height:15px;accent-color:var(--dy);cursor:pointer}
+.empty{padding:40px;text-align:center;color:var(--txt-3)}
+
+/* 分段策略卡 */
+.opt-grid{display:grid;gap:10px}
+.opt{
+  border:1px solid var(--line-2);border-radius:var(--r);padding:12px 14px;cursor:pointer;transition:.16s;
+  background:#0f141c;position:relative;
+}
+.opt:hover{border-color:#3c4b63}
+.opt.sel{border-color:rgba(254,44,85,.65);background:linear-gradient(135deg,rgba(254,44,85,.10),rgba(37,244,238,.05));box-shadow:0 0 0 3px rgba(254,44,85,.09)}
+.opt .ot{display:flex;align-items:center;gap:8px;font-size:13px;font-weight:600}
+.opt .od{font-size:11.5px;color:var(--txt-3);margin-top:4px}
+.opt .rd{width:15px;height:15px;border-radius:50%;border:2px solid var(--line-2);flex:0 0 15px}
+.opt.sel .rd{border-color:var(--dy);background:radial-gradient(circle,#fff 0 3px,var(--dy) 3.5px)}
+
+/* 清晰度卡 */
+.q-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:9px}
+.q{border:1px solid var(--line-2);border-radius:var(--r);padding:10px 11px;cursor:pointer;background:#0f141c;transition:.16s;position:relative}
+.q:hover{border-color:#3c4b63}
+.q.sel{border-color:rgba(37,244,238,.6);background:linear-gradient(135deg,rgba(37,244,238,.10),rgba(0,174,236,.05));box-shadow:0 0 0 3px rgba(37,244,238,.08)}
+.q .qt{font-size:12.5px;font-weight:600;display:flex;align-items:center;gap:6px}
+.q .qr{font-size:11px;color:var(--txt-3);margin-top:3px}
+.q .qb{font-size:10.5px;color:var(--txt-3);margin-top:5px;font-family:Consolas,monospace}
+.q.sel .qt{color:#8fe9f7}
+.q .crown{position:absolute;top:-6px;right:8px;font-size:9.5px;padding:1px 6px;border-radius:10px;background:linear-gradient(135deg,var(--warn),#ffd77a);color:#3a2800;font-weight:700}
+
+/* token */
+.tokens{display:flex;flex-wrap:wrap;gap:7px}
+.token{
+  cursor:pointer;font-size:12px;padding:4px 9px;border-radius:6px;border:1px dashed var(--line-2);
+  background:#0f141c;color:#a9c0ff;font-family:Consolas,monospace;transition:.14s;
+}
+.token:hover{background:rgba(91,140,255,.14);border-color:var(--accent);color:#fff;border-style:solid}
+.preview{background:#080b10;border:1px solid var(--line);border-radius:var(--r);padding:13px 14px;font-family:Consolas,monospace;font-size:12px;line-height:1.95}
+.preview .pth{color:var(--txt-3)}
+.preview .fn{color:#8fe9f7}
+.preview .fn b{color:var(--warn);font-weight:600}
+.tree{font-family:Consolas,monospace;font-size:12px;line-height:2;color:var(--txt-2)}
+.tree .d{color:#8fa9ff}
+.tree .f{color:#8fe9f7}
+
+/* 文件列表 */
+.fl-item{display:flex;align-items:center;gap:13px;padding:12px 16px;border-bottom:1px solid var(--line)}
+.fl-item:last-child{border-bottom:0}
+.fl-item:hover{background:rgba(255,255,255,.022)}
+.fl-ico{width:66px;height:40px;flex:0 0 66px;border-radius:8px;display:grid;place-items:center;font-size:10px;font-weight:700;color:#0a0d13;
+  background:linear-gradient(135deg,var(--p1,#2b3648),var(--p2,#3a4761))}
+.fl-ico.dy{--p1:#fe2c55;--p2:#25f4ee}
+.fl-ico.bili{--p1:#fb7299;--p2:#00aeec}
+.fl-ico.xhs{--p1:#ff2442;--p2:#ff8095}
+.fl-ico.wb{--p1:#e6162d;--p2:#ff9a3c}
+.fl-ico.ks{--p1:#ff5000;--p2:#ffb100}
+.segbar{display:flex;gap:2px;margin-top:6px}
+.segbar i{height:4px;border-radius:2px;background:rgba(37,244,238,.5);flex:1}
+.side-tree{border-right:1px solid var(--line);padding:14px 8px;width:230px;flex:0 0 230px}
+.tnode{display:flex;align-items:center;gap:8px;padding:7px 10px;border-radius:7px;font-size:12.5px;color:var(--txt-2);cursor:pointer}
+.tnode:hover{background:var(--panel-2);color:var(--txt)}
+.tnode.on{background:rgba(91,140,255,.14);color:#cfe0ff}
+.tnode .n{margin-left:auto;font-size:11px;color:var(--txt-3)}
+.tnode.child{padding-left:26px}
+
+/* 日志 */
+.lv{font-size:10.5px;font-weight:700;padding:2px 7px;border-radius:5px;letter-spacing:.4px}
+.lv.INFO{background:rgba(91,140,255,.14);color:#9dc0ff}
+.lv.WARN{background:rgba(247,178,59,.14);color:#ffd08a}
+.lv.ERROR{background:rgba(242,84,91,.16);color:#ffa3a8}
+.logline{font-family:Consolas,monospace;font-size:12px;color:var(--txt-2)}
+.logline .t{color:var(--txt-3)}
+
+/* 模态 */
+.mask{position:fixed;inset:0;background:rgba(4,6,10,.72);backdrop-filter:blur(4px);display:none;align-items:center;justify-content:center;z-index:100;padding:24px}
+.mask.show{display:flex}
+.modal{
+  width:min(880px,100%);max-height:88vh;overflow:auto;background:var(--panel);border:1px solid var(--line-2);
+  border-radius:18px;box-shadow:0 30px 80px rgba(0,0,0,.6);animation:pop .2s ease;
+}
+@keyframes pop{from{transform:scale(.97) translateY(8px);opacity:0}to{transform:none;opacity:1}}
+.modal-h{display:flex;align-items:center;padding:16px 20px;border-bottom:1px solid var(--line);position:sticky;top:0;background:var(--panel);z-index:2}
+.modal-h h3{margin:0;font-size:15px}
+.modal-b{padding:20px}
+.modal-f{display:flex;gap:10px;justify-content:flex-end;padding:14px 20px;border-top:1px solid var(--line);position:sticky;bottom:0;background:var(--panel)}
+/* ---------- 浏览器内置播放器 ---------- */
+.player{position:relative;aspect-ratio:16/9;border-bottom:1px solid var(--line);display:grid;place-items:center;
+  background:radial-gradient(120% 130% at 28% 18%,#1a2333,#070a10 70%)}
+.pv-ico{width:76px;height:76px;border-radius:50%;display:grid;place-items:center;font-size:24px;color:#0a0d13;cursor:pointer;
+  padding-left:7px;background:linear-gradient(135deg,var(--dy),var(--dy-2));box-shadow:0 12px 34px rgba(254,44,85,.32)}
+.pv-hint{position:absolute;left:18px;bottom:14px;font-size:12px;color:var(--txt-3)}
+.pv-badge{position:absolute;right:18px;top:14px;font-size:11.5px;padding:4px 9px;border-radius:8px;
+  background:rgba(10,13,19,.72);border:1px solid var(--line);color:var(--txt-2)}
+.pv-bar{display:flex;align-items:center;gap:14px;padding:12px 20px;border-bottom:1px solid var(--line)}
+.pv-track{flex:1;height:6px;border-radius:99px;background:#232c3c;overflow:hidden;position:relative;cursor:pointer}
+.pv-track i{display:block;height:100%;background:linear-gradient(90deg,var(--dy),var(--dy-2));position:relative;z-index:1}
+.pv-track em{position:absolute;left:0;top:0;height:100%;width:82%;background:rgba(255,255,255,.12)}
+.pv-btn{width:34px;height:34px;border-radius:9px;border:1px solid var(--line);background:var(--panel-2);color:var(--txt);
+  cursor:pointer;display:grid;place-items:center;font-size:13px}
+.pv-btn:hover{background:#1d2634}
+.pv-segs{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+.x{margin-left:auto;cursor:pointer;color:var(--txt-3);font-size:20px;line-height:1;padding:2px 6px;border-radius:6px}
+.x:hover{background:var(--panel-2);color:var(--txt)}
+.sect{display:flex;align-items:center;gap:9px;font-size:12.5px;font-weight:600;color:var(--txt);margin:20px 0 11px}
+.sect:first-child{margin-top:0}
+.sect .n{width:19px;height:19px;border-radius:6px;display:grid;place-items:center;font-size:11px;background:linear-gradient(135deg,var(--dy),var(--dy-2));color:#0a0d13;font-weight:800}
+.sect::after{content:"";height:1px;background:var(--line);flex:1}
+.resolved{display:flex;gap:13px;align-items:center;padding:12px 14px;border:1px solid rgba(46,230,168,.28);background:rgba(46,230,168,.07);border-radius:var(--r);margin-top:11px}
+.avatar{width:44px;height:44px;border-radius:50%;flex:0 0 44px;background:linear-gradient(135deg,var(--dy),var(--dy-2));display:grid;place-items:center;font-weight:800;color:#0a0d13}
+
+/* toast */
+.toast{
+  position:fixed;left:50%;bottom:34px;transform:translate(-50%,20px);opacity:0;pointer-events:none;
+  background:var(--panel-3);border:1px solid var(--line-2);color:var(--txt);padding:10px 18px;border-radius:30px;
+  font-size:13px;box-shadow:var(--sd);transition:.25s;z-index:200;display:flex;gap:9px;align-items:center;
+}
+.toast.show{opacity:1;transform:translate(-50%,0)}
+.toast i{width:7px;height:7px;border-radius:50%;background:var(--ok)}
+
+.kv{display:grid;grid-template-columns:118px 1fr;gap:8px 12px;font-size:12.5px}
+.kv .k{color:var(--txt-3)}
+.divider{height:1px;background:var(--line);margin:16px 0}
+.note{font-size:11.5px;color:var(--txt-3);background:#0e141d;border:1px dashed var(--line-2);border-radius:var(--r-s);padding:9px 12px}
+.badge-num{display:inline-grid;place-items:center;min-width:18px;height:18px;padding:0 5px;border-radius:9px;background:rgba(254,44,85,.2);color:#ff8ba4;font-size:11px;font-weight:700}
+</style>
+</head>
+<body>
+<!-- ================= 登录页（未登录时的入口；原型中以"原型预览"按钮跳过） ================= -->
+<div class="login" id="loginPage">
+  <div class="login-visual">
+    <div class="lv-head">
+      <div class="logo" style="width:38px;height:38px;flex:0 0 38px;border-radius:11px">L</div>
+      <div>
+        <div style="font-size:14px;font-weight:700;letter-spacing:.3px">直播录制台 LiveGrab</div>
+      </div>
+    </div>
+    <div>
+      <h1>直播留档，<br />从开播那一刻开始</h1>
+      <p class="lead">监控直播间、开播自动录制、按时间或大小分段、按你的规则命名归档 —— 全部在一个浏览器页面里完成。</p>
+      <div class="lv-feats">
+        <div class="lv-feat"><i>◉</i><div><b>开播自动录制</b><span>轮询检测直播间状态，开播即录，下播自动收尾</span></div></div>
+        <div class="lv-feat"><i>≣</i><div><b>分段与合并</b><span>按 30/60/120 分钟或按文件大小分卷，可一键合并为完整成片</span></div></div>
+        <div class="lv-feat"><i>{ }</i><div><b>命名规则自由配置</b><span>{日期}_{主播}_{清晰度}_{序号}，目录结构同样可模板化</span></div></div>
+        <div class="lv-feat"><i>▷</i><div><b>浏览器内直接回放</b><span>录完的文件在文件库中即可播放、转封装与下载</span></div></div>
+      </div>
+    </div>
+    <div class="lv-foot">
+      <span class="plat dy"><i>抖</i>抖音</span>
+      <span class="plat bili"><i>B</i>哔哩哔哩</span>
+      <span>· 单容器 Docker 部署 · 数据仅存本地</span>
+    </div>
+  </div>
+
+  <div class="login-panel">
+    <div class="login-card">
+      <h2 id="loginTitle">登录管理台</h2>
+      <p class="sub2" id="loginSub">请输入管理员账号与密码以访问录制管理台</p>
+
+      <div class="login-err" id="loginErr">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 8v5M12 16h.01"/></svg>
+        <span id="loginErrTx">用户名或密码错误</span>
+      </div>
+
+      <form id="loginForm" onsubmit="doLogin(event)">
+        <div class="form-row" id="loginUserRow">
+          <label class="fl">用户名</label>
+          <input class="input" id="loginUser" value="admin" autocomplete="username" />
+        </div>
+        <div class="form-row">
+          <label class="fl">密码</label>
+          <div class="pw-wrap">
+            <input class="input" id="loginPass" type="password" placeholder="请输入密码" autocomplete="current-password" />
+            <button type="button" class="pw-toggle" onclick="togglePw(this,'loginPass')">显示</button>
+          </div>
+        </div>
+        <div class="form-row" id="loginPass2Row" style="display:none">
+          <label class="fl">确认密码</label>
+          <div class="pw-wrap">
+            <input class="input" id="loginPass2" type="password" placeholder="请再次输入密码" autocomplete="new-password" />
+            <button type="button" class="pw-toggle" onclick="togglePw(this,'loginPass2')">显示</button>
+          </div>
+        </div>
+        <div class="login-row" id="loginRememberRow">
+          <label class="checks"><input type="checkbox" class="cb" checked /> 记住我（30 天免登录）</label>
+          <a onclick="toast('请联系部署管理员：删除容器内 /config/auth.json 后重启即可重置密码')">忘记密码？</a>
+        </div>
+        <button class="btn primary login-btn" id="loginBtn" type="submit">登 录</button>
+      </form>
+
+      <div class="login-foot">
+        <div><span id="loginSwitchHint">首次部署？</span> <a id="loginSwitchLink" onclick="switchLoginMode()">初始化管理员账号</a></div>
+        <div><a onclick="enterApp()">原型预览：跳过登录直接进入管理台 →</a></div>
+      </div>
+    </div>
+    <div class="login-meta">LiveGrab v1.0 · 单管理员账号 · 凭据保存在容器内 /config 卷（不含明文）</div>
+  </div>
+</div>
+
+<div class="app">
+  <!-- ============ 侧边栏 ============ -->
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="logo">L</div>
+      <div>
+        <h1>直播录制台 <span style="color:var(--txt-3);font-weight:400">LiveGrab</span></h1>
+      </div>
+    </div>
+    <nav class="nav" id="nav">
+      <div class="nav-group">监控</div>
+      <div class="nav-item active" data-page="dashboard">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/></svg>
+        总览 <span class="badge">4 录制中</span>
+      </div>
+      <div class="nav-item" data-page="tasks">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="2" y="5" width="14" height="14" rx="2"/><path d="M16 10l6-3v10l-6-3z"/></svg>
+        录制任务 <span class="badge gray">11</span>
+      </div>
+      <div class="nav-item" data-page="files">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+        录制文件 <span class="badge gray">1.2k</span>
+      </div>
+      <div class="nav-item" data-page="events">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M20 12a8 8 0 1 1-16 0 8 8 0 0 1 16 0z"/><path d="M12 8v4l2.5 2.5"/></svg>
+        最近事件
+      </div>
+      <div class="nav-group">系统</div>
+      <div class="nav-item" data-page="settings">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M4 6h16M4 12h16M4 18h16"/><circle cx="9" cy="6" r="2" fill="#0a0d13"/><circle cx="15" cy="12" r="2" fill="#0a0d13"/><circle cx="8" cy="18" r="2" fill="#0a0d13"/></svg>
+        系统设置
+      </div>
+      <div class="nav-item" data-page="logs">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M5 3h14v18H5z"/><path d="M9 8h6M9 12h6M9 16h3"/></svg>
+        运行日志
+      </div>
+    </nav>
+    <div class="side-foot">
+      <div style="display:flex;align-items:center;gap:7px;margin-bottom:10px">
+        <span class="chip on"><i class="dot"></i>引擎正常</span>
+        <span class="chip">v1.0 原型</span>
+      </div>
+      <div class="user-row">
+        <span class="ava">A</span>
+        <div class="f1" style="min-width:0">
+          <div class="un">admin</div>
+          <div class="ur">管理员 · 本次登录 21:03</div>
+        </div>
+        <button class="btn sm ghost" onclick="logout()">退出</button>
+      </div>
+    </div>
+  </aside>
+
+  <!-- ============ 主区 ============ -->
+  <main class="main">
+    <header class="topbar">
+      <h2 id="pageTitle">总览</h2>
+      <span class="sub" id="pageSub">实时监控中的直播间与录制状态</span>
+      <div class="spacer"></div>
+      <span class="chip wait"><i class="dot"></i>账号 4/11 已登录 · B站 Cookie 6 天后过期</span>
+      <button class="btn" onclick="toast('已重新拉取所有直播间状态')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M20 12a8 8 0 1 1-2.3-5.6"/><path d="M20 4v5h-5"/></svg>刷新
+      </button>
+      <button class="btn primary" onclick="openModal()">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M12 5v14M5 12h14"/></svg>新建录制任务
+      </button>
+    </header>
+
+    <div class="content">
+      <!-- ================= 总览 ================= -->
+      <section class="page active" id="page-dashboard">
+        <div class="stats">
+          <div class="stat">
+            <div class="k"><span class="pulse" style="font-size:11px"><b></b>正在录制</span></div>
+            <div class="v">4<small>路并发 / 上限 8</small></div>
+            <div class="d">合计码率 <b>20.4 Mbps</b> · 覆盖 4 个平台</div>
+          </div>
+          <div class="stat b">
+            <div class="k">今日录制时长</div>
+            <div class="v">12<small>小时</small> 38<small>分</small></div>
+            <div class="d">较昨日 <b>+18%</b></div>
+          </div>
+          <div class="stat g">
+            <div class="k">今日新增文件</div>
+            <div class="v">27<small>个 / 86.4 GB</small></div>
+            <div class="d">已自动转封装 <b>24</b> 个</div>
+          </div>
+          <div class="stat p">
+            <div class="k">磁盘占用</div>
+            <div class="v">412<small>GB / 1000 GB</small></div>
+            <div class="d">剩余约 <b class="down">7.2 天</b> 录制量</div>
+          </div>
+        </div>
+
+        <div class="grid2">
+          <div class="stack">
+            <div class="card">
+              <div class="card-h">
+                <h3>正在录制</h3><span class="hint">4 路 · 分段写入中</span>
+                <div class="spacer"></div>
+                <button class="btn sm ghost" onclick="toast('已全部暂停（原型演示）')">全部暂停</button>
+              </div>
+              <div class="card-b" style="padding:0">
+                <div class="rec-item">
+                  <div class="thumb">LIVE</div>
+                  <div class="rec-main">
+                    <div class="ttl">某某小主播 · 今天打排位 冲王者</div>
+                    <div class="meta">
+                      <span class="plat dy"><i>抖</i>抖音</span><span>房间 23456789</span>
+                      <span class="chip">原画 1080P60</span><span class="chip">60 分钟/段</span>
+                      <span class="chip on"><i class="dot"></i>第 2 段 / 已写 1.8 GB</span>
+                    </div>
+                    <div class="seg-track"><i class="seg done"></i><i class="seg cur"></i><i class="seg"></i><i class="seg"></i><i class="seg"></i><i class="seg"></i></div>
+                  </div>
+                  <div class="rec-right">
+                    <div class="tm">01:23:45</div>
+                    <div style="font-size:11px;color:var(--txt-3)">本段 00:23:45</div>
+                    <div class="acts" style="margin-top:7px">
+                      <button class="btn sm" title="结束当前分段并停止拉流，不占用并发；恢复时新开分段、序号继续" onclick="toast('已暂停：本段已结束并入库，拉流已停止，不占用并发')">暂停本段</button>
+                      <button class="btn sm danger" onclick="toast('已发送「停止并转封装」指令')">停止</button>
+                    </div>
+                  </div>
+                </div>
+                <div class="rec-item">
+                  <div class="thumb">LIVE</div>
+                  <div class="rec-main">
+                    <div class="ttl">某某游戏君 · 新赛季上分实录</div>
+                    <div class="meta">
+                      <span class="plat bili"><i>B</i>哔哩哔哩</span><span>房间 1234567</span>
+                      <span class="chip">蓝光 1080P</span><span class="chip">2 GB/段</span>
+                      <span class="chip on"><i class="dot"></i>第 4 段 / 已写 0.6 GB</span>
+                    </div>
+                    <div class="seg-track"><i class="seg done"></i><i class="seg done"></i><i class="seg done"></i><i class="seg cur"></i><i class="seg"></i><i class="seg"></i></div>
+                  </div>
+                  <div class="rec-right">
+                    <div class="tm">03:51:02</div>
+                    <div style="font-size:11px;color:var(--txt-3)">本段 00:12:30</div>
+                    <div class="acts" style="margin-top:7px">
+                      <button class="btn sm" title="结束当前分段并停止拉流，不占用并发；恢复时新开分段、序号继续" onclick="toast('已暂停：本段已结束并入库，拉流已停止，不占用并发')">暂停本段</button>
+                      <button class="btn sm danger" onclick="toast('已发送「停止并转封装」指令')">停止</button>
+                    </div>
+                  </div>
+                </div>
+                <div class="rec-item">
+                  <div class="thumb">LIVE</div>
+                  <div class="rec-main">
+                    <div class="ttl">某某穿搭日记 · 秋冬上新试穿</div>
+                    <div class="meta">
+                      <span class="plat xhs"><i>红</i>小红书</span><span>房间 5f8a2c1e</span>
+                      <span class="chip">默认画质 1080P</span><span class="chip">30 分钟/段</span>
+                      <span class="chip wait"><i class="dot"></i>清晰度不可选</span>
+                    </div>
+                    <div class="seg-track"><i class="seg done"></i><i class="seg cur"></i><i class="seg"></i><i class="seg"></i></div>
+                  </div>
+                  <div class="rec-right">
+                    <div class="tm">00:38:12</div>
+                    <div style="font-size:11px;color:var(--txt-3)">本段 00:08:12</div>
+                    <div class="acts" style="margin-top:7px">
+                      <button class="btn sm" title="结束当前分段并停止拉流，不占用并发；恢复时新开分段、序号继续" onclick="toast('已暂停：本段已结束并入库，拉流已停止，不占用并发')">暂停本段</button>
+                      <button class="btn sm danger" onclick="toast('已发送「停止并转封装」指令')">停止</button>
+                    </div>
+                  </div>
+                </div>
+                <div class="rec-item">
+                  <div class="thumb">AUDIO</div>
+                  <div class="rec-main">
+                    <div class="ttl">午夜电台 · 深夜点歌台</div>
+                    <div class="meta">
+                      <span class="plat dy"><i>抖</i>抖音</span><span>房间 99887766</span>
+                      <span class="chip">仅音频 AAC 128k</span><span class="chip">不分段</span>
+                      <span class="chip on"><i class="dot"></i>写入中 268 MB</span>
+                    </div>
+                    <div class="bar" style="width:100%"><i style="width:64%"></i></div>
+                  </div>
+                  <div class="rec-right">
+                    <div class="tm">00:47:19</div>
+                    <div style="font-size:11px;color:var(--txt-3)">单文件</div>
+                    <div class="acts" style="margin-top:7px">
+                      <button class="btn sm" title="结束当前分段并停止拉流，不占用并发；恢复时新开分段、序号继续" onclick="toast('已暂停：本段已结束并入库，拉流已停止，不占用并发')">暂停本段</button>
+                      <button class="btn sm danger" onclick="toast('已发送「停止并转封装」指令')">停止</button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="card">
+              <div class="card-h"><h3>24 小时录制活动</h3><span class="hint">按每小时输出体积统计</span>
+                <div class="spacer"></div><span class="chip">今日 86.4 GB</span></div>
+              <div class="card-b">
+                <div class="chart">
+                  <i style="height:12%" title="00:00 · 0.4GB"></i><i style="height:9%" title="01:00 · 0.3GB"></i>
+                  <i style="height:8%" title="02:00"></i><i style="height:10%" title="03:00"></i>
+                  <i style="height:14%" title="04:00"></i><i style="height:11%" title="05:00"></i>
+                  <i style="height:16%" title="06:00"></i><i style="height:24%" title="07:00"></i>
+                  <i style="height:38%" title="08:00"></i><i style="height:52%" title="09:00"></i>
+                  <i style="height:64%" title="10:00"></i><i style="height:71%" title="11:00"></i>
+                  <i style="height:58%" title="12:00"></i><i style="height:49%" title="13:00"></i>
+                  <i style="height:66%" title="14:00"></i><i style="height:82%" title="15:00"></i>
+                  <i style="height:94%" title="16:00"></i><i style="height:78%" title="17:00"></i>
+                  <i style="height:88%" title="18:00"></i><i style="height:100%" title="19:00"></i>
+                  <i style="height:96%" title="20:00"></i><i class="cy" style="height:84%" title="21:00"></i>
+                  <i class="cy" style="height:62%" title="22:00"></i><i class="cy" style="height:34%" title="23:00"></i>
+                </div>
+                <div class="chart-x"><span>00</span><span>04</span><span>08</span><span>12</span><span>16</span><span>20</span><span>23</span></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="stack">
+            <div class="card">
+              <div class="card-h"><h3>存储分布</h3></div>
+              <div class="card-b">
+                <div class="donut" style="background:conic-gradient(var(--dy) 0 15.6%,var(--bili-2) 15.6% 25.5%,#ff2442 25.5% 28.7%,#5b8cff 28.7% 34.6%,var(--purple) 34.6% 41.2%,#2a3444 41.2% 100%)"><div><div class="n">412G</div><div class="l">已用 41%</div></div></div>
+                <div class="legend">
+                  <span><em style="background:var(--dy)"></em>抖音<b>156 G</b></span>
+                  <span><em style="background:var(--bili-2)"></em>哔哩哔哩<b>99 G</b></span>
+                  <span><em style="background:#ff2442"></em>小红书<b>32 G</b></span>
+                  <span><em style="background:#5b8cff"></em>微博 / 快手 / 其他平台<b>59 G</b></span>
+                  <span><em style="background:var(--purple)"></em>转封装 MP4 副本<b>66 G</b></span>
+                  <span><em style="background:#2a3444"></em>可用空间<b>588 G</b></span>
+                </div>
+                <div class="divider"></div>
+                <div class="note">当前清理策略：低于 <b>120 GB</b> 时自动删除最旧的 7 天前成品文件（不影响正在录制的分段）。</div>
+              </div>
+            </div>
+
+            <div class="card">
+              <div class="card-h"><h3>监控中 · 等待开播</h3><span class="hint">开播后自动开始录制</span></div>
+              <div class="card-b" style="padding:0">
+                <div class="rec-item" style="padding:11px 16px">
+                  <span class="plat dy"><i>抖</i></span>
+                  <div class="rec-main"><div class="ttl" style="font-size:13px">某某购物节 · 服饰专场</div>
+                    <div class="meta"><span>每 60 秒轮询</span><span>原画</span></div></div>
+                  <span class="chip wait"><i class="dot"></i>未开播</span>
+                </div>
+                <div class="rec-item" style="padding:11px 16px">
+                  <span class="plat bili"><i>B</i></span>
+                  <div class="rec-main"><div class="ttl" style="font-size:13px">户外探险 · 徒步直播</div>
+                    <div class="meta"><span>轮询 30 秒</span><span>标清 360P</span></div></div>
+                  <span class="chip wait"><i class="dot"></i>未开播</span>
+                </div>
+                <div class="rec-item" style="padding:11px 16px">
+                  <span class="plat ks"><i>快</i></span>
+                  <div class="rec-main"><div class="ttl" style="font-size:13px">某某好物分享 · 日用百货专场</div>
+                    <div class="meta"><span>轮询 60 秒</span><span>原画</span><span class="chip wait"><i class="dot"></i>Cookie 自动获取中</span></div></div>
+                  <span class="chip wait"><i class="dot"></i>未开播</span>
+                </div>
+                <div class="rec-item" style="padding:11px 16px">
+                  <span class="plat wb"><i>微</i></span>
+                  <div class="rec-main"><div class="ttl" style="font-size:13px">某某明星 · 新专辑首唱会</div>
+                    <div class="meta"><span>轮询 120 秒</span><span>最高 720P</span></div></div>
+                  <span class="chip wait"><i class="dot"></i>未开播</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="hintline" style="margin:4px 2px 0">最近事件在左侧导航「最近事件」独立页面（同一份日志环，倒序展示最新在前）；「运行日志」专放完整日志。总览只保留统计、正在录制、排队与磁盘。</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ================= 录制任务 ================= -->
+      <section class="page" id="page-tasks">
+        <div class="card">
+          <div class="toolbar">
+            <input class="input" style="width:250px" placeholder="搜索主播 / 房间号 / 标题…" oninput="toast('已按「'+this.value+'」过滤')" />
+            <select class="select" style="width:150px"><option>全部平台</option><option>抖音</option><option>哔哩哔哩</option><option>小红书</option><option>微博</option><option>快手</option><option>虎牙</option><option>斗鱼</option><option>AcFun</option><option>视频号</option><option>更多平台…</option></select>
+            <select class="select" style="width:130px"><option>全部状态</option><option>录制中</option><option>等待开播</option><option>已完成</option><option>错误</option></select>
+            <select class="select" style="width:150px"><option>按创建时间排序</option><option>按已录时长排序</option><option>按文件大小排序</option></select>
+            <div class="spacer"></div>
+            <button class="btn sm ghost" onclick="toast('已导出任务清单 CSV')">导出</button>
+            <button class="btn sm primary" onclick="openModal()">＋ 新建任务</button>
+          </div>
+          <div class="toolbar" style="border-top:1px dashed var(--line);padding-top:12px">
+            <span class="chip on"><i class="dot"></i>已选 1 项</span>
+            <span class="chip">1 任务 = 1 直播间；同一房间不允许两条启用任务</span>
+            <div class="spacer"></div>
+            <button class="btn sm" onclick="toast('已启动 1 项；并发不足时会进入排队')">批量启动</button>
+            <button class="btn sm" onclick="toast('已暂停所选项（结束当前分段，不占用并发）')">批量暂停</button>
+            <button class="btn sm" onclick="toast('已停止所选项并开始转封装')">批量停止</button>
+            <button class="btn sm danger" onclick="toast('批量删除需确认：将删除 1 场 / 6 个文件 / 11.6 GB，并移入回收站保留 7 天')">批量删除</button>
+          </div>
+          <div class="hintline" style="margin:0 0 12px 2px">批量操作单次上限 50 条；并发不足时部分成功，会明确告知"已启动 N 条、M 条进入排队"。</div>
+          <table>
+            <thead><tr>
+              <th style="width:34px"><input type="checkbox" class="cb" /></th>
+              <th>任务 / 直播间</th><th>平台</th><th>清晰度</th><th>分段策略</th><th>命名规则</th><th>状态</th><th style="text-align:right">操作</th>
+            </tr></thead>
+            <tbody>
+              <tr>
+                <td><input type="checkbox" class="cb" /></td>
+                <td><div style="font-weight:600">某某小主播</div><div class="sub">今天打排位 冲王者 · 房号 23456789</div></td>
+                <td><span class="plat dy"><i>抖</i>抖音</span></td>
+                <td><span class="chip">原画 1080P60</span></td>
+                <td>按时间 · 60 分钟<div class="sub">自动合并分段：关</div></td>
+                <td><span class="mono" style="font-size:11.5px;color:#a9c0ff">{日期}_{主播}_{清晰度}_{序号}</span></td>
+                <td><span class="pulse"><b></b>录制中</span><div class="sub">01:23:45 · 1.8 GB</div></td>
+                <td><div class="acts">
+                  <button class="btn sm" title="结束当前分段并停止拉流，不占用并发；恢复时新开分段、序号继续" onclick="toast('已暂停：本段已结束并入库，拉流已停止，不占用并发')">暂停本段</button>
+                  <button class="btn sm danger" onclick="toast('已停止并开始转封装')">停止</button>
+                  <button class="btn sm ghost" onclick="toast('打开任务详情')">详情</button>
+                </div></td>
+              </tr>
+              <tr>
+                <td><input type="checkbox" class="cb" /></td>
+                <td><div style="font-weight:600">某某游戏君</div><div class="sub">新赛季上分实录 · 房号 1234567</div></td>
+                <td><span class="plat bili"><i>B</i>哔哩哔哩</span></td>
+                <td><span class="chip">蓝光 1080P</span></td>
+                <td>按大小 · 2 GB<div class="sub">自动合并分段：关</div></td>
+                <td><span class="mono" style="font-size:11.5px;color:#a9c0ff">{日期}_{平台}_{主播}_{序号}</span></td>
+                <td><span class="pulse"><b></b>录制中</span><div class="sub">03:51:02 · 6.6 GB</div></td>
+                <td><div class="acts">
+                  <button class="btn sm" title="结束当前分段并停止拉流，不占用并发；恢复时新开分段、序号继续" onclick="toast('已暂停：本段已结束并入库，拉流已停止，不占用并发')">暂停本段</button>
+                  <button class="btn sm danger" onclick="toast('已停止并开始转封装')">停止</button>
+                  <button class="btn sm ghost" onclick="toast('打开任务详情')">详情</button>
+                </div></td>
+              </tr>
+              <tr>
+                <td><input type="checkbox" class="cb" /></td>
+                <td><div style="font-weight:600">午夜电台</div><div class="sub">深夜点歌台 · 房号 99887766</div></td>
+                <td><span class="plat dy"><i>抖</i>抖音</span></td>
+                <td><span class="chip">仅音频 128k</span></td>
+                <td>不分段<div class="sub">录制结束转 M4A</div></td>
+                <td><span class="mono" style="font-size:11.5px;color:#a9c0ff">{日期}_{主播}_音频</span></td>
+                <td><span class="pulse"><b></b>录制中</span><div class="sub">00:47:19 · 268 MB</div></td>
+                <td><div class="acts">
+                  <button class="btn sm" title="结束当前分段并停止拉流，不占用并发；恢复时新开分段、序号继续" onclick="toast('已暂停：本段已结束并入库，拉流已停止，不占用并发')">暂停本段</button>
+                  <button class="btn sm danger" onclick="toast('已停止并开始转封装')">停止</button>
+                  <button class="btn sm ghost" onclick="toast('打开任务详情')">详情</button>
+                </div></td>
+              </tr>
+              <tr>
+                <td><input type="checkbox" class="cb" /></td>
+                <td><div style="font-weight:600">某某购物节</div><div class="sub">服饰专场 · 房号 55667788</div></td>
+                <td><span class="plat dy"><i>抖</i>抖音</span></td>
+                <td><span class="chip">原画 1080P60</span></td>
+                <td>按时间 · 60 分钟<div class="sub">自动合并分段：开（超 8 段）</div></td>
+                <td><span class="mono" style="font-size:11.5px;color:#a9c0ff">{日期}_{主播}_第{序号}段</span></td>
+                <td><span class="chip wait"><i class="dot"></i>排队中</span><div class="sub">超出抖音平台上限（4/4），全局 6/8</div></td>
+                <td><div class="acts">
+                  <button class="btn sm" onclick="toast('已置顶排队优先级')">提权</button>
+                  <button class="btn sm ghost" onclick="toast('打开任务详情')">详情</button>
+                </div></td>
+              </tr>
+              <tr>
+                <td><input type="checkbox" class="cb" /></td>
+                <td><div style="font-weight:600">带货直播间</div><div class="sub">美妆专场 · 房号 11223344</div></td>
+                <td><span class="plat dy"><i>抖</i>抖音</span></td>
+                <td><span class="chip">高清 540P</span></td>
+                <td>按时间 · 60 分钟</td>
+                <td><span class="mono" style="font-size:11.5px;color:#a9c0ff">{日期}_{主播}_{序号}</span></td>
+                <td><span class="chip err"><i class="dot"></i>错误</span><div class="sub">网络中断 · 自动重试 3/5</div></td>
+                <td><div class="acts">
+                  <button class="btn sm ok" onclick="toast('已立即重试')">重试</button>
+                  <button class="btn sm ghost" onclick="toast('打开错误详情')">日志</button>
+                </div></td>
+              </tr>
+              <tr>
+                <td><input type="checkbox" class="cb" /></td>
+                <td><div style="font-weight:600">电竞赛事</div><div class="sub">春季赛总决赛 · 房号 777</div></td>
+                <td><span class="plat bili"><i>B</i>哔哩哔哩</span></td>
+                <td><span class="chip">原画 1080P60</span></td>
+                <td>按时间 · 30 分钟<div class="sub">自动合并分段：开</div></td>
+                <td><span class="mono" style="font-size:11.5px;color:#a9c0ff">{日期}_{标题}_{序号}</span></td>
+                <td><span class="chip off"><i class="dot"></i>手动停止</span><div class="sub">02:10:00 · 5 段已合并</div></td>
+                <td><div class="acts">
+                  <button class="btn sm" onclick="toast('已重新开始监控')">重启</button>
+                  <button class="btn sm ghost" onclick="toast('打开任务详情')">详情</button>
+                </div></td>
+              </tr>
+              <tr>
+                <td><input type="checkbox" class="cb" /></td>
+                <td><div style="font-weight:600">某某Vtuber</div><div class="sub">三周年纪念歌回 · 房号 2333666</div></td>
+                <td><span class="plat bili"><i>B</i>哔哩哔哩</span></td>
+                <td><span class="chip">超清 720P</span></td>
+                <td>按时间 · 120 分钟</td>
+                <td><span class="mono" style="font-size:11.5px;color:#a9c0ff">{平台}_{主播}_{日期}</span></td>
+                <td><span class="chip on"><i class="dot"></i>已完成</span><div class="sub">21:10 结束 · 4.2 GB</div></td>
+                <td><div class="acts">
+                  <button class="btn sm ghost" onclick="toast('打开任务详情')">详情</button>
+                </div></td>
+              </tr>
+              <tr>
+                <td><input type="checkbox" class="cb" /></td>
+                <td><div style="font-weight:600">户外探险</div><div class="sub">徒步川西 · 房号 4455667</div></td>
+                <td><span class="plat bili"><i>B</i>哔哩哔哩</span></td>
+                <td><span class="chip">标清 360P</span></td>
+                <td>按时间 · 60 分钟</td>
+                <td><span class="mono" style="font-size:11.5px;color:#a9c0ff">{日期}_{主播}_{序号}</span></td>
+                <td><span class="chip wait"><i class="dot"></i>等待开播</span><div class="sub">轮询 30 秒</div></td>
+                <td><div class="acts">
+                  <button class="btn sm" onclick="toast('已立即轮询一次')">立即检测</button>
+                  <button class="btn sm ghost" onclick="toast('打开任务详情')">详情</button>
+                </div></td>
+              </tr>
+              <tr>
+                <td><input type="checkbox" class="cb" /></td>
+                <td><div style="font-weight:600">某某穿搭日记</div><div class="sub">秋冬上新试穿 · 房号 5f8a2c1e</div></td>
+                <td><span class="plat xhs"><i>红</i>小红书</span></td>
+                <td><span class="chip plain"><i class="dot"></i>默认画质</span><div class="sub">平台不支持切换</div></td>
+                <td>按时间 · 30 分钟</td>
+                <td><span class="mono" style="font-size:11.5px;color:#a9c0ff">{日期}_{主播}_{序号}</span></td>
+                <td><span class="pulse"><b></b>录制中</span><div class="sub">00:38:12 · 0.7 GB</div></td>
+                <td><div class="acts">
+                  <button class="btn sm" title="结束当前分段并停止拉流，不占用并发；恢复时新开分段、序号继续" onclick="toast('已暂停：本段已结束并入库，拉流已停止，不占用并发')">暂停本段</button>
+                  <button class="btn sm danger" onclick="toast('已停止并开始转封装')">停止</button>
+                  <button class="btn sm ghost" onclick="toast('打开任务详情')">详情</button>
+                </div></td>
+              </tr>
+              <tr>
+                <td><input type="checkbox" class="cb" /></td>
+                <td><div style="font-weight:600">某某明星</div><div class="sub">新专辑首唱会 · wblive 1022:2321325026370190442592</div></td>
+                <td><span class="plat wb"><i>微</i>微博</span></td>
+                <td><span class="chip">高清 720P</span><div class="sub">平台最高档</div></td>
+                <td>按时间 · 60 分钟</td>
+                <td><span class="mono" style="font-size:11.5px;color:#a9c0ff">{日期}_{平台}_{主播}</span></td>
+                <td><span class="chip wait"><i class="dot"></i>等待开播</span><div class="sub">轮询 120 秒</div></td>
+                <td><div class="acts">
+                  <button class="btn sm" onclick="toast('已立即轮询一次')">立即检测</button>
+                  <button class="btn sm ghost" onclick="toast('打开任务详情')">详情</button>
+                </div></td>
+              </tr>
+              <tr>
+                <td><input type="checkbox" class="cb" /></td>
+                <td><div style="font-weight:600">某某好物分享</div><div class="sub">日用百货专场 · live.kuaishou.com/u/xxx</div></td>
+                <td><span class="plat ks"><i>快</i>快手</span></td>
+                <td><span class="chip">原画 1080P</span></td>
+                <td>按大小 · 2 GB<div class="sub">自动获取 Cookie</div></td>
+                <td><span class="mono" style="font-size:11.5px;color:#a9c0ff">{日期}_{主播}_{清晰度}_{序号}</span></td>
+                <td><span class="chip wait"><i class="dot"></i>等待开播</span><div class="sub">轮询 60 秒</div></td>
+                <td><div class="acts">
+                  <button class="btn sm" onclick="toast('已立即轮询一次')">立即检测</button>
+                  <button class="btn sm ghost" onclick="toast('打开任务详情')">详情</button>
+                </div></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- ================= 录制文件 ================= -->
+      <section class="page" id="page-files">
+        <div class="card">
+          <div class="card-h">
+            <h3>录制文件库</h3><span class="hint">按「一场直播」归档：共 1247 个文件 · 412 GB</span>
+            <div class="spacer"></div>
+            <button class="btn sm ghost" onclick="toast('已切换为网格视图（原型演示）')">网格</button>
+            <button class="btn sm ghost" onclick="toast('已重新扫描 /data：发现 1 个文件缺失、2 个未登记文件')">重新扫描</button>
+          </div>
+          <div class="row" style="gap:8px;padding:0 16px 12px">
+            <span style="font-size:12px;color:var(--txt-3)">浏览视图</span>
+            <span class="chip on" style="cursor:pointer" onclick="toast('按平台视图')">按平台</span>
+            <span class="chip" style="cursor:pointer" onclick="toast('按日期视图：2025-06-01 / 05-31 / 05-30 …')">按日期</span>
+            <span class="chip" style="cursor:pointer" onclick="toast('按任务视图')">按任务</span>
+            <div class="spacer"></div>
+            <span class="chip warn" style="cursor:pointer" onclick="toast('1 个文件缺失：索引有记录、/data 下已不存在，可清理记录')"><i class="dot"></i>1 个文件缺失</span>
+            <span class="chip" style="cursor:pointer" onclick="toast('2 个未登记文件：磁盘上有、索引中没有，可导入')">2 个未登记文件</span>
+            <span class="chip" style="cursor:pointer" onclick="toast('回收站：3 场 / 12 个文件 / 21.4 GB，保留至 2025-06-08')">回收站 21.4 GB</span>
+          </div>
+          <div style="display:flex">
+            <div class="side-tree">
+              <div class="tnode on"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>/data<span class="n">1247</span></div>
+              <div class="tnode child">抖音<span class="n">468</span></div>
+              <div class="tnode child">哔哩哔哩<span class="n">351</span></div>
+              <div class="tnode child">小红书<span class="n">96</span></div>
+              <div class="tnode child">微博<span class="n">74</span></div>
+              <div class="tnode child">快手<span class="n">58</span></div>
+              <div class="tnode child">虎牙 / 斗鱼 / AcFun<span class="n">132</span></div>
+              <div class="tnode child">其他平台<span class="n">68</span></div>
+              <div class="tnode child" style="color:var(--txt-3)">仅音频（跨平台）<span class="n">48</span></div>
+              <div class="tnode child" style="color:var(--txt-3)">转封装 MP4 副本<span class="n">322</span></div>
+              <div class="divider" style="margin:10px 6px"></div>
+              <div class="tnode" style="color:var(--txt-3)">2025-06-01<span class="n">27</span></div>
+              <div class="tnode" style="color:var(--txt-3)">2025-05-31<span class="n">41</span></div>
+              <div class="tnode" style="color:var(--txt-3)">2025-05-30<span class="n">36</span></div>
+              <div class="divider" style="margin:10px 6px"></div>
+              <div class="tnode" style="color:var(--txt-2)">回收站 <span class="n">12</span></div>
+              <div class="tnode" style="color:var(--txt-2)">文件缺失 <span class="n">1</span></div>
+              <div class="tnode" style="color:var(--txt-2)">未登记文件 <span class="n">2</span></div>
+            </div>
+            <div style="flex:1;min-width:0">
+              <div class="toolbar">
+                <input class="input" style="width:260px" placeholder="在文件名中搜索…" />
+                <select class="select" style="width:140px"><option>全部清晰度</option><option>原画</option><option>蓝光</option><option>仅音频</option></select>
+                <select class="select" style="width:150px"><option>全部文件类型</option><option>.ts 直播流</option><option>.mp4 成品</option><option>.m4a 音频</option></select>
+                <div class="spacer"></div>
+                <span class="chip">已选中 0 项</span>
+              </div>
+              <div class="fl-item" style="align-items:flex-start">
+                <div class="fl-ico dy">TS</div>
+                <div style="flex:1;min-width:0">
+                  <div style="font-size:13px;font-weight:600">某某小主播 · 今天打排位 冲王者 <span class="chip on" style="margin-left:6px"><i class="dot"></i>整场已录完</span></div>
+                  <div style="display:flex;gap:10px;align-items:center;margin-top:5px;font-size:11.5px;color:var(--txt-3);flex-wrap:wrap">
+                    <span class="plat dy"><i>抖</i>抖音</span><span>原画 1080P60</span><span>2025-06-01 20:13 → 21:04</span>
+                    <span>时长 01:00:00</span><span><b>6 个分段</b> · 合计 11.6 GB</span><span class="chip">已生成 MP4</span>
+                  </div>
+                  <div class="segbar" style="margin-top:7px"><i></i><i></i><i></i><i></i><i></i><i></i></div>
+                  <div style="margin-top:8px;font-size:11.5px;color:var(--txt-3)">
+                    分段：<span class="mono">001–006</span>
+                    <span class="chip" style="margin-left:6px;cursor:pointer" onclick="toast('展开该场直播的 6 个分段（可单独播放 / 下载）')">展开分段 ▾</span>
+                    <span class="chip" style="cursor:pointer" onclick="toast('已提交合并 6 个分段为整场')">合并整场</span>
+                    <span class="chip" style="cursor:pointer" onclick="toast('已复制整场直链（局域网）')">复制直链</span>
+                  </div>
+                </div>
+                <div class="acts">
+                  <button class="btn sm ghost" onclick="openPlayer('2025-06-01_某某小主播_原画_001.ts','抖音','原画 1080P60','prog')">播放</button>
+                  <button class="btn sm ghost" onclick="toast('已生成 MP4 转封装任务')">转封装</button>
+                  <button class="btn sm danger" onclick="toast('已移入回收站（保留 7 天，可还原）')">删除整场</button>
+                </div>
+              </div>
+              <div class="fl-item">
+                <div class="fl-ico bili">MP4</div>
+                <div style="flex:1;min-width:0">
+                  <div style="font-size:13px;font-weight:600" class="mono">2025-06-01_B站_某某游戏君_004.mp4</div>
+                  <div style="display:flex;gap:10px;align-items:center;margin-top:5px;font-size:11.5px;color:var(--txt-3);flex-wrap:wrap">
+                    <span class="plat bili"><i>B</i>哔哩哔哩</span><span>蓝光 1080P</span><span>时长 00:32:10</span>
+                    <span>1.86 GB</span><span>分段 4/12</span><span class="chip on"><i class="dot"></i>已转封装</span>
+                  </div>
+                  <div class="segbar"><i></i><i></i><i></i><i style="background:var(--dy)"></i><i></i><i></i></div>
+                </div>
+                <div class="acts">
+                  <button class="btn sm ghost" onclick="openPlayer('2025-06-01_B站_某某游戏君_004.mp4','哔哩哔哩','蓝光 1080P','mp4')">播放</button>
+                  <button class="btn sm ghost" onclick="toast('已复制直链（局域网）')">复制链接</button>
+                  <button class="btn sm danger" onclick="toast('已移入回收站（保留 7 天，可还原）')">删除</button>
+                </div>
+              </div>
+              <div class="fl-item">
+                <div class="fl-ico dy">M4A</div>
+                <div style="flex:1;min-width:0">
+                  <div style="font-size:13px;font-weight:600" class="mono">2025-06-01_午夜电台_音频.m4a</div>
+                  <div style="display:flex;gap:10px;align-items:center;margin-top:5px;font-size:11.5px;color:var(--txt-3);flex-wrap:wrap">
+                    <span class="plat dy"><i>抖</i>抖音</span><span>仅音频 AAC 128k</span><span>时长 00:47:19</span>
+                    <span>268 MB</span><span>单文件</span>
+                  </div>
+                </div>
+                <div class="acts">
+                  <button class="btn sm ghost" onclick="openPlayer('2025-06-01_午夜电台_音频.m4a','抖音','仅音频 AAC 128k','audio')">播放</button>
+                  <button class="btn sm ghost" onclick="toast('已导出音频封面')">导出封面</button>
+                  <button class="btn sm danger" onclick="toast('已移入回收站（保留 7 天，可还原）')">删除</button>
+                </div>
+              </div>
+              <div class="fl-item">
+                <div class="fl-ico bili">TS</div>
+                <div style="flex:1;min-width:0">
+                  <div style="font-size:13px;font-weight:600" class="mono">2025-06-01_电竞赛事_春季赛总决赛_003.ts</div>
+                  <div style="display:flex;gap:10px;align-items:center;margin-top:5px;font-size:11.5px;color:var(--txt-3);flex-wrap:wrap">
+                    <span class="plat bili"><i>B</i>哔哩哔哩</span><span>原画 1080P60</span><span>时长 00:30:00</span>
+                    <span>2.31 GB</span><span>分段 3/5</span><span class="chip">待合并</span>
+                  </div>
+                </div>
+                <div class="acts">
+                  <button class="btn sm ghost" onclick="openPlayer('2025-06-01_电竞赛事_春季赛总决赛_003.ts','哔哩哔哩','原画 1080P60','prog')">播放</button>
+                  <button class="btn sm ghost" onclick="toast('已提交合并 5 个分段')">合并分段</button>
+                  <button class="btn sm danger" onclick="toast('已移入回收站（保留 7 天，可还原）')">删除</button>
+                </div>
+              </div>
+              <div class="fl-item">
+                <div class="fl-ico xhs">TS</div>
+                <div style="flex:1;min-width:0">
+                  <div style="font-size:13px;font-weight:600" class="mono">2025-06-01_某某穿搭日记_001.ts</div>
+                  <div style="display:flex;gap:10px;align-items:center;margin-top:5px;font-size:11.5px;color:var(--txt-3);flex-wrap:wrap">
+                    <span class="plat xhs"><i>红</i>小红书</span><span class="chip plain">默认画质</span><span>时长 00:30:00</span>
+                    <span>742 MB</span><span>分段 1/3</span><span class="chip on"><i class="dot"></i>正在录制</span>
+                  </div>
+                  <div class="segbar"><i style="background:var(--dy)"></i><i></i><i></i></div>
+                </div>
+                <div class="acts">
+                  <button class="btn sm ghost" onclick="openPlayer('2025-06-01_某某穿搭日记_001.ts','小红书','默认画质','prog')">播放</button>
+                  <button class="btn sm ghost" onclick="toast('录制中，暂不可转封装')">转封装</button>
+                  <button class="btn sm danger" onclick="toast('录制中的分段不可删除，请先停止该任务')">删除</button>
+                </div>
+              </div>
+              <div class="fl-item">
+                <div class="fl-ico wb">MP4</div>
+                <div style="flex:1;min-width:0">
+                  <div style="font-size:13px;font-weight:600" class="mono">2025-06-01_微博_某某明星_新专辑首唱会.mp4</div>
+                  <div style="display:flex;gap:10px;align-items:center;margin-top:5px;font-size:11.5px;color:var(--txt-3);flex-wrap:wrap">
+                    <span class="plat wb"><i>微</i>微博</span><span>高清 720P</span><span>时长 01:12:40</span>
+                    <span>1.06 GB</span><span>单文件（不分段）</span>
+                  </div>
+                </div>
+                <div class="acts">
+                  <button class="btn sm ghost" onclick="openPlayer('2025-06-01_微博_某某明星_新专辑首唱会.mp4','微博','高清 720P','mp4')">播放</button>
+                  <button class="btn sm ghost" onclick="toast('已复制直链（局域网）')">复制链接</button>
+                  <button class="btn sm danger" onclick="toast('已移入回收站（保留 7 天，可还原）')">删除</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ================= 命名规则 ================= -->
+      <section class="page" id="page-naming">
+        <div class="grid2b">
+          <div class="stack">
+            <div class="card">
+              <div class="card-h"><h3>命名配置</h3><span class="hint">一个配置 = 一套「文件名模板 + 目录模板 + 日期格式 + 冲突策略」，可绑定到平台或任务</span>
+                <div class="spacer"></div>
+                <button class="btn sm ghost" onclick="toast('已复制为新配置「抖音_副本」')">复制</button>
+                <button class="btn sm ghost" onclick="toast('已新建空白命名配置')">新建</button>
+                <button class="btn sm danger" onclick="toast('默认配置不可删除；删除前需先改绑使用它的任务')">删除</button>
+              </div>
+              <div class="card-b">
+                <div class="row wrap">
+                  <div class="f1" style="min-width:240px"><label class="fl">当前配置</label>
+                    <select class="select"><option>抖音风格（绑定：抖音）</option><option>B站风格（绑定：哔哩哔哩）</option><option>通用（默认，未指定平台）</option><option>直播带货（绑定：抖音 · 某某购物节）</option></select></div>
+                  <div class="f1" style="min-width:240px"><label class="fl">绑定范围</label>
+                    <select class="select"><option>按平台：抖音</option><option>按任务：某某购物节</option><option>不绑定（作为新任务默认）</option></select></div>
+                </div>
+                <div class="hintline">任务里"跟随全局"时使用其平台对应的配置；任务里自定义过则优先用任务自己的。渲染顺序永远是：变量替换 → 非法字符处理 → 去首尾空格与点 → 截断 → 重名去重 → 拼接扩展名。</div>
+              </div>
+            </div>
+            <div class="card">
+              <div class="card-h"><h3>文件名模板</h3><span class="hint">点击下方变量即可插入到光标处</span>
+                <div class="spacer"></div>
+                <button class="btn sm ghost" onclick="applyPreset('dy')">抖音预设</button>
+                <button class="btn sm ghost" onclick="applyPreset('bili')">B站预设</button>
+              </div>
+              <div class="card-b">
+                <div class="form-row">
+                  <label class="fl">文件名格式</label>
+                  <input class="input mono" id="fnTpl" value="{日期}_{主播}_{清晰度}_{序号}" oninput="renderPreview()" />
+                  <div class="hintline">不含扩展名；扩展名由「封装格式」自动决定（.ts / .mp4 / .m4a / .flv）</div>
+                </div>
+                <div class="form-row">
+                  <label class="fl">插入变量</label>
+                  <div class="tokens" id="tokenBox"></div>
+                </div>
+                <div class="form-row">
+                  <label class="fl">目录结构模板</label>
+                  <input class="input mono" id="dirTpl" value="{平台}/{主播}/{日期}" oninput="renderPreview()" />
+                  <div class="hintline">相对「存储根目录」，留空表示全部平铺到根目录；支持 / 创建多级子目录</div>
+                </div>
+                <div class="divider"></div>
+                <div class="row wrap">
+                  <div class="f1" style="min-width:170px">
+                    <label class="fl">日期格式</label>
+                    <select class="select" id="dateFmt" onchange="renderPreview()">
+                      <option value="YYYY-MM-DD">YYYY-MM-DD（2025-06-01）</option>
+                      <option value="YYYYMMDD">YYYYMMDD（20250601）</option>
+                      <option value="YYYY.MM.DD">YYYY.MM.DD</option>
+                      <option value="YYYY年MM月DD日">YYYY年MM月DD日</option>
+                    </select>
+                  </div>
+                  <div class="f1" style="min-width:150px">
+                    <label class="fl">分段序号位数</label>
+                    <select class="select" id="padFmt" onchange="renderPreview()">
+                      <option value="3">3 位（001）</option><option value="2">2 位（01）</option><option value="4">4 位（0001）</option>
+                    </select>
+                  </div>
+                  <div class="f1" style="min-width:150px">
+                    <label class="fl">时间格式</label>
+                    <select class="select" onchange="renderPreview()">
+                      <option>HH-mm-ss（20-13-05）</option><option>HHmmss</option><option>HH.mm</option>
+                    </select>
+                  </div>
+                </div>
+                <div class="row wrap" style="margin-top:16px">
+                  <div class="f1" style="min-width:240px">
+                    <label class="fl">非法字符处理</label>
+                    <select class="select">
+                      <option>替换为下划线 _（推荐）</option>
+                      <option>直接删除</option>
+                      <option>保留（可能失败）</option>
+                    </select>
+                  </div>
+                  <div class="f1" style="min-width:240px">
+                    <label class="fl">重名策略</label>
+                    <select class="select">
+                      <option>追加 _2 _3 序号（推荐）</option>
+                      <option>追加录制时间戳</option>
+                      <option>覆盖同名文件</option>
+                    </select>
+                  </div>
+                </div>
+                <div class="form-row" style="margin-top:16px">
+                  <label class="fl">超长名称处理</label>
+                  <div class="row" style="align-items:center;gap:12px">
+                    <input class="input" style="width:130px" value="120" /><span style="color:var(--txt-3);font-size:12.5px">字符，超出时截断并在结尾保留序号（Linux 单层目录名上限 255 <b>字节</b>，中文按 UTF-8 约 3 字节/字，故 120 字符更保险）</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="card">
+              <div class="card-h"><h3>变量说明</h3><span class="hint">共 12 个可用变量</span></div>
+              <div class="card-b" style="padding:0">
+                <table>
+                  <thead><tr><th>变量</th><th>说明</th><th>示例值</th></tr></thead>
+                  <tbody>
+                    <tr><td class="mono" style="color:#a9c0ff">{主播}</td><td>主播昵称</td><td class="mono">某某小主播</td></tr>
+                    <tr><td class="mono" style="color:#a9c0ff">{平台}</td><td>平台名称</td><td class="mono">抖音 / 哔哩哔哩</td></tr>
+                    <tr><td class="mono" style="color:#a9c0ff">{房间号}</td><td>直播间房间号</td><td class="mono">23456789</td></tr>
+                    <tr><td class="mono" style="color:#a9c0ff">{标题}</td><td>当次直播标题</td><td class="mono">今天打排位 冲王者</td></tr>
+                    <tr><td class="mono" style="color:#a9c0ff">{日期}</td><td>录制开始日期（格式见上）</td><td class="mono">2025-06-01</td></tr>
+                    <tr><td class="mono" style="color:#a9c0ff">{时间}</td><td>录制开始时间</td><td class="mono">20-13-05</td></tr>
+                    <tr><td class="mono" style="color:#a9c0ff">{清晰度}</td><td>实际使用的清晰度</td><td class="mono">原画 / 蓝光 / 仅音频</td></tr>
+                    <tr><td class="mono" style="color:#a9c0ff">{序号}</td><td>分段序号，按位数补零</td><td class="mono">001</td></tr>
+                    <tr><td class="mono" style="color:#a9c0ff">{任务}</td><td>任务 ID</td><td class="mono">task_07</td></tr>
+                    <tr><td class="mono" style="color:#a9c0ff">{分辨率}</td><td>实际分辨率</td><td class="mono">1920x1080</td></tr>
+                    <tr><td class="mono" style="color:#a9c0ff">{时长}</td><td>分段时长（录制完成后才可知，仅合并命名用）</td><td class="mono">01-00-00</td></tr>
+                    <tr><td class="mono" style="color:#a9c0ff">{自定义}</td><td>任务级自定义文本，可在任务中单独覆盖</td><td class="mono">—</td></tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+
+          <div class="stack">
+            <div class="card">
+              <div class="card-h"><h3>实时预览</h3><span class="hint">示例数据</span></div>
+              <div class="card-b">
+                <div class="preview">
+                  <div class="pth">/data/</div>
+                  <div id="previewBody"></div>
+                </div>
+                <div class="divider"></div>
+                <div class="kv">
+                  <div class="k">完整路径长度</div><div id="pathLen" class="mono">—</div>
+                  <div class="k">扩展名</div><div class="mono">.ts（录制中）→ .mp4（转封装后）</div>
+                  <div class="k">排序效果</div><div>同一直播间分段按名称自然排序连续</div>
+                </div>
+                <div class="divider"></div>
+                <div class="note">同一模板需同时满足：① 同一场直播的多分段可连续排序；② 不同直播间不互相覆盖；③ 文件名中可直接看出日期与清晰度。</div>
+              </div>
+            </div>
+            <div class="card">
+              <div class="card-h"><h3>目录树预览</h3></div>
+              <div class="card-b">
+                <div class="tree">
+                  <div>/data/</div>
+                  <div>&nbsp;├─ <span class="d">抖音</span>/</div>
+                  <div>&nbsp;│&nbsp;&nbsp;├─ <span class="d">某某小主播</span>/</div>
+                  <div>&nbsp;│&nbsp;&nbsp;│&nbsp;&nbsp;├─ <span class="f">2025-06-01_某某小主播_原画_001.ts</span></div>
+                  <div>&nbsp;│&nbsp;&nbsp;│&nbsp;&nbsp;├─ <span class="f">2025-06-01_某某小主播_原画_002.ts</span></div>
+                  <div>&nbsp;│&nbsp;&nbsp;│&nbsp;&nbsp;└─ <span class="f">2025-06-01_某某小主播_原画_003.ts</span></div>
+                  <div>&nbsp;│&nbsp;&nbsp;└─ <span class="d">午夜电台</span>/</div>
+                  <div>&nbsp;│&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;└─ <span class="f">2025-06-01_午夜电台_音频.m4a</span></div>
+                  <div>&nbsp;└─ <span class="d">哔哩哔哩</span>/</div>
+                  <div>&nbsp;&nbsp;&nbsp;&nbsp;└─ <span class="d">某某游戏君</span>/</div>
+                  <div>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;└─ <span class="f">2025-06-01_某某游戏君_蓝光_004.mp4</span></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ================= 系统设置 ================= -->
+      <section class="page" id="page-settings">
+        <div class="tabs" id="settingsTabs">
+          <div class="tab on" data-tab="rec">录制与存储</div>
+          <div class="tab" data-tab="naming">命名规则</div>
+          <div class="tab" data-tab="platform">平台账号</div>
+          <div class="tab" data-tab="notify">通知</div>
+          <div class="tab" data-tab="security">安全与登录</div>
+        </div>
+
+        <!-- 页签 1：录制与存储 -->
+        <div class="tabpane active" id="tab-rec">
+          <div class="stack" style="max-width:1020px">
+            <div class="card">
+              <div class="card-h"><h3>存储与清理</h3></div>
+              <div class="card-b">
+                <div class="form-row">
+                  <label class="fl">存储根目录（容器内）</label>
+                  <div class="row"><input class="input mono f1" value="/data" /><button class="btn" onclick="toast('已检测：/data 存在且可写，剩余 588 GB')">检测</button></div>
+                  <div class="hintline">必须是<b>容器内</b>的绝对路径，且与启动时的挂载一致：<span class="mono">-v /你的宿主目录:/data</span>。浏览器无法选择宿主文件夹，所以这里只做"路径存在且可写"检测；换目录请改挂载后重启容器。</div>
+                </div>
+                <div class="row wrap">
+                  <div class="f1" style="min-width:200px"><label class="fl">磁盘保留下限</label>
+                    <div class="row" style="align-items:center;gap:8px"><input class="input" style="width:100px" value="120" /><span style="color:var(--txt-3);font-size:12.5px">GB 以下触发清理</span></div>
+                  </div>
+                  <div class="f1" style="min-width:200px"><label class="fl">成品文件保留</label>
+                    <div class="row" style="align-items:center;gap:8px"><input class="input" style="width:100px" value="30" /><span style="color:var(--txt-3);font-size:12.5px">天后自动删除</span></div>
+                  </div>
+                </div>
+                <div class="sw-row"><div><div class="t">清理时跳过正在录制的分段</div><div class="d">保护 .ts.part 临时文件与当前分段</div></div><div class="spacer"></div><div class="switch on" onclick="tog(this)"><i></i></div></div>
+                <div class="sw-row"><div><div class="t">删除时移入回收站</div><div class="d">落到 <span class="mono">/data/.trash</span>，可还原 / 一键清空</div></div><div class="spacer"></div><div class="switch on" onclick="tog(this)"><i></i></div></div>
+                <div class="form-row" style="margin-top:4px">
+                  <label class="fl">回收站保留</label>
+                  <div class="row" style="align-items:center;gap:8px"><input class="input" style="width:100px" value="7" /><span style="color:var(--txt-3);font-size:12.5px">天后自动清理（当前占用 21.4 GB）</span></div>
+                </div>
+              </div>
+            </div>
+
+            <div class="card">
+              <div class="card-h"><h3>录制默认参数</h3><span class="hint">新建任务时的默认值，可被任务单独覆盖</span></div>
+              <div class="card-b">
+                <div class="row wrap">
+                  <div class="f1" style="min-width:200px"><label class="fl">默认清晰度</label>
+                    <select class="select"><option>原画（最高可用）</option><option>蓝光 1080P</option><option>超清 720P</option><option>仅音频</option></select></div>
+                  <div class="f1" style="min-width:200px"><label class="fl">清晰度回退顺序</label>
+                    <select class="select"><option>原画 → 蓝光 → 超清 → 高清 → 标清</option><option>原画 → 仅音频</option><option>不回退，失败即报错</option></select></div>
+                </div>
+                <div class="row wrap" style="margin-top:16px">
+                  <div class="f1" style="min-width:200px"><label class="fl">分段时长</label>
+                    <select class="select"><option>60 分钟</option><option>30 分钟</option><option>120 分钟</option><option>自定义…</option></select></div>
+                  <div class="f1" style="min-width:200px"><label class="fl">录制中封装格式</label>
+                    <select class="select"><option>TS（推荐，断流容错好）</option><option>FLV</option><option>MKV</option></select></div>
+                  <div class="f1" style="min-width:200px"><label class="fl">最大并发录制数</label>
+                    <input class="input" value="8" /></div>
+                </div>
+                <div class="divider"></div>
+                <div class="sw-row"><div><div class="t">录制结束自动转封装 MP4</div><div class="d">使用 ffmpeg -c copy 无损封转，秒级完成</div></div><div class="spacer"></div><div class="switch on" onclick="tog(this)"><i></i></div></div>
+                <div class="sw-row"><div><div class="t">保留原始 TS 分段</div><div class="d">关闭则转封装成功后删除源文件，可省约 30% 空间</div></div><div class="spacer"></div><div class="switch on" onclick="tog(this)"><i></i></div></div>
+                <div class="sw-row"><div><div class="t">分段结束后自动合并为单文件</div><div class="d">适合赛事、歌回等需要完整成片的场景</div></div><div class="spacer"></div><div class="switch" onclick="tog(this)"><i></i></div></div>
+                <div class="sw-row"><div><div class="t">断流自动重连</div><div class="d">重连成功后追加写入同一分段，最多重试 5 次</div></div><div class="spacer"></div><div class="switch on" onclick="tog(this)"><i></i></div></div>
+              </div>
+            </div>
+
+            <div class="card">
+              <div class="card-h"><h3>转封装与后处理</h3></div>
+              <div class="card-b">
+                <div class="row wrap">
+                  <div class="f1" style="min-width:220px"><label class="fl">成品格式</label>
+                    <select class="select"><option>MP4（H.264 + AAC）</option><option>MKV（保留多轨）</option><option>仅重命名不改容器</option></select></div>
+                  <div class="f1" style="min-width:220px"><label class="fl">ffmpeg 路径</label>
+                    <input class="input mono" value="内置 ffmpeg 6.1（无需配置）" /></div>
+                </div>
+                <div class="hintline" style="margin-top:10px">原型阶段不实现真实转码；仅演示「录制结束 → 转封装 → 命名 → 入库」的状态流转。</div>
+              </div>
+            </div>
+          </div>
+        </div><!-- /tab-rec -->
+
+        <!-- 页签 2：命名规则（运行时由下方 #page-naming 区块挂载进来） -->
+        <div class="tabpane" id="tab-naming"></div>
+
+        <!-- 页签 3：平台账号 -->
+        <div class="tabpane" id="tab-platform">
+          <div class="stack" style="max-width:1020px">
+            <div class="card">
+              <div class="card-h"><h3>平台与账号</h3><span class="hint">11 个平台已接入：5 个稳定支持（P0）· 2 个实验性 · 更多待启用</span>
+                <div class="spacer"></div>
+                <button class="btn sm ghost" onclick="toast('已打开 Cookie 批量导入（JSON / Netscape 格式）')">批量导入 Cookie</button>
+                <button class="btn sm ghost" onclick="toast('已重新检测所有平台可用性')">重新检测</button>
+              </div>
+              <div class="card-b" style="padding:0">
+                <table>
+                  <thead><tr>
+                    <th>平台</th><th>登录 / Cookie</th><th>可用清晰度</th><th>并发上限</th><th>稳定性</th><th>启用</th><th style="text-align:right">操作</th>
+                  </tr></thead>
+                  <tbody>
+                    <tr>
+                      <td><span class="plat dy"><i>抖</i>抖音</span></td>
+                      <td><span class="chip on"><i class="dot"></i>Cookie 有效</span><div class="sub">更新于 21 天前</div></td>
+                      <td><span class="chip">原画 · 蓝光 · 超清 等 5 档</span></td>
+                      <td class="mono">4</td>
+                      <td><span class="chip wait"><i class="dot"></i>风控较严</span></td>
+                      <td><span class="switch on" onclick="tog(this)"><i></i></span></td>
+                      <td><div class="acts"><button class="btn sm" onclick="toast('抖音无公开扫码接口：请粘贴浏览器导出的 Cookie（需含 ttwid / sessionid），页面上有导出步骤说明')">粘贴 Cookie</button></div></td>
+                    </tr>
+                    <tr>
+                      <td><span class="plat bili"><i>B</i>哔哩哔哩</span></td>
+                      <td><span class="chip err"><i class="dot"></i>6 天后过期</span><div class="sub">UID 1234567</div></td>
+                      <td><span class="chip">原画 · 蓝光 · 超清 等 5 档</span></td>
+                      <td class="mono">3</td>
+                      <td><span class="chip on"><i class="dot"></i>稳定</span></td>
+                      <td><span class="switch on" onclick="tog(this)"><i></i></span></td>
+                      <td><div class="acts"><button class="btn sm" onclick="toast('已生成 B 站登录二维码（显示在页面内，用手机 App 扫码即可，无需在容器里装浏览器）')">扫码登录</button><button class="btn sm ghost" onclick="toast('也可直接粘贴 Cookie 字符串')">粘贴</button></div></td>
+                    </tr>
+                    <tr>
+                      <td><span class="plat xhs"><i>红</i>小红书</span></td>
+                      <td><span class="chip err"><i class="dot"></i>未登录</span><div class="sub">分享短链需解析</div></td>
+                      <td><span class="chip plain"><i class="dot"></i>默认画质</span><div class="sub">官方不提供切换</div></td>
+                      <td class="mono">2</td>
+                      <td><span class="chip err"><i class="dot"></i>实验性</span><div class="sub">接口偶发变更</div></td>
+                      <td><span class="switch on" onclick="tog(this)"><i></i></span></td>
+                      <td><div class="acts"><button class="btn sm" onclick="toast('请粘贴小红书 Cookie（xhslink 需先解析为直播间地址）')">填写 Cookie</button></div></td>
+                    </tr>
+                    <tr>
+                      <td><span class="plat wb"><i>微</i>微博</span></td>
+                      <td><span class="chip on"><i class="dot"></i>免登录</span></td>
+                      <td><span class="chip">高清 720P</span><div class="sub">平台最高档</div></td>
+                      <td class="mono">2</td>
+                      <td><span class="chip err"><i class="dot"></i>实验性</span><div class="sub">待实测</div></td>
+                      <td><span class="switch on" onclick="tog(this)"><i></i></span></td>
+                      <td><div class="acts"><button class="btn sm" onclick="toast('已检测微博直播可用性：正常')">检测</button></div></td>
+                    </tr>
+                    <tr>
+                      <td><span class="plat ks"><i>快</i>快手</span></td>
+                      <td><span class="chip on"><i class="dot"></i>Cookie 自动获取</span></td>
+                      <td><span class="chip">原画 1080P</span> <span class="chip">高清</span> <span class="chip">标清</span></td>
+                      <td class="mono">2</td>
+                      <td><span class="chip on"><i class="dot"></i>稳定</span></td>
+                      <td><span class="switch on" onclick="tog(this)"><i></i></span></td>
+                      <td><div class="acts"><button class="btn sm ghost" onclick="toast('自动获取模式无需手动填写')">说明</button></div></td>
+                    </tr>
+                    <tr>
+                      <td><span class="plat huya"><i>虎</i>虎牙</span></td>
+                      <td><span class="chip on"><i class="dot"></i>免登录</span></td>
+                      <td><span class="chip">原画（FLV）</span> <span class="chip">高清</span> <span class="chip">流畅</span></td>
+                      <td class="mono">2</td>
+                      <td><span class="chip wait"><i class="dot"></i>偶发断流</span></td>
+                      <td><span class="switch on" onclick="tog(this)"><i></i></span></td>
+                      <td><div class="acts"><button class="btn sm ghost" onclick="toast('虎牙仅提供 FLV 流，已自动选用')">说明</button></div></td>
+                    </tr>
+                    <tr>
+                      <td><span class="plat douyu"><i>鱼</i>斗鱼</span></td>
+                      <td><span class="chip on"><i class="dot"></i>免登录</span></td>
+                      <td><span class="chip">原画 1080P60</span> <span class="chip">高清</span> <span class="chip">标清</span></td>
+                      <td class="mono">2</td>
+                      <td><span class="chip on"><i class="dot"></i>稳定</span></td>
+                      <td><span class="switch on" onclick="tog(this)"><i></i></span></td>
+                      <td><div class="acts"><button class="btn sm ghost" onclick="toast('支持 www.douyu.com/<房间号> 与 topic 页 rid 参数')">说明</button></div></td>
+                    </tr>
+                    <tr>
+                      <td><span class="plat ac"><i>A</i>AcFun</span></td>
+                      <td><span class="chip on"><i class="dot"></i>免登录</span></td>
+                      <td><span class="chip">原画</span> <span class="chip">高清</span></td>
+                      <td class="mono">1</td>
+                      <td><span class="chip wait"><i class="dot"></i>待实测</span></td>
+                      <td><span class="switch" onclick="tog(this)"><i></i></span></td>
+                      <td><div class="acts"><button class="btn sm ghost" onclick="toast('可启用，启用后参与开播轮询')">启用</button></div></td>
+                    </tr>
+                    <tr>
+                      <td><span class="plat more"><i>＋</i>更多平台</span></td>
+                      <td><span class="chip">按需启用</span></td>
+                      <td colspan="4" style="color:var(--txt-3);font-size:12px">网易 CC · YY · 咪咕 · 百度 · 酷狗繁星 · 花椒 · 知乎 · 映客 · 淘宝<span class="tag">需 Cookie</span> · 京东 · 视频号<span class="tag">需扫码</span> · TikTok / Twitch / YouTube<span class="tag">需代理</span></td>
+                      <td><div class="acts"><button class="btn sm ghost" onclick="toast('已展开全部 20+ 平台列表')">展开全部</button></div></td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+              <div class="card-b" style="border-top:1px solid var(--line)">
+                <div class="row wrap">
+                  <div class="f1" style="min-width:260px">
+                    <label class="fl">网络代理（可选）</label>
+                    <input class="input mono" placeholder="http://127.0.0.1:7890" />
+                  </div>
+                  <div class="f1" style="min-width:260px">
+                    <label class="fl">需要代理的平台</label>
+                    <input class="input" value="TikTok, Twitch, YouTube, SOOP" />
+                  </div>
+                </div>
+                <div class="hintline">代理仅影响拉流与解析请求，不经过录制文件写入。海外平台必须走代理，否则会解析超时。</div>
+              </div>
+            </div>
+
+            <div class="card">
+              <div class="card-h"><h3>开播监控</h3></div>
+              <div class="card-b">
+                <div class="sw-row"><div><div class="t">全局轮询检测</div><div class="d">按任务分别设置间隔，默认 60 秒</div></div><div class="spacer"></div><div class="switch on" onclick="tog(this)"><i></i></div></div>
+                <div class="sw-row"><div><div class="t">开播后延迟开始</div><div class="d">避开开场广告与黑屏</div></div><div class="spacer"></div>
+                  <div class="row" style="align-items:center;gap:8px"><input class="input" style="width:74px" value="5" /><span style="color:var(--txt-3);font-size:12.5px">秒</span></div></div>
+                <div class="sw-row"><div><div class="t">下播后延迟停止</div><div class="d">防止提前截断结尾</div></div><div class="spacer"></div>
+                  <div class="row" style="align-items:center;gap:8px"><input class="input" style="width:74px" value="30" /><span style="color:var(--txt-3);font-size:12.5px">秒</span></div></div>
+              </div>
+            </div>
+
+          </div>
+        </div><!-- /tab-platform -->
+
+        <!-- 页签 4：通知 -->
+        <div class="tabpane" id="tab-notify">
+          <div class="stack" style="max-width:1020px">
+            <div class="card">
+              <div class="card-h"><h3>通知</h3></div>
+              <div class="card-b">
+                <div class="form-row">
+                  <label class="fl">Webhook 地址</label>
+                  <input class="input mono" placeholder="https://sctapi.ftqq.com/xxx.send" />
+                </div>
+                <div class="sw-row"><div><div class="t">录制开始 / 结束</div></div><div class="spacer"></div><div class="switch on" onclick="tog(this)"><i></i></div></div>
+                <div class="sw-row"><div><div class="t">录制失败与自动重试</div></div><div class="spacer"></div><div class="switch on" onclick="tog(this)"><i></i></div></div>
+                <div class="sw-row"><div><div class="t">磁盘空间告警</div></div><div class="spacer"></div><div class="switch on" onclick="tog(this)"><i></i></div></div>
+                <div class="sw-row"><div><div class="t">Cookie 过期提醒</div></div><div class="spacer"></div><div class="switch on" onclick="tog(this)"><i></i></div></div>
+                <div class="divider"></div>
+                <div class="sw-row"><div><div class="t">同任务同类事件 60 秒内只发一次</div><div class="d">防断流抖动刷屏；去重后再计入次数</div></div><div class="spacer"></div><div class="switch on" onclick="tog(this)"><i></i></div></div>
+                <div class="sw-row"><div><div class="t">通知发送失败时重试（5 / 15 / 45 秒，共 3 次）</div><div class="d">最终失败会写入运行日志，不影响录制</div></div><div class="spacer"></div><div class="switch on" onclick="tog(this)"><i></i></div></div>
+                <div class="hintline">通知正文包含：任务名、平台、清晰度、文件路径与错误摘要，便于直接在手机上判断要不要处理。</div>
+                <button class="btn" style="margin-top:12px" onclick="toast('测试通知已发送（含去重与重试说明）')">发送测试通知</button>
+              </div>
+            </div>
+          </div>
+        </div><!-- /tab-notify（页签 4） -->
+
+        <!-- 页签 5：安全与登录 -->
+        <div class="tabpane" id="tab-security">
+          <div class="stack" style="max-width:1020px">
+            <div class="card">
+              <div class="card-h"><h3>安全与登录</h3><span class="hint">单管理员账号，凭据仅保存在容器内 /config</span></div>
+              <div class="card-b">
+                <div class="rec-item" style="padding:0 0 14px;border-bottom:1px dashed var(--line)">
+                  <span class="user-row" style="border:0;padding:0"><span class="ava">A</span></span>
+                  <div class="rec-main">
+                    <div class="ttl" style="font-size:13px">admin</div>
+                    <div class="meta"><span class="chip on"><i class="dot"></i>已登录</span><span>上次登录 2025-05-31 21:12 · 来自 192.168.1.24</span></div>
+                  </div>
+                  <button class="btn sm ghost" onclick="toast('已退出所有设备上的登录会话')">注销所有会话</button>
+                </div>
+                <div class="row wrap" style="margin-top:14px">
+                  <div class="f1" style="min-width:180px"><label class="fl">当前密码</label><input class="input" type="password" placeholder="••••••••" /></div>
+                  <div class="f1" style="min-width:180px"><label class="fl">新密码</label><input class="input" type="password" placeholder="至少 8 位" /></div>
+                  <div class="f1" style="min-width:180px"><label class="fl">确认新密码</label><input class="input" type="password" /></div>
+                </div>
+                <div class="row wrap" style="margin-top:16px">
+                  <div class="f1" style="min-width:220px"><label class="fl">登录有效期</label>
+                    <select class="select"><option>30 天（记住我时）</option><option>12 小时</option><option>7 天</option><option>永不过期（不推荐）</option></select></div>
+                  <div class="f1" style="min-width:220px"><label class="fl">登录失败限制</label>
+                    <select class="select"><option>5 次失败后锁定 10 分钟</option><option>不限制（仅内网使用）</option></select></div>
+                </div>
+                <div class="sw-row" style="margin-top:6px"><div><div class="t">会话失效后自动跳回登录页</div><div class="d">接口返回 401 时前端清空本地状态并跳转登录</div></div><div class="spacer"></div><div class="switch on" onclick="tog(this)"><i></i></div></div>
+                <div class="sw-row"><div><div class="t">允许内网免登录</div><div class="d">仅建议在可信内网开启；公网映射端口时务必关闭</div></div><div class="spacer"></div><div class="switch" onclick="tog(this)"><i></i></div></div>
+                <div class="hintline">密码以 <span class="mono">scrypt</span> 哈希保存在容器内 <span class="mono">/config/users.json</span>，不可逆；首次启动（该文件不存在）强制进入初始化设密码模式，没有默认口令。会话为 HMAC 签名 Cookie。</div>
+                <div class="row" style="margin-top:14px;gap:10px">
+                  <button class="btn primary" onclick="toast('密码已更新，其他设备需重新登录')">保存新密码</button>
+                  <button class="btn ghost" onclick="logout()">退出登录</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div><!-- /tab-security -->
+      </section>
+
+      <!-- ================= 日志 ================= -->
+      <section class="page" id="page-logs">
+        <div class="card">
+          <div class="toolbar">
+            <select class="select" style="width:130px"><option>全部级别</option><option>INFO</option><option>WARN</option><option>ERROR</option></select>
+            <select class="select" style="width:170px"><option>全部任务</option><option>某某小主播</option><option>某某游戏君</option><option>带货直播间</option><option>某某穿搭日记（小红书）</option><option>某某好物分享（快手）</option></select>
+            <select class="select" style="width:140px"><option>全部平台</option><option>抖音</option><option>哔哩哔哩</option><option>小红书</option><option>微博</option><option>快手</option><option>虎牙</option><option>斗鱼</option></select>
+            <input class="input" style="width:220px" placeholder="关键字过滤…" />
+            <div class="spacer"></div>
+            <button class="btn sm ghost" onclick="toast('日志已复制到剪贴板')">复制</button>
+            <button class="btn sm ghost" onclick="toast('已导出 logs_2025-06-01.txt')">导出</button>
+          </div>
+          <div class="hintline" style="margin:0 16px 12px">日志按天写入容器内 <span class="mono">/config/logs/YYYY-MM-DD.log</span>，保留 <b>14 天</b>，单文件超 <b>50 MB</b> 自动切分；默认级别 <b>INFO</b>（可切 WARN / ERROR / DEBUG）。页面默认加载最近 2000 条，DEBUG 会包含 ffmpeg 全量 stderr、增长很快，排查完建议切回 INFO。</div>
+          <div class="card-b" style="padding:0">
+            <table>
+              <thead><tr><th style="width:120px">时间</th><th style="width:80px">级别</th><th style="width:150px">任务</th><th>消息</th></tr></thead>
+              <tbody>
+                <tr><td class="mono" style="color:var(--txt-3)">21:04:12.318</td><td><span class="lv INFO">INFO</span></td><td>某某小主播</td><td class="logline">分段 #1 写入完成：1.94 GB，时长 01:00:00，已切换至 <span class="mono">…_原画_002.ts</span></td></tr>
+                <tr><td class="mono" style="color:var(--txt-3)">20:59:04.771</td><td><span class="lv WARN">WARN</span></td><td>某某穿搭日记</td><td class="logline">小红书不提供清晰度切换，已按「默认画质」录制；分段策略 30 分钟生效</td></tr>
+                <tr><td class="mono" style="color:var(--txt-3)">20:58:47.220</td><td><span class="lv INFO">INFO</span></td><td>某某好物分享</td><td class="logline">快手平台 Cookie 自动获取成功（有效期约 24 小时），开始轮询开播状态</td></tr>
+                <tr><td class="mono" style="color:var(--txt-3)">20:57:12.905</td><td><span class="lv WARN">WARN</span></td><td>某某明星</td><td class="logline">微博直播最高仅 720P，期望档位「原画」已按平台能力回退为「高清 720P」</td></tr>
+                <tr><td class="mono" style="color:var(--txt-3)">21:02:47.902</td><td><span class="lv INFO">INFO</span></td><td>某某游戏君</td><td class="logline">ffmpeg remux 完成：<span class="mono">…_蓝光_004.mp4</span>（耗时 3.2s）</td></tr>
+                <tr><td class="mono" style="color:var(--txt-3)">20:58:31.044</td><td><span class="lv ERROR">ERROR</span></td><td>带货直播间</td><td class="logline">拉流中断：read timeout after 15s，5 秒后第 3 次重连</td></tr>
+                <tr><td class="mono" style="color:var(--txt-3)">20:58:26.771</td><td><span class="lv WARN">WARN</span></td><td>带货直播间</td><td class="logline">清晰度 540P 码率降至 900 kbps，检测到网络抖动</td></tr>
+                <tr><td class="mono" style="color:var(--txt-3)">20:30:00.115</td><td><span class="lv WARN">WARN</span></td><td>—</td><td class="logline">B 站 Cookie 剩余有效期 6 天，请及时更新以免获取不到原画地址</td></tr>
+                <tr><td class="mono" style="color:var(--txt-3)">19:47:55.530</td><td><span class="lv INFO">INFO</span></td><td>某某游戏君</td><td class="logline">原画地址不可用，按回退顺序改用「蓝光 1080P」</td></tr>
+                <tr><td class="mono" style="color:var(--txt-3)">19:47:53.201</td><td><span class="lv INFO">INFO</span></td><td>某某游戏君</td><td class="logline">检测到开播，延迟 5 秒后开始录制（模板：{日期}_{平台}_{主播}_{序号}）</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+    </div>
+  </main>
+</div>
+
+<!-- ================= 新建录制任务 模态 ================= -->
+<div class="mask" id="mask" onclick="if(event.target===this)closeModal()">
+  <div class="modal">
+    <div class="modal-h">
+      <h3>新建录制任务</h3>
+      <span class="chip" style="margin-left:10px">步骤可随时修改，保存后立即生效</span>
+      <span class="x" onclick="closeModal()">✕</span>
+    </div>
+    <div class="modal-b">
+      <div class="sect"><span class="n">1</span>直播间地址</div>
+      <div class="row">
+        <input class="input f1" id="roomUrl" value="https://live.douyin.com/23456789" placeholder="粘贴任意支持的平台直播间链接（自动识别平台），或先选平台再输入房间号" />
+        <button class="btn" onclick="toast('已解析直播间信息')">解析</button>
+      </div>
+      <div class="row wrap" style="margin-top:10px;align-items:center;gap:8px">
+        <span style="font-size:12px;color:var(--txt-3);flex:0 0 auto">手动指定平台</span>
+        <span class="chip" style="cursor:pointer" onclick="toast('已手动指定平台：抖音')"><i class="dot" style="background:#fe2c55"></i>抖音</span>
+        <span class="chip" style="cursor:pointer" onclick="toast('已手动指定平台：哔哩哔哩')"><i class="dot" style="background:#00aeec"></i>哔哩哔哩</span>
+        <span class="chip" style="cursor:pointer" onclick="toast('已手动指定平台：小红书（实验性，仅默认画质）')"><i class="dot" style="background:#ff2442"></i>小红书 <span class="tag">实验性</span></span>
+        <span class="chip" style="cursor:pointer" onclick="toast('已手动指定平台：微博（实验性，最高 720P）')"><i class="dot" style="background:#e6162d"></i>微博 <span class="tag">实验性</span></span>
+        <span class="chip" style="cursor:pointer" onclick="toast('已手动指定平台：快手')"><i class="dot" style="background:#ff5000"></i>快手</span>
+        <span class="chip" style="cursor:pointer" onclick="toast('已手动指定平台：虎牙')"><i class="dot" style="background:#ff9c00"></i>虎牙</span>
+        <span class="chip" style="cursor:pointer" onclick="toast('已手动指定平台：斗鱼')"><i class="dot" style="background:#ff5d23"></i>斗鱼</span>
+        <span class="chip" style="cursor:pointer" onclick="toast('支持 20+ 平台：网易CC / YY / AcFun / 咪咕 / 百度 / 酷狗 / 花椒 / 知乎 / 淘宝 / 京东 / 视频号 / TikTok…')">＋ 更多平台</span>
+      </div>
+      <div class="hintline">粘贴链接会自动识别平台；识别失败或链接被风控拦截时，请手动指定平台再输入房间号。部分平台需要先在上方「平台账号」中填写 Cookie。<b>1 个任务只对应 1 个直播间</b>——同一房间已有启用中的任务时会提示"已存在任务"，想批量添加请用 <span class="mono">粘贴多行 URL</span> 一次性建多条任务。</div>
+      <div class="resolved">
+        <div class="avatar">抖</div>
+        <div style="flex:1">
+          <div style="font-size:13.5px;font-weight:600">某某小主播 <span class="chip dy" style="margin-left:6px">抖音</span> <span class="chip on"><i class="dot"></i>正在直播</span></div>
+          <div style="font-size:11.5px;color:var(--txt-3);margin-top:3px">房间号 23456789 · 今天打排位 冲王者 · 开播于 20:13 · 当前在线 1.2 万</div>
+        </div>
+        <label style="display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--txt-2)">开播自动录制
+          <span class="switch on" onclick="tog(this)"><i></i></span></label>
+      </div>
+
+      <div class="sect"><span class="n">2</span>清晰度 <span class="chip on" style="margin-left:8px;font-weight:400"><i class="dot"></i>跟随全局</span></div>
+      <div class="q-grid" id="qGrid">
+        <div class="q sel" onclick="pickQ(this)">
+          <div class="crown">推荐</div>
+          <div class="qt">原画</div><div class="qr">1080P60 · 最高画质</div><div class="qb">≈ 8000 kbps</div>
+        </div>
+        <div class="q" onclick="pickQ(this)">
+          <div class="qt">蓝光</div><div class="qr">1080P30</div><div class="qb">≈ 6000 kbps</div>
+        </div>
+        <div class="q" onclick="pickQ(this)">
+          <div class="qt">超清</div><div class="qr">720P</div><div class="qb">≈ 3000 kbps</div>
+        </div>
+        <div class="q" onclick="pickQ(this)">
+          <div class="qt">高清</div><div class="qr">540P · 省流量</div><div class="qb">≈ 1500 kbps</div>
+        </div>
+        <div class="q" onclick="pickQ(this)">
+          <div class="qt">标清</div><div class="qr">360P · 弱网可用</div><div class="qb">≈ 800 kbps</div>
+        </div>
+        <div class="q" onclick="pickQ(this)">
+          <div class="qt">仅音频</div><div class="qr">AAC 128k · 省空间</div><div class="qb">≈ 128 kbps</div>
+        </div>
+      </div>
+      <div class="hintline">当前选择：<b id="qNow" style="color:var(--txt)">原画 1080P60</b> · 不可用时按「原画 → 蓝光 → 超清 → 高清 → 标清」自动回退（可在设置中修改）</div>
+      <div class="note" style="margin-top:10px">平台差异：抖音 / 快手 / 虎牙 / 斗鱼 / B站 支持多档切换；<b>小红书仅提供默认画质、不可切换</b>；<b>微博最高 720P</b>；淘宝 / 京东 / 视频号 需有效 Cookie 或扫码登录才可能拿到高清流。实际使用档位会写入文件名与日志（回退时文件名记录真实档位）。</div>
+      <div class="note" style="margin-top:8px">支持级别：抖音 / B站 / 快手 / 虎牙 / 斗鱼 为 <b>稳定支持</b>；标「<b>实验性</b>」的平台（小红书 / 微博）可正常创建与录制，但其接口可能随时变更，失败时只做有限重试并给出明确原因，不影响其他平台的录制。</div>
+
+      <div class="sect"><span class="n">3</span>分段策略 <span class="chip on" style="margin-left:8px;font-weight:400"><i class="dot"></i>跟随全局</span></div>
+      <div class="opt-grid" style="grid-template-columns:repeat(3,1fr)">
+        <div class="opt sel" id="segTime" onclick="setSeg('time')">
+          <div class="ot"><span class="rd"></span>按时间分段</div>
+          <div class="od">每段固定时长，适合长期挂机录制</div>
+        </div>
+        <div class="opt" id="segSize" onclick="setSeg('size')">
+          <div class="ot"><span class="rd"></span>按文件大小</div>
+          <div class="od">便于分卷存储与快速拷贝</div>
+        </div>
+        <div class="opt" id="segNone" onclick="setSeg('none')">
+          <div class="ot"><span class="rd"></span>不分段</div>
+          <div class="od">单文件一直到下播</div>
+        </div>
+      </div>
+      <div class="row wrap" id="segPanel" style="margin-top:12px">
+        <div class="f1" style="min-width:170px"><label class="fl">每段时长</label>
+          <select class="select"><option>30 分钟</option><option selected>60 分钟</option><option>120 分钟</option></select></div>
+        <div class="f1" style="min-width:170px"><label class="fl">分段切换容差</label>
+          <select class="select"><option>关键帧对齐（推荐）</option><option>到达时长后立即切换</option></select></div>
+        <div class="f1" style="min-width:170px"><label class="fl">分段文件处理</label>
+          <select class="select"><option>保留独立分段</option><option>结束后合并为单文件</option></select></div>
+      </div>
+
+      <div class="sect"><span class="n">4</span>命名与存储</div>
+      <div class="row wrap">
+        <div class="f1" style="min-width:280px"><label class="fl">文件名模板</label>
+          <input class="input mono" id="mFnTpl" value="{日期}_{主播}_{清晰度}_{序号}" oninput="renderModalPreview()" /></div>
+        <div class="f1" style="min-width:200px"><label class="fl">封装格式</label>
+          <select class="select"><option>TS → 结束转 MP4</option><option>FLV → 结束转 MP4</option><option>直接写 MP4（不推荐）</option></select></div>
+      </div>
+      <div class="tokens" style="margin-top:10px">
+        <span class="token" onclick="insertM('{日期}')">{日期}</span>
+        <span class="token" onclick="insertM('{主播}')">{主播}</span>
+        <span class="token" onclick="insertM('{平台}')">{平台}</span>
+        <span class="token" onclick="insertM('{房间号}')">{房间号}</span>
+        <span class="token" onclick="insertM('{标题}')">{标题}</span>
+        <span class="token" onclick="insertM('{清晰度}')">{清晰度}</span>
+        <span class="token" onclick="insertM('{序号}')">{序号}</span>
+        <span class="token" onclick="insertM('{时间}')">{时间}</span>
+      </div>
+      <div class="preview" style="margin-top:11px">
+        <div class="pth">/data/抖音/某某小主播/</div>
+        <div class="fn" id="mPreview">2025-06-01_某某小主播_原画_001.ts</div>
+      </div>
+      <div class="row" style="margin-top:12px;align-items:center;gap:10px">
+        <input class="input mono" value="/data" style="max-width:280px" />
+        <span style="color:var(--txt-3);font-size:12px">继承系统设置根目录（容器内路径）</span>
+        <div class="spacer"></div>
+        <label style="display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--txt-2)">录制结束自动转封装
+          <span class="switch on" onclick="tog(this)"><i></i></span></label>
+      </div>
+    </div>
+    <div class="modal-f">
+      <button class="btn ghost" onclick="closeModal()">取消</button>
+      <button class="btn" onclick="toast('已保存为草稿')">保存为草稿</button>
+      <button class="btn primary" onclick="closeModal();toast('任务已创建，等待开播或立即开始录制')">创建任务</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"><i></i><span id="toastTx">ok</span></div>
+
+<!-- ================= 浏览器内置播放器（回放一律在浏览器内完成） ================= -->
+<div class="mask" id="playerMask" onclick="if(event.target===this)closePlayer()">
+  <div class="modal" style="width:min(1000px,94vw)">
+    <div class="modal-h">
+      <h3 class="mono" id="plTitle" style="font-size:13.5px">2025-06-01_某某小主播_原画_001.ts</h3>
+      <span class="chip" style="margin-left:10px" id="plPlat">抖音</span>
+      <span class="chip" id="plQual">原画 1080P60</span>
+      <span class="chip wait" id="plMode"><i class="dot"></i>服务端转 fMP4 边转边播</span>
+      <span class="x" onclick="closePlayer()">✕</span>
+    </div>
+    <div class="modal-b" style="padding:0">
+      <div class="player">
+        <div class="pv-ico" onclick="toast('原型演示：真实实现由服务端 ffmpeg -c copy 边转 fMP4 渐进流')">▶</div>
+        <div class="pv-badge" id="plSrc">源：TS（服务端转 fMP4）</div>
+        <div class="pv-hint">浏览器内置播放器 · 渐进 fMP4 / 原生 MP4 · 不调用本机播放器、不依赖桌面环境</div>
+      </div>
+      <div class="pv-bar">
+        <button class="pv-btn" onclick="toast('播放 / 暂停')">⏯</button>
+        <span class="mono" style="font-size:11.5px;color:var(--txt-3)" id="plNow">00:14:22</span>
+        <div class="pv-track" onclick="toast('拖动进度条即从该时间点开始播放')"><em></em><i style="width:24%"></i></div>
+        <span class="mono" style="font-size:11.5px;color:var(--txt-3)">01:00:00</span>
+        <button class="pv-btn" onclick="toast('已静音 / 取消静音')">🔈</button>
+        <button class="pv-btn" onclick="toast('倍速：1.0x → 1.5x → 2.0x → 0.5x')">1.0x</button>
+        <button class="pv-btn" onclick="toast('已切换全屏（浏览器原生全屏）')">⛶</button>
+      </div>
+      <div style="padding:16px 20px">
+        <div style="font-size:12.5px;color:var(--txt-2)">分段 <span style="color:var(--txt-3)">（本文件为第 1 段，共 6 段；可单独播放任意分段，也可合并后整场回放）</span></div>
+        <div class="pv-segs">
+          <span class="chip on"><i class="dot"></i>001 已录完</span>
+          <span class="chip">002 已录完</span>
+          <span class="chip">003 已录完</span>
+          <span class="chip">004 已录完</span>
+          <span class="chip">005 已录完</span>
+          <span class="chip wait"><i class="dot"></i>006 录制中</span>
+        </div>
+        <div class="hintline" style="margin-top:12px">TS 片段由服务端 `ffmpeg -c copy` 边转 fMP4 渐进流、不落盘；成品 MP4 直接播放（可拖动）；正在录制的分段只播已写入的部分。若浏览器不支持所选音轨/编码，会给出明确提示而不是静默黑屏。<b>同时最多 2 路渐进流转封装回放</b>（每路都会起一个 ffmpeg），第 3 路会提示"当前回放较多，请稍后再试"；关闭播放器即释放；MP4 直放不受此限制。</div>
+      </div>
+    </div>
+    <div class="modal-f">
+      <button class="btn ghost" onclick="toast('已复制直链（局域网内可分享）')">复制直链</button>
+      <button class="btn ghost" onclick="toast('已生成 MP4 转封装任务')">转封装 MP4</button>
+      <button class="btn ghost" onclick="toast('已在新标签页打开（浏览器原生播放，便于下载）')">新标签页打开</button>
+      <button class="btn primary" onclick="closePlayer()">关闭</button>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ---------- 页面切换 ---------- */
+const TITLES = {
+  dashboard:['总览','实时监控中的直播间与录制状态'],
+  tasks:['录制任务','管理监控列表、清晰度与分段策略'],
+  files:['录制文件','浏览、转封装与清理已录制文件'],
+  settings:['系统设置','录制与存储、命名规则、平台账号、通知、安全与登录'],
+  logs:['运行日志','引擎与每个任务的详细运行记录']
+};
+document.querySelectorAll('#nav .nav-item').forEach(el=>{
+  el.addEventListener('click',()=>{
+    const p = el.dataset.page;
+    document.querySelectorAll('#nav .nav-item').forEach(n=>n.classList.toggle('active',n===el));
+    document.querySelectorAll('.page').forEach(s=>s.classList.toggle('active', s.id==='page-'+p));
+    document.getElementById('pageTitle').textContent = TITLES[p][0];
+    document.getElementById('pageSub').textContent = TITLES[p][1];
+    window.scrollTo({top:0,behavior:'smooth'});
+  });
+});
+
+/* ---------- 系统设置页签：命名规则并入系统设置 ---------- */
+(function mountNamingTab(){
+  const src  = document.getElementById('page-naming');   // 原独立页面
+  const host = document.getElementById('tab-naming');    // 系统设置中的占位页签
+  if(!src || !host) return;
+  src.classList.remove('page','active');
+  src.removeAttribute('id');
+  src.classList.add('tabpane');
+  src.id = 'tab-naming';
+  host.replaceWith(src);
+})();
+document.getElementById('settingsTabs').addEventListener('click', e=>{
+  const t = e.target.closest('.tab');
+  if(!t) return;
+  document.querySelectorAll('#settingsTabs .tab').forEach(x=>x.classList.toggle('on',x===t));
+  document.querySelectorAll('#page-settings .tabpane').forEach(p=>p.classList.toggle('active', p.id==='tab-'+t.dataset.tab));
+});
+
+/* ---------- 登录页 ---------- */
+let loginMode = 'login';
+function togglePw(btn, id){
+  const i = document.getElementById(id);
+  const show = i.type === 'password';
+  i.type = show ? 'text' : 'password';
+  btn.textContent = show ? '隐藏' : '显示';
+}
+function switchLoginMode(){
+  loginMode = loginMode === 'login' ? 'init' : 'login';
+  const init = loginMode === 'init';
+  document.getElementById('loginTitle').textContent = init ? '初始化管理员账号' : '登录管理台';
+  document.getElementById('loginSub').textContent = init
+    ? '首次部署，请设置管理员账号与密码（密码至少 8 位）'
+    : '请输入管理员账号与密码以访问录制管理台';
+  document.getElementById('loginPass2Row').style.display = init ? '' : 'none';
+  document.getElementById('loginRememberRow').style.display = init ? 'none' : 'flex';
+  document.getElementById('loginSwitchHint').textContent = init ? '已经初始化过？' : '首次部署？';
+  document.getElementById('loginSwitchLink').textContent = init ? '返回登录' : '初始化管理员账号';
+  document.getElementById('loginBtn').textContent = init ? '创建并登录' : '登 录';
+  hideLoginErr();
+}
+function showLoginErr(msg){
+  document.getElementById('loginErrTx').textContent = msg;
+  document.getElementById('loginErr').classList.add('show');
+}
+function hideLoginErr(){ document.getElementById('loginErr').classList.remove('show'); }
+function doLogin(e){
+  e.preventDefault();
+  const u = document.getElementById('loginUser').value.trim();
+  const p = document.getElementById('loginPass').value;
+  const p2 = document.getElementById('loginPass2').value;
+  if(!u) return showLoginErr('请输入用户名');
+  if(!p) return showLoginErr('请输入密码');
+  const init = loginMode === 'init';
+  if(init && p.length < 8) return showLoginErr('密码至少 8 位');
+  if(init && p !== p2) return showLoginErr('两次输入的密码不一致');
+  hideLoginErr();
+  const btn = document.getElementById('loginBtn');
+  const label = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = init ? '正在创建…' : '正在登录…';
+  setTimeout(()=>{   /* 原型：仅演示交互与状态，不发起真实鉴权请求 */
+    btn.disabled = false;
+    btn.textContent = label;
+    if(!init && p.length < 4) return showLoginErr('用户名或密码错误（原型：输入 4 位以上即通过）');
+    enterApp();
+    toast(init ? '管理员账号已创建，已自动登录' : '登录成功，欢迎回来');
+  }, 600);
+}
+function enterApp(){ document.getElementById('loginPage').classList.add('hide'); }
+function logout(){
+  document.getElementById('loginPage').classList.remove('hide');
+  document.getElementById('loginPass').value = '';
+  hideLoginErr();
+  toast('已退出登录');
+}
+
+/* ---------- 通用 ---------- */
+function tog(el){ el.classList.toggle('on'); }
+let toastTimer;
+function toast(msg){
+  const t=document.getElementById('toast');
+  document.getElementById('toastTx').textContent=msg;
+  t.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer=setTimeout(()=>t.classList.remove('show'),2000);
+}
+function openModal(){ document.getElementById('mask').classList.add('show'); document.body.style.overflow='hidden'; }
+function closeModal(){ document.getElementById('mask').classList.remove('show'); document.body.style.overflow=''; }
+/* ---------- 浏览器内置播放器 ---------- */
+const PL_MODE = {
+  prog:{src:'源：TS（服务端转 fMP4）', mode:'服务端转 fMP4 边转边播', chip:'wait'},
+  mp4:{src:'源：MP4（直接播放）', mode:'直接播放，无需转封装', chip:'on'},
+  audio:{src:'源：M4A（音频 + 波形）', mode:'音频直接播放', chip:'on'}
+};
+function openPlayer(name, plat, qual, key){
+  const m = PL_MODE[key] || PL_MODE.hls;
+  document.getElementById('plTitle').textContent = name;
+  document.getElementById('plPlat').textContent = plat;
+  document.getElementById('plQual').textContent = qual;
+  document.getElementById('plSrc').textContent = m.src;
+  const mc = document.getElementById('plMode');
+  mc.className = 'chip ' + m.chip;
+  mc.innerHTML = '<i class="dot"></i>' + m.mode;
+  document.getElementById('playerMask').classList.add('show');
+  document.body.style.overflow='hidden';
+  document.getElementById('playerMask').dataset.key = key;
+}
+function closePlayer(){ document.getElementById('playerMask').classList.remove('show'); document.body.style.overflow=''; }
+document.addEventListener('keydown',e=>{ if(e.key==='Escape') closeModal(); });
+
+/* ---------- 清晰度选择 ---------- */
+const QNAME = {'原画':'原画 1080P60','蓝光':'蓝光 1080P','超清':'超清 720P','高清':'高清 540P','标清':'标清 360P','仅音频':'仅音频 AAC 128k'};
+function pickQ(el){
+  document.querySelectorAll('#qGrid .q').forEach(q=>q.classList.remove('sel'));
+  el.classList.add('sel');
+  const name = el.querySelector('.qt').textContent.trim();
+  document.getElementById('qNow').textContent = QNAME[name]||name;
+}
+
+/* ---------- 分段策略 ---------- */
+function setSeg(mode){
+  ['time','size','none'].forEach(m=>document.getElementById('seg'+m.charAt(0).toUpperCase()+m.slice(1)).classList.toggle('sel', m===mode));
+  const p=document.getElementById('segPanel');
+  p.style.display = mode==='none' ? 'none' : 'flex';
+}
+
+/* ---------- 命名规则预览 ---------- */
+const SAMPLE = {
+  '{主播}':'某某小主播','{平台}':'抖音','{房间号}':'23456789','{标题}':'今天打排位 冲王者',
+  '{日期}':'2025-06-01','{时间}':'20-13-05','{清晰度}':'原画','{序号}':'001','{任务}':'task_07',
+  '{分辨率}':'1920x1080','{时长}':'01-00-00','{自定义}':'自定义'
+};
+const TOKENS = Object.keys(SAMPLE);
+(function buildTokens(){
+  const box=document.getElementById('tokenBox');
+  box.innerHTML = TOKENS.map(t=>`<span class="token" onclick="insertToken('${t}')">${t}</span>`).join('');
+})();
+function insertToken(t){
+  const i=document.getElementById('fnTpl');
+  const s=i.selectionStart??i.value.length, e=i.selectionEnd??i.value.length;
+  i.value = i.value.slice(0,s)+t+i.value.slice(e);
+  i.focus(); i.setSelectionRange(s+t.length,s+t.length);
+  renderPreview();
+}
+function insertM(t){
+  const i=document.getElementById('mFnTpl');
+  const s=i.selectionStart??i.value.length;
+  i.value = i.value.slice(0,s)+t+i.value.slice(s);
+  i.focus(); i.setSelectionRange(s+t.length,s+t.length);
+  renderModalPreview();
+}
+/* 按设置中的日期/序号格式生成示例数据 */
+function sampleDate(){
+  const v = document.getElementById('dateFmt').value;
+  const y='2025', m='06', d='01';
+  if(v==='YYYYMMDD') return y+m+d;
+  if(v==='YYYY.MM.DD') return y+'.'+m+'.'+d;
+  if(v==='YYYY年MM月DD日') return y+'年'+m+'月'+d+'日';
+  return y+'-'+m+'-'+d;
+}
+function seqOf(i){
+  const pad = parseInt(document.getElementById('padFmt').value,10) || 3;
+  return String(i).padStart(pad,'0');
+}
+function fill(tpl, seq){
+  return tpl.replace(/\{[^}]+\}/g, m=>{
+    if(m==='{序号}') return seq || seqOf(1);
+    if(m==='{日期}') return sampleDate();
+    return Object.prototype.hasOwnProperty.call(SAMPLE,m) ? SAMPLE[m] : m;
+  });
+}
+function renderPreview(){
+  const tpl = document.getElementById('fnTpl').value || '{日期}_{主播}';
+  const dirRaw = document.getElementById('dirTpl').value.replace(/[\\/]+$/,'');
+  const dir = fill(dirRaw).split(/[\\/]/).filter(Boolean).join('/');
+  const rows = [1,2,3].map(i=>`<div class="fn">${fill(tpl,seqOf(i))}.ts</div>`).join('');
+  document.getElementById('previewBody').innerHTML =
+    (dir ? `<div class="pth">${dir}/</div>` : '') + rows +
+    `<div class="pth" style="opacity:.55">… 录制结束后转封装为同名 .mp4</div>`;
+  const fileName = fill(tpl,seqOf(1)) + '.ts';
+  const full = '/data/' + (dir?dir+'/':'') + fileName;
+  const enc = new TextEncoder();
+  document.getElementById('pathLen').textContent =
+    full.length + ' 字符 / ' + enc.encode(full).length + ' 字节 · 文件名 ' + enc.encode(fileName).length + ' 字节（单层名上限 255 字节）';
+}
+function applyPreset(p){
+  const fn = p==='dy' ? '{日期}_{主播}_{清晰度}_{序号}' : '{平台}_{主播}_{日期}_{标题}';
+  const dir = p==='dy' ? '{平台}/{主播}/{日期}' : '{平台}/{日期}/{主播}';
+  document.getElementById('fnTpl').value = fn;
+  document.getElementById('dirTpl').value = dir;
+  renderPreview();
+  toast(p==='dy'?'已应用抖音预设模板':'已应用 B 站预设模板');
+}
+function renderModalPreview(){
+  const fn = fill(document.getElementById('mFnTpl').value);
+  document.getElementById('mPreview').textContent = fn + '.ts';
+}
+renderPreview();
+renderModalPreview();
+</script>
+</body>
+</html>

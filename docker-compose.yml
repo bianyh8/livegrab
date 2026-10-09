@@ -1,0 +1,49 @@
+# LiveGrab 直播录制台 —— 一条命令起服务
+#   docker compose up -d --build
+#   open http://<主机IP>:8080    首次打开会要求设置管理员密码
+services:
+  livegrab:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: livegrab:0.1.0
+    container_name: livegrab
+    restart: unless-stopped
+    init: true
+
+    ports:
+      # 左边是宿主机端口，可用 .env 里的 LIVEGRAB_PORT 改
+      - "${LIVEGRAB_PORT:-8080}:8080"
+
+    environment:
+      # D15：时区由 compose 提供，页面上只读展示（改这里后 docker compose up -d 生效）
+      TZ: "${TZ:-Asia/Shanghai}"
+      PORT: "8080"
+      # 录制成品目录（容器内路径，对应下面 /data 挂载）
+      RECORD_ROOT: "/data"
+      # 配置/账号/日志目录（对应下面 /config 挂载）
+      CONFIG_DIR: "/config"
+      # 需要走代理拉流时取消注释
+      # HTTPS_PROXY: "http://host.docker.internal:7890"
+
+    volumes:
+      # 录制文件：占空间最大，建议挂到大容量磁盘
+      - ./data:/data
+      # 配置与日志：务必长期保留（账号哈希、Cookie、任务、场次索引、日志）
+      - ./config:/config
+
+    # 停止时给 ffmpeg 留出收尾时间（会把当前分段写完再退出）
+    stop_grace_period: 30s
+
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"

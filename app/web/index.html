@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>直播录制</title>
+<link rel="stylesheet" href="./app.css" />
+</head>
+<body>
+<!-- ================= 登录页 / 首次初始化（未登录时的唯一入口） ================= -->
+<div class="login" id="loginPage">
+  <div class="login-visual">
+    <div class="lv-head">
+      <div class="logo" style="width:38px;height:38px;flex:0 0 38px;border-radius:11px">L</div>
+      <div>
+        <div style="font-size:14px;font-weight:700;letter-spacing:.3px">直播录制</div>
+      </div>
+    </div>
+    <div>
+      <h1>直播留档，<br />从开播那一刻开始</h1>
+      <p class="lead">监控直播间、开播自动录制、按时间或大小分段、按你的规则命名归档 —— 全部在一个浏览器页面里完成。</p>
+      <div class="lv-feats">
+        <div class="lv-feat"><i>◉</i><div><b>开播自动录制</b><span>轮询检测直播间状态，开播即录，下播自动收尾</span></div></div>
+        <div class="lv-feat"><i>≣</i><div><b>分段与合并</b><span>按 30/60/120 分钟或按文件大小分卷，可一键合并为完整成片</span></div></div>
+        <div class="lv-feat"><i>{ }</i><div><b>命名规则自由配置</b><span>{日期}_{主播}_{清晰度}_{序号}，目录结构同样可模板化</span></div></div>
+        <div class="lv-feat"><i>▷</i><div><b>浏览器内直接回放</b><span>录完的文件在文件库中即可播放、转封装与下载</span></div></div>
+      </div>
+    </div>
+    <div class="lv-foot">
+      <span class="plat dy"><i>抖</i>抖音</span>
+      <span class="plat bili"><i>B</i>哔哩哔哩</span>
+      <span>· 单容器 Docker 部署 · 数据仅存本地</span>
+    </div>
+  </div>
+
+  <div class="login-panel">
+    <div class="login-card">
+      <h2 id="loginTitle">登录管理台</h2>
+      <p class="sub2" id="loginSub">请输入管理员账号与密码以访问录制管理台</p>
+
+      <div class="login-err" id="loginErr">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 8v5M12 16h.01"/></svg>
+        <span id="loginErrTx">用户名或密码错误</span>
+      </div>
+
+      <form id="loginForm" autocomplete="on">
+        <div class="form-row" id="loginUserRow">
+          <label class="fl">用户名</label>
+          <input class="input" id="loginUser" value="admin" autocomplete="username" />
+        </div>
+        <div class="form-row">
+          <label class="fl">密码</label>
+          <div class="pw-wrap">
+            <input class="input" id="loginPass" type="password" placeholder="请输入密码" autocomplete="current-password" />
+            <button type="button" class="pw-toggle" id="pwToggle1">显示</button>
+          </div>
+        </div>
+        <div class="form-row" id="loginPass2Row" style="display:none">
+          <label class="fl">确认密码</label>
+          <div class="pw-wrap">
+            <input class="input" id="loginPass2" type="password" placeholder="请再次输入密码" autocomplete="new-password" />
+            <button type="button" class="pw-toggle" id="pwToggle2">显示</button>
+          </div>
+        </div>
+        <div class="login-row" id="loginRememberRow">
+          <label class="checks"><input type="checkbox" class="cb" id="loginRemember" checked /> 记住我（30 天免登录）</label>
+          <a id="loginForgot">忘记密码？</a>
+        </div>
+        <button class="btn primary login-btn" id="loginBtn" type="submit">登 录</button>
+      </form>
+
+      <div class="login-foot">
+        <div><span id="loginSwitchHint">首次部署？</span> <a id="loginSwitchLink">初始化管理员账号</a></div>
+      </div>
+    </div>
+    <div class="login-meta" id="loginMeta">LiveGrab · 单管理员账号 · 凭据保存在容器内 /config（不含明文）</div>
+  </div>
+</div>
+
+<div class="app" id="appRoot" style="display:none">
+  <!-- ============ 侧边栏 ============ -->
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="logo">Live</div>
+      <div>
+        <h1>直播录制台</h1>
+      </div>
+    </div>
+    <nav class="nav" id="nav">
+      <div class="nav-group">监控</div>
+      <div class="nav-item" data-page="dashboard">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/></svg>
+        总览 <span class="badge" id="navDashBadge" style="display:none"></span>
+      </div>
+      <div class="nav-item" data-page="tasks">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="2" y="5" width="14" height="14" rx="2"/><path d="M16 10l6-3v10l-6-3z"/></svg>
+        任务管理 <span class="badge gray" id="navTaskBadge" style="display:none"></span>
+      </div>
+      <div class="nav-item" data-page="files">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+        文件管理 <span class="badge gray" id="navFileBadge" style="display:none"></span>
+      </div>
+      <div class="nav-item" data-page="events">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M20 12a8 8 0 1 1-16 0 8 8 0 0 1 16 0z"/><path d="M12 8v4l2.5 2.5"/></svg>
+        最近事件
+      </div>
+      <div class="nav-group">系统</div>
+      <div class="nav-item" data-page="settings">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M4 6h16M4 12h16M4 18h16"/><circle cx="9" cy="6" r="2" fill="#0a0d13"/><circle cx="15" cy="12" r="2" fill="#0a0d13"/><circle cx="8" cy="18" r="2" fill="#0a0d13"/></svg>
+        系统设置
+      </div>
+      <div class="nav-item" data-page="logs">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M5 3h14v18H5z"/><path d="M9 8h6M9 12h6M9 16h3"/></svg>
+        运行日志
+      </div>
+      <div class="nav-item" data-page="trash">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M4 7h16M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2M6 7l1 13h10l1-13M10 11v6M14 11v6"/></svg>
+        回收站 <span class="badge gray" id="navTrashBadge" style="display:none"></span>
+      </div>
+    </nav>
+    <div class="side-foot">
+      <div style="display:flex;align-items:center;gap:7px;margin-bottom:10px;flex-wrap:wrap">
+        <span class="chip" id="engineChip">引擎检测中…</span>
+      </div>
+      <div class="user-row">
+        <span class="ava" id="userAva">A</span>
+        <div class="f1" style="min-width:0">
+          <div class="un" id="userName">admin</div>
+          <div class="ur" id="userMeta">管理员</div>
+        </div>
+        <button class="btn sm ghost" id="logoutBtn">退出</button>
+      </div>
+    </div>
+  </aside>
+
+  <!-- ============ 主区 ============ -->
+  <main class="main">
+    <header class="topbar">
+      <h2 id="pageTitle">总览</h2>
+      <span class="sub" id="pageSub">实时监控中的直播间与录制状态</span>
+      <div class="spacer"></div>
+      <span class="chip wait" id="topChip" style="display:none"></span>
+      <button class="btn" id="refreshBtn">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M20 12a8 8 0 1 1-2.3-5.6"/><path d="M20 4v5h-5"/></svg>刷新
+      </button>
+      <button class="btn primary" id="newTaskBtn" style="display:none">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M12 5v14M5 12h14"/></svg>新建录制任务
+      </button>
+    </header>
+
+    <div class="content">
+      <!-- 视图容器：路由切换时由 views/*.js 渲染 -->
+      <div id="view"></div>
+    </div>
+  </main>
+</div>
+
+<!-- ================= 通用弹窗容器（confirm / prompt / 任务弹窗 / 回收站等） ================= -->
+<div class="mask" id="modalMask"></div>
+<!-- ================= 浏览器内置播放器 ================= -->
+<div class="mask" id="playerMask"></div>
+<div class="toast" id="toast"><i></i><span id="toastTx">ok</span></div>
+
+<script type="module" src="./app.js"></script>
+</body>
+</html>

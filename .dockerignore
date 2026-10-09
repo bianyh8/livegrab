@@ -1,0 +1,21 @@
+# 设计原型与截图不进镜像
+ui/
+*.png
+*.jpg
+
+# 挂载点数据不进镜像
+data/
+config/
+
+# 各种临时/本地文件
+.git/
+.gitignore
+**/.DS_Store
+**/Thumbs.db
+**/node_modules
+**/_tmp_*
+**/_dom.html
+**/_inline.js
+**/*.log
+.env
+.env.*

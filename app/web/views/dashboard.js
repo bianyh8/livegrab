@@ -1,0 +1,308 @@
+/* LiveGrab · views/dashboard.js —— 总览
+   4 张统计卡（口径照 D2）＋ 正在录制（分段进度条 + 暂停本段/停止）＋ 排队/等待开播（含 queueReason）。
+   数据来自 GET /api/status。最近事件已并入「运行日志」页；磁盘只在统计卡里出现一次（不再有第二张磁盘卡）；
+   引擎/ffmpeg 细节也不再在总览展示（见「运行日志」页）。 */
+
+import { api } from '../api.js';
+import {
+  esc, formatBytes, formatDuration,
+  platBadge, segTrack, emptyBox, toast, qualityLabelOf,
+} from '../ui.js';
+
+export const page = 'dashboard';
+
+const state = { tasks: [], booted: false, pending: false, lastStatus: null, collapsed: new Set() };
+
+export async function render(root, ctx) {
+  root.innerHTML = `<div class="stack"><div class="card"><div class="empty">正在加载总览…</div></div></div>`;
+  ctx.onRefresh(() => tick(ctx));
+  await tick(ctx, true);
+}
+
+async function tick(ctx, initial) {
+  if (state.pending) return;
+  state.pending = true;
+  try {
+    const [st, tk] = await Promise.allSettled([api.status(), api.tasks()]);
+    const status = st.status === 'fulfilled' ? (st.value || {}) : null;
+    if (tk.status === 'fulfilled') state.tasks = (tk.value && tk.value.items) || [];
+    state.lastStatus = status;
+    state.booted = true;
+    paint(ctx, status);
+  } finally {
+    state.pending = false;
+  }
+}
+
+function tasksOfType(type) {
+  return state.tasks.filter((t) => t.status === type);
+}
+
+function open(key) { return !state.collapsed.has(key); }
+function collapseBtn(key, isOpen) {
+  return `<button class="collapse-btn${isOpen ? ' open' : ''}" data-collapse="${key}" title="折叠 / 展开" aria-expanded="${isOpen ? 'true' : 'false'}" style="flex:0 0 auto"></button>`;
+}
+
+function paint(ctx, status) {
+  const root = document.getElementById('view');
+  if (!root) return;
+  if (!status && !state.tasks.length) {
+    root.innerHTML = `<div class="card"><div class="card-b">
+      <div class="empty">无法读取总览数据（后端 /api/status 尚未返回）。稍后会自动重试。</div>
+    </div></div>`;
+    return;
+  }
+  const stats = (status && status.stats) || {};
+  const disk = (status && status.disk) || {};
+  const engine = (status && status.engine) || {};
+  const recording = (status && status.recording) || [];
+  const waiting = (status && status.waiting) || [];
+  const queue = (status && status.queue) || [];
+  // 等待录制：只显示「需要录制、但尚未开播」的任务，排除仅监控
+  const waitingView = waiting.filter((w) => w.monitorOnly !== true);
+  const queueView = queue.filter((q) => !state.tasks.find((t) => t.id === q.id)?.monitorOnly);
+  // 仅监控：从任务全量里筛出 monitorOnly，展示实时直播状态
+  const monitorList = state.tasks.filter((t) => t.monitorOnly);
+
+  const recCount = num(stats.recordingCount, recording.length);
+  const cap = num(stats.concurrencyCap, ctx.limits.maxConcurrency);
+  const queuedCount = num(stats.queuedCount, queue.length);
+  const usedBytes = Number(disk.usedBytes) || 0;
+  const totalBytes = Number(disk.totalBytes) || 0;
+  const freeBytes = Number(disk.freeBytes) || Math.max(0, totalBytes - usedBytes);
+  const trashBytes = Number(disk.trashBytes) || 0;
+
+  root.innerHTML = `
+    ${diskAlert(freeBytes)}
+    <div class="stats">
+      <div class="stat">
+        <div class="k"><span class="pulse" style="font-size:11px"><b></b>正在录制</span></div>
+        <div class="v">${recCount}<small>路并发 / 上限 ${cap}</small></div>
+        <div class="d">${queuedCount > 0
+          ? `排队 <b class="down">${queuedCount}</b> 条 · 超出 min(全局上限, 平台上限) 时进入排队`
+          : `全部任务均在并发上限内 · 已暂停不计并发`}</div>
+      </div>
+      <div class="stat b">
+        <div class="k">今日录制时长</div>
+        <div class="v">${todayDuration(stats.todayDurationSec)}</div>
+        <div class="d">当日各分段实际时长累加（非墙钟）</div>
+      </div>
+      <div class="stat g">
+        <div class="k">今日新增文件</div>
+        <div class="v">${Number(stats.todayFiles) || 0}<small>个 / ${formatBytes(stats.todayBytes)}</small></div>
+        <div class="d">当天 00:00 起算</div>
+      </div>
+      <div class="stat p">
+        <div class="k">磁盘占用</div>
+        <div class="v">${formatBytes(usedBytes)}<small>/ ${formatBytes(totalBytes)}</small></div>
+        <div class="d">剩余 <b class="${freeBytes < 20 * 1024 * 1024 * 1024 ? 'down' : ''}">${formatBytes(freeBytes)}</b>${trashBytes ? ` · 回收站 ${esc(formatBytes(trashBytes))}` : ''}</div>
+      </div>
+    </div>
+
+    <div class="stack">
+      <div class="card">
+        <div class="card-h">
+          ${collapseBtn('rec', open('rec'))}
+          <h3>正在录制</h3><span class="hint">${recCount} 路 · 分段写入中</span>
+          <div class="spacer"></div>
+          ${open('rec') ? `<button class="btn sm ghost" data-act="pause-all">全部暂停</button>` : ''}
+        </div>
+        ${open('rec') ? `<div class="card-b" style="padding:0">
+          ${recording.length ? recording.map(recItem).join('') : emptyBox('当前没有正在录制的任务')}
+        </div>` : ''}
+      </div>
+
+      <div class="card">
+        <div class="card-h">${collapseBtn('wait', open('wait'))}<h3>等待录制</h3><span class="hint">需录制但尚未开播</span></div>
+        ${open('wait') ? `<div class="card-b" style="padding:0">
+          ${(queueView.length || waitingView.length)
+            ? queueView.map((q) => queueItem(q, ctx)).join('') + waitingView.map((w) => waitItem(w)).join('')
+            : emptyBox('没有等待录制的任务')}
+        </div>` : ''}
+      </div>
+
+      <div class="card">
+        <div class="card-h">${collapseBtn('monitor', open('monitor'))}<h3>仅监控</h3><span class="hint">只监控直播状态，不自动录制</span></div>
+        ${open('monitor') ? `<div class="card-b" style="padding:0">
+          ${monitorList.length
+            ? monitorList.map((t) => monitorItem(t, ctx)).join('')
+            : emptyBox('没有「仅监控」的任务')}
+        </div>` : ''}
+      </div>
+    </div>`;
+
+  bind(root, ctx);
+}
+
+/* ---------- 片段 ---------- */
+
+function num(v, fallback) {
+  const n = Number(v);
+  return isFinite(n) && n > 0 ? n : (fallback || 0);
+}
+
+function todayDuration(sec) {
+  const s = Number(sec) || 0;
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  if (h > 0) return `${h}<small>小时</small> ${m}<small>分</small>`;
+  return `${m}<small>分钟</small>`;
+}
+
+function diskAlert(free) {
+  const limit = 20 * 1024 * 1024 * 1024;
+  if (free > 0 && free < limit) {
+    return `<div class="login-err show" style="margin:0 0 14px;display:flex"><span>⚠ 磁盘剩余 ${esc(formatBytes(free))}，低于保留下限时会自动清理最旧的成品文件；录制中请及时清理空间。</span></div>`;
+  }
+  return '';
+}
+
+function recItem(t) {
+  const quality = qualityLabelOf(t);
+  const isAudio = t.quality === 'audio';
+  const live = t.live || {};
+  const segIndex = Number(live.segmentIndex || t.segmentIndex || 1);
+  const segOf = segLabel(t);
+  const total = segOf === 'none' ? 1 : Math.max(segIndex + 1, 6);
+  const elapsed = Number(live.elapsedSec || 0);
+  const bytes = Number(live.bytes || 0);
+  const perSeg = Math.max(1, Math.round(elapsed / Math.max(1, segIndex)));
+  const current = Math.max(0, elapsed - perSeg * (segIndex - 1));
+
+  return `
+    <div class="rec-item">
+      <div class="thumb">
+        <span class="th-ph">${isAudio ? 'AUDIO' : 'LIVE'}</span>
+        <img class="tk-thumb" loading="lazy" src="/api/tasks/${esc(t.id)}/thumb" alt="" onerror="this.style.display='none'" />
+      </div>
+      <div class="rec-main">
+        <div class="ttl">${esc(t.name || t.anchorName || '未命名任务')}${t.title ? ' · ' + esc(t.title) : ''}</div>
+        <div class="meta">
+          ${platBadge(t.platform, t.platformName)}<span>房间 ${esc(t.roomId || '—')}</span>
+          <span class="chip">${esc(quality)}</span>
+          <span class="chip">${segOf === 'none' ? '不分段' : esc(segOf)}</span>
+          <span class="chip on"><i class="dot"></i>${segOf === 'none' ? `单文件 · 已写 ${esc(formatBytes(bytes))}` : `第 ${segIndex} 段 / 已写 ${esc(formatBytes(current))}`}</span>
+        </div>
+        ${isAudio && segOf === 'none'
+          ? `<div class="bar" style="width:100%"><i style="width:${Math.min(95, Math.max(4, Math.round((current / (60 * 60)) * 100)))}%"></i></div>`
+          : segTrack(Math.max(0, segIndex - 1), segIndex - 1, total)}
+      </div>
+      <div class="rec-right">
+        <div class="tm">${esc(formatDuration(elapsed))}</div>
+        <div style="font-size:11px;color:var(--txt-3)">${segOf === 'none' ? '单文件' : '本段 ' + esc(formatDuration(current))}</div>
+        <div class="acts" style="margin-top:7px">
+          <button class="btn sm danger" data-act="stop" data-id="${esc(t.id)}">停止录制</button>
+        </div>
+      </div>
+    </div>`;
+}
+
+function segLabel(t) {
+  if (t.segmentMode === 'none') return 'none';
+  if (t.segmentMode === 'size') return `按大小 ${Math.round((t.segmentSizeMB || 2048) / 1024 * 10) / 10} GB`;
+  return `${t.segmentMinutes || 60} 分钟/段`;
+}
+
+function queueItem(q, ctx) {
+  const name = parseName(q.name);
+  return `
+    <div class="rec-item" style="padding:11px 16px">
+      ${platBadge(name.platform)}
+      <div class="rec-main">
+        <div class="ttl" style="font-size:13px">${esc(name.text)}</div>
+        <div class="meta"><span class="chip wait"><i class="dot"></i>排队中</span><span>${esc(q.reason || '等待并发空位')}</span></div>
+      </div>
+      <div class="acts">
+        <button class="btn sm" data-act="detail" data-id="${esc(q.id)}">详情</button>
+      </div>
+    </div>`;
+}
+
+function waitItem(t) {
+  const quality = qualityLabelOf(t);
+  const poll = t.pollIntervalSec || 60;
+  return `
+    <div class="rec-item" style="padding:11px 16px">
+      ${platBadge(t.platform, t.platformName)}
+      <div class="rec-main">
+        <div class="ttl" style="font-size:13px">${esc(t.name || t.anchorName || '未命名任务')}</div>
+        <div class="meta"><span>轮询 ${Number(poll)} 秒</span><span>${esc(quality)}</span>${t.statusMessage ? `<span>${esc(t.statusMessage)}</span>` : ''}</div>
+      </div>
+      <span class="chip wait"><i class="dot"></i>未开播</span>
+      <div class="acts">
+        <button class="btn sm" data-act="check" data-id="${esc(t.id)}" title="立即检测该直播间是否已开播">立即检测</button>
+        <button class="btn sm ghost" data-act="detail" data-id="${esc(t.id)}">详情</button>
+      </div>
+    </div>`;
+}
+
+/** 仅监控条目：直播状态 + 快捷操作（直播中→开始录制；未直播→立即检测） */
+function monitorItem(t) {
+  const live = t.liveStatus === 'live';
+  return `
+    <div class="rec-item" style="padding:11px 16px">
+      ${platBadge(t.platform, t.platformName)}
+      <div class="rec-main">
+        <div class="ttl" style="font-size:13px">${esc(t.anchorName || t.name || '未命名任务')}<span class="chip bili" style="margin-left:6px"><i class="dot"></i>仅监控</span></div>
+        <div class="meta"><span class="chip ${live ? 'on' : 'off'}"><i class="dot"></i>${live ? '直播中' : '未直播'}</span><span>房号 ${esc(t.roomId || '—')}</span>${t.statusMessage ? `<span>${esc(t.statusMessage)}</span>` : ''}</div>
+      </div>
+      <div class="acts">
+        ${live
+          ? `<button class="btn sm ok" data-act="start" data-id="${esc(t.id)}" title="仅录制本场直播，不改变仅监控设置">开始录制</button>`
+          : `<button class="btn sm" data-act="check" data-id="${esc(t.id)}">立即检测</button>`}
+        <button class="btn sm ghost" data-act="detail" data-id="${esc(t.id)}">详情</button>
+      </div>
+    </div>`;
+}
+
+/** TaskLite.name 形如「【抖音】某某小主播」；缺失平台时回退到平台未知 */
+function parseName(name) {
+  const s = String(name || '未命名任务');
+  const m = s.match(/^【(.+?)】([\s\S]*)$/);
+  if (!m) return { platform: '', text: s };
+  const found = Object.entries(PLATMAP).find(([, v]) => v === m[1]);
+  return { platform: found ? found[0] : '', text: m[2] || s };
+}
+
+const PLATMAP = { douyin: '抖音', bilibili: '哔哩哔哩', kuaishou: '快手', huya: '虎牙', douyu: '斗鱼', xiaohongshu: '小红书', weibo: '微博', acfun: 'AcFun' };
+
+/* ---------- 交互 ---------- */
+
+function bind(root, ctx) {
+  root.querySelectorAll('[data-collapse]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const key = btn.dataset.collapse;
+      if (state.collapsed.has(key)) state.collapsed.delete(key);
+      else state.collapsed.add(key);
+      if (state.lastStatus) paint(ctx, state.lastStatus); // 本页重画，不重新拉取
+    });
+  });
+  root.querySelectorAll('[data-act]').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const act = btn.dataset.act;
+      const id = btn.dataset.id;
+      btn.disabled = true;
+      try {
+        if (act === 'pause') { await api.taskAction(id, 'pause'); toast('已暂停：本段已结束并入库，拉流已停止，不占用并发'); }
+        else if (act === 'stop') { await api.taskAction(id, 'stop'); toast('已停止并开始转封装'); }
+        else if (act === 'start') { await api.taskAction(id, 'start'); toast('已开始录制本场直播（仅监控房间的一次性录制，设置不变）'); }
+        else if (act === 'check') { await api.taskAction(id, 'check'); toast('已刷新开播状态'); }
+        else if (act === 'pause-all') {
+          const ids = tasksOfType('recording').map((t) => t.id);
+          if (!ids.length) { toast('当前没有录制中的任务', 'warn'); return; }
+          const r = await api.batch('pause', ids);
+          toast(`已暂停 ${(r && r.okIds ? r.okIds.length : ids.length)} 条任务（结束当前分段，不占用并发）`);
+        } else if (act === 'detail') {
+          ctx.openTaskModal(id);
+          return;
+        }
+        ctx.invalidate('dashboard');
+      } catch (e) {
+        toast(e.message || '操作失败', 'err');
+      } finally {
+        btn.disabled = false;
+        if (act !== 'pause-all') await tick(ctx);
+      }
+    });
+  });
+}

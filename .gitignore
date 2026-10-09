@@ -1,0 +1,25 @@
+# ---- 运行时数据（含敏感信息，严禁入库） ----
+config/
+data/
+*.log
+
+# ---- 本地/临时 ----
+node_modules/
+acl-reports/
+.acl-reports/
+.write-probe
+_tmp_*
+_dom.html
+_inline.js
+*.toml
+.env
+.env.*
+.idea/
+.vscode/
+*.suo
+*.user
+
+# ---- 系统 ----
+.DS_Store
+Thumbs.db
+desktop.ini
