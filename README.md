@@ -57,7 +57,7 @@ http://<主机IP>:8080
 首次打开会引导**初始化管理员账号**（设置用户名与密码）。
 
 **④ 数据落盘位置**
-compose 相对 `liverecord/` 目录挂载：
+compose 相对 `livegrab/` 目录挂载：
 
 | 挂载点 | 内容 | 建议 |
 |---|---|---|
@@ -77,7 +77,7 @@ compose 相对 `liverecord/` 目录挂载：
 ### 日常更新
 
 ```bash
-cd liverecord
+cd livegrab
 git pull
 docker compose up -d --build
 ```
@@ -86,7 +86,7 @@ docker compose up -d --build
 ### 不想克隆也能直接构建
 
 ```bash
-docker build -t livegrab:0.1.0 https://github.com/bianyh8/liverecord.git
+docker build -t livegrab:0.1.0 https://github.com/bianyh8/livegrab.git
 docker run -d --name livegrab -p 8080:8080 \
   -v "$PWD/data:/data" -v "$PWD/config:/config" \
   -e TZ=Asia/Shanghai --restart unless-stopped \
