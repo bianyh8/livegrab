@@ -94,8 +94,8 @@ function paint(ctx, status) {
         <div class="d">剩余 <b class="${freeBytes < 20 * 1024 * 1024 * 1024 ? 'down' : ''}">${formatBytes(freeBytes)}</b>${trashBytes ? ` · 回收站 ${esc(formatBytes(trashBytes))}` : ''}</div>
       </div>
       <div class="stat s">
-        <div class="k">平台存储分布</div>
-        <div class="v"><b>${esc(formatBytes(pstore.reduce((a, p) => a + (p.bytes || 0), 0)))}</b><small> 各平台</small></div>
+        <div class="k">存储分布</div>
+        <div class="v"><b>${esc(formatBytes(pstore.reduce((a, p) => a + (p.bytes || 0), 0)))}</b><small> 共 ${(pstore || []).filter((p) => p.bytes > 0).length} 平台</small></div>
         ${platformStoreBlock(pstore)}
       </div>
     </div>
@@ -152,14 +152,34 @@ function todayDuration(sec) {
 
 /* 下载带宽字段 live.speed 由后端实时下发，已改在 app.js 顶部状态栏展示 */
 
-/* 平台存储分布：横向堆叠条 + 平台名/大小图例 */
+/* 存储分布：环形图 + 平台名/大小图例 */
 function platformStoreBlock(pstore) {
   const total = (pstore || []).reduce((a, p) => a + (p.bytes || 0), 0);
-  if (!total || !pstore.length) return '<div class="pk-empty">暂无录制文件</div>';
+  const list = (pstore || []).filter((p) => p.bytes > 0);
+  if (!total || !list.length) return '<div class="pk-empty">暂无录制文件</div>';
   const colors = ['#4f9cf7', '#34c77b', '#f2b93d', '#e0615d', '#9b6ff0', '#2bb3c0', '#f472b6', '#a3b0c2'];
-  return `
-    <div class="pkstack">${pstore.map((p, i) => `<i style="flex:${(p.bytes || 0) / total};background:${colors[i % colors.length]}"></i>`).join('')}</div>
-    <div class="pkleg">${pstore.map((p, i) => `<span><i style="background:${colors[i % colors.length]}"></i>${esc(p.name || p.platform || '未知')} <b>${esc(formatBytes(p.bytes))}</b></span>`).join('')}</div>`;
+  const R = 46, C = 2 * Math.PI * R;
+  let offset = 0;
+  const arcs = list.map((p, i) => {
+    const frac = (p.bytes || 0) / total;
+    const len = frac * C;
+    const a = {
+      color: colors[i % colors.length],
+      dasharray: `${len} ${C - len}`,
+      dashoffset: -offset,
+      name: esc(p.name || p.platform || '未知'),
+      size: esc(formatBytes(p.bytes)),
+    };
+    offset += len;
+    return a;
+  });
+  const svg = `<svg viewBox="0 0 120 120" width="96" height="96">
+    <circle cx="60" cy="60" r="${R}" fill="none" stroke="rgba(255,255,255,.07)" stroke-width="13"/>
+    ${arcs.map((a) => `<circle cx="60" cy="60" r="${R}" fill="none" stroke="${a.color}" stroke-width="13" stroke-dasharray="${a.dasharray}" stroke-dashoffset="${a.dashoffset}" transform="rotate(-90 60 60)"/>`).join('')}
+    <text x="60" y="60" text-anchor="middle" fill="var(--txt-1)" font-size="12.5" font-weight="600">${esc(formatBytes(total))}</text>
+  </svg>`;
+  const leg = `<div class="pkleg">${arcs.map((a) => `<span><i style="background:${a.color}"></i>${a.name} <b>${a.size}</b></span>`).join('')}</div>`;
+  return `<div class="pkbody"><div class="pkdonut">${svg}</div>${leg}</div>`;
 }
 
 function diskAlert(free) {

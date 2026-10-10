@@ -401,6 +401,14 @@ function applyStatus(st) {
     nDash.style.display = rec > 0 ? '' : 'none';
   }
 
+  // 导航徽标：任务管理 = 任务总数；文件管理 = 录制文件总大小
+  const taskCnt = Array.isArray(st.tasks) ? st.tasks.length : 0;
+  const nTask = el('navTaskBadge');
+  if (nTask) { nTask.textContent = taskCnt || ''; nTask.style.display = taskCnt ? '' : 'none'; }
+  const fileBytes = (st.platformStore || []).reduce((a, p) => a + (p.bytes || 0), 0);
+  const nFile = el('navFileBadge');
+  if (nFile) { const t = fileBytes ? formatBytes(fileBytes) : ''; nFile.textContent = t; nFile.style.display = t ? '' : 'none'; }
+
   const top = el('topChip');
   if (top) {
     // 顶栏只显示下载带宽；未录制(无流量)时固定显示 0
