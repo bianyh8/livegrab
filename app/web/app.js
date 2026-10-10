@@ -364,8 +364,8 @@ async function refreshOnce() {
 
 async function tick() {
   if (!runtime.authed) return;
-  runtime.tick = (runtime.tick + 1) % 15;
-  if (runtime.tick === 1) pullStatus();
+  runtime.tick = (runtime.tick + 1) % 9;
+  if (runtime.tick === 2) pullStatus(); // 约每 6s 拉一次全量 status，刷新顶栏下载带宽等
   await refreshOnce();
 }
 
@@ -409,10 +409,19 @@ function applyStatus(st) {
     if (rec > 0) parts.push(`录制中 ${rec} 路${stats.concurrencyCap ? ` / 上限 ${stats.concurrencyCap}` : ''}`);
     if (stats.queuedCount) parts.push(`排队 ${stats.queuedCount}`);
     if (stats.waitingCount) parts.push(`等待开播 ${stats.waitingCount}`);
+    const bw = Number(stats.downSpeed) || 0;
+    if (rec > 0) parts.push(`下载带宽 ${fmtRate(bw)}`);
     runtime.topChipText = parts.join(' · ');
     top.textContent = runtime.topChipText;
     top.style.display = parts.length ? '' : 'none';
   }
+}
+
+function fmtRate(bitsPerSec) {
+  const b = Number(bitsPerSec) || 0;
+  if (b > 8 * 1024 * 1024) return `${(b / (8 * 1024 * 1024)).toFixed(1)} MB/s`;
+  if (b > 0) return `${Math.round(b / (8 * 1024))} KB/s`;
+  return '—';
 }
 
 let sse = null;

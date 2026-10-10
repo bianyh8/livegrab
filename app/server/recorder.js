@@ -32,6 +32,9 @@ export class Recorder extends EventEmitter {
     this._stderrTail = [];
     this.currentBytes = 0;
     this.currentSegment = null;
+    this._rateBits = 0;       // 各任务实时下载速率（bit/s）
+    this._tickRateRef = null; // { idx, bytes, t } 采样基准
+    this._cumBase = 0;        // 已轮转关闭分段累计字节（保持整场单调，供速率采样）
   }
 
   _meta() { return { taskId: this.task.id, taskName: this.task.anchorName || this.task.title || this.task.id }; }
@@ -181,16 +184,31 @@ export class Recorder extends EventEmitter {
       const st = await fsp.stat(s.path).catch(() => null);
       if (!st || !st.size) continue;
       this.closed.add(s.index);
+      this._cumBase += st.size;
       const durationSec = await this.media.probeDuration(s.path, { ffprobePath: this.settings.ffprobePath });
       this.emit('segment-close', { index: s.index, path: s.path, name: s.name, bytes: st.size, endedAt: nowIso(), durationSec: durationSec || 0 });
     }
     const cur = segs[segs.length - 1];
     this.currentSegment = cur;
     this.currentBytes = (await fsp.stat(cur.path).catch(() => ({ size: 0 }))).size;
+    this._sampleRate(cur);
     if (this.task.segmentMode === 'size' && !this.rotating && !this.stopping && !this.paused) {
       const limit = Math.max(16, Number(this.task.segmentSizeMB) || 2048) * 1024 * 1024;
       if (this.currentBytes >= limit) await this._rotate();
     }
+  }
+
+  /* ffmpeg 输出写入本身天然位率率不稳，这里按 1.5s 采样「累计已写字节」的增量估算瞬时下行速率 */
+  _sampleRate(cur) {
+    const now = Date.now();
+    const total = this._cumBase + this.currentBytes;
+    const idx = cur?.index || 0;
+    const ref = this._tickRateRef;
+    if (ref && ref.idx === idx && total > ref.bytes && now > ref.t) {
+      const dt = (now - ref.t) / 1000;
+      if (dt >= 0.8) this._rateBits = ((total - ref.bytes) * 8) / dt;
+    }
+    this._tickRateRef = { idx, bytes: total, t: now };
   }
 
   async scanSegments() {
@@ -350,6 +368,7 @@ export class Recorder extends EventEmitter {
       currentName: this.currentSegment?.name || null,
       segmentIndex: this.currentSegment?.index || 0,
       reconnects: this.reconnectAttempt,
+      speed: this._rateBits || 0,
       dir: this.dir,
       baseName: this.baseName,
       quality: this.qualityActual,

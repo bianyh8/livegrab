@@ -805,6 +805,7 @@ export class Scheduler {
         segmentIndex: stats?.segmentIndex || session?.segments?.length || task.segmentIndex || 0,
         reconnects: stats?.reconnects ?? task.reconnectCount ?? 0,
         dir: stats?.dir || session?.dir || null,
+        speed: stats?.speed || 0,
       },
       sessionSummary: session ? {
         id: session.id, status: session.status, bytes: session.bytes,
@@ -869,6 +870,7 @@ export class Scheduler {
         queuedCount: queued.length,
         waitingCount: waiting.filter((t) => t.status === 'waiting').length,
         platformCount: new Set(recording.map((t) => t.platform)).size,
+        downSpeed: recording.reduce((a, t) => a + (Number(t.live?.speed) || 0), 0),
         ...this.todayStats(),
       },
       disk: this.storage.disk(),

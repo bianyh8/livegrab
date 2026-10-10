@@ -67,6 +67,7 @@ function paint(ctx, status) {
   const recCount = num(stats.recordingCount, recording.length);
   const cap = num(stats.concurrencyCap, ctx.limits.maxConcurrency);
   const queuedCount = num(stats.queuedCount, queue.length);
+  const waitCount = queueView.length + waitingView.length;
   const usedBytes = Number(disk.usedBytes) || 0;
   const totalBytes = Number(disk.totalBytes) || 0;
   const freeBytes = Number(disk.freeBytes) || Math.max(0, totalBytes - usedBytes);
@@ -77,10 +78,8 @@ function paint(ctx, status) {
     <div class="stats">
       <div class="stat">
         <div class="k"><span class="pulse" style="font-size:11px"><b></b>正在录制</span></div>
-        <div class="v">${recCount}<small>路并发 / 上限 ${cap}</small></div>
-        <div class="d">${queuedCount > 0
-          ? `排队 <b class="down">${queuedCount}</b> 条 · 超出 min(全局上限, 平台上限) 时进入排队`
-          : `全部任务均在并发上限内 · 已暂停不计并发`}</div>
+        <div class="v"><b>${recCount}</b><small> 路 / 上限 ${cap}</small></div>
+        <div class="d">等待开播 <b>${waitCount}</b></div>
       </div>
       <div class="stat b">
         <div class="k">今日录制时长</div>
@@ -113,7 +112,7 @@ function paint(ctx, status) {
       </div>
 
       <div class="card">
-        <div class="card-h">${collapseBtn('wait', open('wait'))}<h3>等待录制</h3><span class="hint">需录制但尚未开播</span></div>
+        <div class="card-h">${collapseBtn('wait', open('wait'))}<h3>等待录制</h3><span class="hint">${queueView.length + waitingView.length} 个 · 需录制但尚未开播</span></div>
         ${open('wait') ? `<div class="card-b" style="padding:0">
           ${(queueView.length || waitingView.length)
             ? queueView.map((q) => queueItem(q, ctx)).join('') + waitingView.map((w) => waitItem(w)).join('')
@@ -122,7 +121,7 @@ function paint(ctx, status) {
       </div>
 
       <div class="card">
-        <div class="card-h">${collapseBtn('monitor', open('monitor'))}<h3>仅监控</h3><span class="hint">只监控直播状态，不自动录制</span></div>
+        <div class="card-h">${collapseBtn('monitor', open('monitor'))}<h3>仅监控</h3><span class="hint">${monitorList.length} 个 · 只监控直播状态，不自动录制</span></div>
         ${open('monitor') ? `<div class="card-b" style="padding:0">
           ${monitorList.length
             ? monitorList.map((t) => monitorItem(t, ctx)).join('')
@@ -148,6 +147,8 @@ function todayDuration(sec) {
   if (h > 0) return `${h}<small>小时</small> ${m}<small>分</small>`;
   return `${m}<small>分钟</small>`;
 }
+
+/* 下载带宽字段 live.speed 由后端实时下发，已改在 app.js 顶部状态栏展示 */
 
 function diskAlert(free) {
   const limit = 20 * 1024 * 1024 * 1024;
@@ -205,8 +206,10 @@ function segLabel(t) {
 
 function queueItem(q, ctx) {
   const name = parseName(q.name);
+  const qtask = state.tasks.find((x) => x.id === q.id) || null;
   return `
     <div class="rec-item" style="padding:11px 16px">
+      ${dashThumb(qtask || q, '排队')}
       ${platBadge(name.platform)}
       <div class="rec-main">
         <div class="ttl" style="font-size:13px">${esc(name.text)}</div>
@@ -218,11 +221,22 @@ function queueItem(q, ctx) {
     </div>`;
 }
 
+/* 总览行缩略图：显示主播头像；无头像时回退到占位文案 */
+function dashThumb(t, label) {
+  const avatar = (t && t.avatar) || '';
+  return `
+    <div class="thumb">
+      <span class="th-ph">${esc(label)}</span>
+      <img class="tk-thumb" loading="lazy" src="${esc(avatar)}" alt="" onerror="this.style.display='none'" />
+    </div>`;
+}
+
 function waitItem(t) {
   const quality = qualityLabelOf(t);
   const poll = t.pollIntervalSec || 60;
   return `
     <div class="rec-item" style="padding:11px 16px">
+      ${dashThumb(t, '待播')}
       ${platBadge(t.platform, t.platformName)}
       <div class="rec-main">
         <div class="ttl" style="font-size:13px">${esc(t.name || t.anchorName || '未命名任务')}</div>
@@ -241,6 +255,7 @@ function monitorItem(t) {
   const live = t.liveStatus === 'live';
   return `
     <div class="rec-item" style="padding:11px 16px">
+      ${dashThumb(t, '监控')}
       ${platBadge(t.platform, t.platformName)}
       <div class="rec-main">
         <div class="ttl" style="font-size:13px">${esc(t.anchorName || t.name || '未命名任务')}<span class="chip bili" style="margin-left:6px"><i class="dot"></i>仅监控</span></div>
