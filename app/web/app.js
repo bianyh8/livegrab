@@ -403,17 +403,11 @@ function applyStatus(st) {
 
   const top = el('topChip');
   if (top) {
-    // 只在"有内容可说"时显示，避免空闲时出现「并发 0/8」这类噪声；ffmpeg 版本等细节放「运行日志」页
-    const parts = [];
-    const rec = Number(stats.activeCount) || Number(stats.recordingCount) || 0;
-    if (rec > 0) parts.push(`录制中 ${rec} 路${stats.concurrencyCap ? ` / 上限 ${stats.concurrencyCap}` : ''}`);
-    if (stats.queuedCount) parts.push(`排队 ${stats.queuedCount}`);
-    if (stats.waitingCount) parts.push(`等待开播 ${stats.waitingCount}`);
+    // 顶栏只显示下载带宽；未录制(无流量)时固定显示 0
     const bw = Number(stats.downSpeed) || 0;
-    if (rec > 0) parts.push(`下载带宽 ${fmtRate(bw)}`);
-    runtime.topChipText = parts.join(' · ');
+    runtime.topChipText = `下载带宽 ${bw > 0 ? fmtRate(bw) : '0'}`;
     top.textContent = runtime.topChipText;
-    top.style.display = parts.length ? '' : 'none';
+    top.style.display = '';
   }
 }
 
