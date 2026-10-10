@@ -6,6 +6,7 @@ import { api, ApiError, setUnauthorizedHandler } from './api.js';
 import {
   toast, confirmDialog, formatBytes, formatDuration, formatDurationCn, formatDateTime,
 } from './ui.js';
+import { loadI18n } from './i18n.js';
 
 /* ================= 路由表 ================= */
 
@@ -485,6 +486,7 @@ async function boot() {
     await api.health();
   } catch { /* 后端尚未就绪也不阻塞登录页 */ }
   await checkAuth();
+  await loadI18n().catch(() => {}); // 鉴权后拉取界面字典（失败不阻塞）
   startSse();
 }
 

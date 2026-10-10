@@ -415,7 +415,14 @@ async function main() {
     return serveThumb(res, media.trashPath || media.origPath);
   });
 
-  // ---- 回放 ----
+  route('GET', '/api/i18n', async () => {
+    const f = path.join(WEB_DIR, 'i18n', 'zh-CN.json');
+    const st = await fsp.stat(f).catch(() => null);
+    if (!st) return {};
+    return JSON.parse(await fsp.readFile(f, 'utf8'));
+  });
+
+  // // ---- 回放 ----
   route('POST', '/api/play', async (req) => {
     const body = await readBody(req);
     return play.start(body.fileId);

@@ -4,6 +4,7 @@
    引擎/ffmpeg 细节也不再在总览展示（见「运行日志」页）。 */
 
 import { api } from '../api.js';
+import { t } from '../i18n.js';
 import {
   esc, formatBytes, formatDuration,
   platBadge, segTrack, emptyBox, toast, qualityLabelOf,
@@ -14,7 +15,7 @@ export const page = 'dashboard';
 const state = { tasks: [], booted: false, pending: false, lastStatus: null, collapsed: new Set(['rec', 'wait', 'monitor']), idleFilter: '' };
 
 export async function render(root, ctx) {
-  root.innerHTML = `<div class="stack"><div class="card"><div class="empty">正在加载总览…</div></div></div>`;
+  root.innerHTML = `<div class="stack"><div class="card"><div class="empty">${t('dashboard.loading')}</div></div></div>`;
   ctx.onRefresh(() => tick(ctx));
   await tick(ctx, true);
 }
@@ -48,7 +49,7 @@ function paint(ctx, status) {
   if (!root) return;
   if (!status && !state.tasks.length) {
     root.innerHTML = `<div class="card"><div class="card-b">
-      <div class="empty">无法读取总览数据（后端 /api/status 尚未返回）。稍后会自动重试。</div>
+      <div class="empty">${t('dashboard.loadFailed')}</div>
     </div></div>`;
     return;
   }
@@ -95,30 +96,30 @@ function paint(ctx, status) {
     ${diskAlert(freeBytes)}
     <div class="ov-grid3">
       <div class="card">
-        <div class="card-h"><h3>任务统计</h3></div>
+        <div class="card-h"><h3>${t('dashboard.taskStats')}</h3></div>
         <div class="card-b ov-col">
-          <div class="ovstat"><div class="k">正在录制</div><div class="v">${recCount}<small>路</small></div></div>
-          <div class="ovstat"><div class="k">正在直播</div><div class="v">${liveCount}<small>个</small></div></div>
-          <div class="ovstat"><div class="k">仅监控</div><div class="v">${monitorList.length}<small>个</small></div></div>
-          <div class="ovstat"><div class="k">排队中</div><div class="v">${queuedCount}<small>个</small></div></div>
-          <div class="ovstat"><div class="k">等待开播</div><div class="v">${waitNum}<small>个</small></div></div>
-          <div class="ovstat"><div class="k">并发使用率</div><div class="v"><span style="color:var(--ok);vertical-align:middle">${recCount}</span> <span style="color:var(--txt-2);vertical-align:middle">/</span> <span style="color:var(--err);vertical-align:middle">${cap}</span></div><div class="minibar"><i style="width:${usePct}%"></i></div></div>
+          <div class="ovstat"><div class="k">${t('dashboard.statRecording')}</div><div class="v">${recCount}<small>${t('dashboard.unitRoad')}</small></div></div>
+          <div class="ovstat"><div class="k">${t('dashboard.statLive')}</div><div class="v">${liveCount}<small>${t('dashboard.unitItem')}</small></div></div>
+          <div class="ovstat"><div class="k">${t('dashboard.statMonitor')}</div><div class="v">${monitorList.length}<small>${t('dashboard.unitItem')}</small></div></div>
+          <div class="ovstat"><div class="k">${t('dashboard.statQueued')}</div><div class="v">${queuedCount}<small>${t('dashboard.unitItem')}</small></div></div>
+          <div class="ovstat"><div class="k">${t('dashboard.statWaiting')}</div><div class="v">${waitNum}<small>${t('dashboard.unitItem')}</small></div></div>
+          <div class="ovstat"><div class="k">${t('dashboard.statConcur')}</div><div class="v"><span style="color:var(--ok);vertical-align:middle">${recCount}</span> <span style="color:var(--txt-2);vertical-align:middle">/</span> <span style="color:var(--err);vertical-align:middle">${cap}</span></div><div class="minibar"><i style="width:${usePct}%"></i></div></div>
         </div>
       </div>
 
       <div class="card">
-        <div class="card-h"><h3>今日统计</h3></div>
+        <div class="card-h"><h3>${t('dashboard.todayStats')}</h3></div>
         <div class="card-b ov-col">
-          <div class="ovstat"><div class="k">今日录制时长</div><div class="v">${todayDuration(stats.todayDurationSec)}</div></div>
-          <div class="ovstat"><div class="k">累计录制时长</div><div class="v">${todayDuration(totalDurationSec)}</div></div>
-          <div class="ovstat"><div class="k">今日新增文件</div><div class="v">${Number(stats.todayFiles) || 0}<small>个</small></div></div>
-          <div class="ovstat"><div class="k">今日已录大小</div><div class="v">${esc(formatBytes(stats.todayBytes))}</div></div>
-          <div class="ovstat"><div class="k">实时带宽</div><div class="v">${bwText}</div></div>
+          <div class="ovstat"><div class="k">${t('dashboard.todayDuration')}</div><div class="v">${todayDuration(stats.todayDurationSec)}</div></div>
+          <div class="ovstat"><div class="k">${t('dashboard.totalDuration')}</div><div class="v">${todayDuration(totalDurationSec)}</div></div>
+          <div class="ovstat"><div class="k">${t('dashboard.todayFiles')}</div><div class="v">${Number(stats.todayFiles) || 0}<small>${t('dashboard.unitItem')}</small></div></div>
+          <div class="ovstat"><div class="k">${t('dashboard.todayBytes')}</div><div class="v">${esc(formatBytes(stats.todayBytes))}</div></div>
+          <div class="ovstat"><div class="k">${t('dashboard.bandwidth')}</div><div class="v">${bwText}</div></div>
         </div>
       </div>
 
       <div class="card">
-        <div class="card-h"><h3>存储统计</h3><span class="hint">${esc(formatBytes(platformTotal))}</span></div>
+        <div class="card-h"><h3>${t('dashboard.storeStats')}</h3><span class="hint">${esc(formatBytes(platformTotal))}</span></div>
         <div class="card-b pkb" style="padding:14px 14px 12px">
           ${platformStoreBlock(pstore)}
           ${diskSection({ usedBytes, totalBytes, freeBytes, trashBytes })}
@@ -127,9 +128,9 @@ function paint(ctx, status) {
     </div>
 
     <div class="card">
-      <div class="card-h"><h3>正在录制</h3><span class="hint">${recCount} 路 · 分段写入中</span><div class="spacer"></div>${recCount ? `<button class="btn sm ghost" data-act="pause-all">全部暂停</button>` : ''}</div>
+      <div class="card-h"><h3>${t('dashboard.recording')}</h3><span class="hint">${t('dashboard.recordingHint', recCount)}</span><div class="spacer"></div>${recCount ? `<button class="btn sm ghost" data-act="pause-all">${t('dashboard.pauseAll')}</button>` : ''}</div>
       <div class="card-b" style="padding:0">
-        ${recording.length ? recording.map(recItem).join('') : emptyBox('当前没有正在录制的任务')}
+        ${recording.length ? recording.map(recItem).join('') : emptyBox(t('dashboard.noRecording'))}
       </div>
     </div>`;
 
@@ -147,8 +148,8 @@ function todayDuration(sec) {
   const s = Number(sec) || 0;
   const h = Math.floor(s / 3600);
   const m = Math.floor((s % 3600) / 60);
-  if (h > 0) return `${h}<small>小时</small> ${m}<small>分</small>`;
-  return `${m}<small>分钟</small>`;
+  if (h > 0) return `${h}<small>${t('dashboard.hour')}</small> ${m}<small>${t('dashboard.minute')}</small>`;
+  return `${m}<small>${t('dashboard.minutes')}</small>`;
 }
 
 /* 下载带宽字段 live.speed 由后端实时下发，已改在 app.js 顶部状态栏展示 */
@@ -160,7 +161,7 @@ function platformStoreBlock(pstore) {
   // 无录制文件也显示环形（空环），便于与磁盘信息同卡展示
   if (!total || !list.length) {
     const empty = `<svg viewBox="0 0 100 100" width="100" height="100"><circle cx="50" cy="50" r="38" fill="none" stroke="rgba(255,255,255,.12)" stroke-width="12"/><text x="50" y="54" text-anchor="middle" fill="var(--warn)" font-size="14" font-weight="700">0 B</text></svg>`;
-    return `<div class="pkbody"><div class="pkdonut">${empty}</div><div class="pkleg pk-empty" style="justify-content:center">暂无录制文件</div></div>`;
+    return `<div class="pkbody"><div class="pkdonut">${empty}</div><div class="pkleg pk-empty" style="justify-content:center">${t('dashboard.noFile')}</div></div>`;
   }
   const colors = ['#4f9cf7', '#34c77b', '#f2b93d', '#e0615d', '#9b6ff0', '#2bb3c0', '#f472b6', '#a3b0c2'];
   const R = 38, C = 2 * Math.PI * R;
@@ -182,7 +183,7 @@ function platformStoreBlock(pstore) {
     <circle cx="50" cy="50" r="${R}" fill="none" stroke="rgba(255,255,255,.08)" stroke-width="12"/>
     ${arcs.map((a) => `<circle cx="50" cy="50" r="${R}" fill="none" stroke="${a.color}" stroke-width="12" stroke-dasharray="${a.dasharray}" stroke-dashoffset="${a.dashoffset}" transform="rotate(-90 50 50)"/>`).join('')}
     <text x="50" y="47" text-anchor="middle" fill="var(--warn)" font-size="13" font-weight="700">${esc(formatBytes(total))}</text>
-    <text x="50" y="65" text-anchor="middle" fill="var(--txt-3)" font-size="8.5">${list.length} 平台</text>
+    <text x="50" y="65" text-anchor="middle" fill="var(--txt-3)" font-size="8.5">${t('dashboard.platforms', list.length)}</text>
   </svg>`;
   const leg = `<div class="pkleg">${arcs.slice(0, 10).map((a) => `<span><i style="background:${a.color}"></i>${a.name}<b>${a.size}</b></span>`).join('')}</div>`;
   return `<div class="pkbody"><div class="pkdonut">${svg}</div>${leg}</div>`;
@@ -191,7 +192,7 @@ function platformStoreBlock(pstore) {
 function diskAlert(free) {
   const limit = 20 * 1024 * 1024 * 1024;
   if (free > 0 && free < limit) {
-    return `<div class="login-err show" style="margin:0 0 14px;display:flex"><span>⚠ 磁盘剩余 ${esc(formatBytes(free))}，低于保留下限时会自动清理最旧的成品文件；录制中请及时清理空间。</span></div>`;
+    return `<div class="login-err show" style="margin:0 0 14px;display:flex"><span>⚠ ${t('dashboard.diskAlert', esc(formatBytes(free)))}</span></div>`;
   }
   return '';
 }
@@ -202,7 +203,7 @@ function diskSection({ usedBytes, totalBytes, freeBytes, trashBytes }) {
   const low = freeBytes > 0 && freeBytes < 5 * 1024 * 1024 * 1024;
   return `
     <div class="pkdisk">
-      <div class="dd"><span>磁盘剩余 <b class="c-rem${low ? ' down' : ''}">${esc(formatBytes(freeBytes))}</b></span><span>已用 <b class="c-used">${esc(formatBytes(usedBytes))}</b></span><span>共 <b>${esc(formatBytes(totalBytes))}</b></span>${trashBytes ? `<span>回收站 <b class="c-trash">${esc(formatBytes(trashBytes))}</b></span>` : ''}</div>
+      <div class="dd"><span>${t('dashboard.diskRemain')} <b class="c-rem${low ? ' down' : ''}">${esc(formatBytes(freeBytes))}</b></span><span>${t('dashboard.diskUsed')} <b class="c-used">${esc(formatBytes(usedBytes))}</b></span><span>${t('dashboard.diskTotal')} <b>${esc(formatBytes(totalBytes))}</b></span>${trashBytes ? `<span>${t('dashboard.diskTrash')} <b class="c-trash">${esc(formatBytes(trashBytes))}</b></span>` : ''}</div>
       <div class="bar"><i style="width:${pct}%"></i></div>
     </div>`;
 }
