@@ -624,7 +624,7 @@ async function openEditor(ctx, id) {
       const save = document.createElement('button');
       save.className = 'btn primary';
       save.textContent = d.id ? t('tasks.saveChanges') : t('tasks.createTask');
-      save.onclick = () => submit(d, dialog, save);
+      save.onclick = () => submit(d, dialog, save, ctx);
       return [cancel, save];
     },
   });
@@ -875,7 +875,7 @@ async function updatePreview(d, body) {
   }
 }
 
-async function submit(d, dialog, btn) {
+async function submit(d, dialog, btn, ctx) {
   const url = (d.url || '').trim();
   const payload = {};
   if (url) payload.url = url;
