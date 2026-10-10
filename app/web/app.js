@@ -296,8 +296,6 @@ async function handleRoute(first) {
   document.querySelectorAll('#nav .nav-item').forEach((n) => n.classList.toggle('active', n.dataset.page === page));
   setText('pageTitle', route.title);
   setText('pageSub', route.sub);
-  const newBtn = el('newTaskBtn');
-  if (newBtn) newBtn.style.display = (page === 'dashboard' || page === 'tasks') ? '' : 'none';
 
   const changed = runtime.page !== page;
   runtime.page = page;
@@ -443,16 +441,6 @@ function bindChrome() {
   document.querySelectorAll('#nav .nav-item').forEach((item) => {
     item.addEventListener('click', () => navigate(item.dataset.page));
   });
-  const refresh = el('refreshBtn');
-  if (refresh) refresh.onclick = () => {
-    runtime.invalidate(runtime.page);
-    runtime.emit('refresh-all');
-    pullStatus();
-    refreshOnce();
-    toast(t('topbar.refreshStatus'));
-  };
-  const nb = el('newTaskBtn');
-  if (nb) nb.onclick = () => ctx.openTaskModal(null);
   const out = el('logoutBtn');
   if (out) out.onclick = () => doLogout();
 }

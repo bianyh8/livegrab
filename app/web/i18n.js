@@ -696,7 +696,6 @@ const DEFAULT_DICT = {
   "tier.planned": "规划中",
   "tier.stable": "稳定",
   "topbar.recording": "{0} 录制中",
-  "topbar.refreshStatus": "已重新拉取所有直播间状态",
   "trash.deletedAt": "删除于 {0}",
   "trash.empty": "回收站为空",
   "trash.hasScrape": "含刮削",

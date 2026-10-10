@@ -70,7 +70,6 @@
   "nav.logsSub": "引擎与每个任务的详细运行记录",
   "nav.trashSub": "已删除录制文件与刮削图片/描述，可还原或清空",
   "topbar.recording": "{0} 录制中",
-  "topbar.refreshStatus": "已重新拉取所有直播间状态",
   "app.userMeta": "管理员 · 本次登录 {0}",
   "login.title": "登录管理台",
   "login.initTitle": "初始化管理员账号",

@@ -256,6 +256,8 @@ const REMOVE = [
   'nav.eventsSub', 'common.engineOk', 'common.ffmpegUnavailable',
   // 清除日志改为预设时间范围弹窗（移除旧的日期输入框键）
   'logs.clearFrom', 'logs.clearTo', 'logs.clearNoRange',
+  // 顶栏移除「刷新 / 新建录制任务」按钮
+  'topbar.refreshStatus',
 ];
 
 /* ---------------- ③ 去重：同文案归一到单一 key ---------------- */
