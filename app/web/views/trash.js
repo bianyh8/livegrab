@@ -65,15 +65,31 @@ function paint(ctx, force) {
 }
 
 function trashLine(t, ctx) {
-  const fileCount = (t.items || []).filter((it) => it.kind !== 'sidecar' && it.kind !== undefined && it.kind !== 'sidecar').length;
-  const hasSidecar = (t.items || []).some((it) => it.kind === 'sidecar');
+  const meta = t.items || [];
+  const media = meta.find((it) => it.kind !== 'sidecar' && it.kind !== 'poster' && it.kind !== 'nfo') || meta[0] || {};
+  const fileCount = meta.filter((it) => it.kind !== 'sidecar').length;
+  const hasSidecar = meta.some((it) => it.kind === 'sidecar');
+  const extLabel = (media.name ? String(media.name).split('.').pop() : '媒体').toUpperCase();
+  const inner = `
+        <span class="th-ph" style="display:none">${esc(extLabel)}</span>
+        <img class="tk-thumb" loading="lazy" src="/api/trash/${esc(t.id)}/thumb" alt="" onerror="this.style.display='none';this.previousElementSibling.style.display=''" />`;
   return `
-    <div class="logline" style="display:flex;align-items:center;gap:10px;padding:9px 10px;border:1px solid var(--line);border-radius:8px;margin-bottom:6px;background:#0d1219">
+    <div class="fl-item" style="align-items:flex-start" data-trash="${esc(t.id)}">
+      <div class="fl-ico plain">${inner}</div>
       <div style="flex:1;min-width:0">
-        <div class="mono" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(t.name || (t.items && t.items[0] && t.items[0].name) || '—')}</div>
-        <div style="color:var(--txt-3);font-size:12px;margin-top:3px">${t.kind === 'session' ? '整场' : '单个文件'} · ${esc(formatBytes(t.bytes || 0))} · ${esc(formatDateTime(t.deletedAt || t.createdAt))}${hasSidecar ? ' · 含刮削图片/描述' : (t.items && t.items.length > 1 ? ` · ${t.items.length} 个文件` : '')}</div>
+        <div style="font-size:13px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(t.name || media.name || '未命名')}
+          <span class="chip" style="margin-left:6px">${t.kind === 'session' ? '整场' : '单个文件'}</span>
+          ${hasSidecar ? '<span class="chip" style="margin-left:6px">含刮削</span>' : ''}
+        </div>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:5px;font-size:11.5px;color:var(--txt-3)">
+          <span>${esc(formatBytes(t.bytes || 0))}</span>
+          <span>${fileCount > 1 ? `${fileCount} 个文件` : '1 个媒体文件'}</span>
+          <span>删除于 ${esc(formatDateTime(t.deletedAt || t.createdAt))}</span>
+        </div>
       </div>
-      <button class="btn sm ghost" data-trash-act="restore" data-id="${esc(t.id)}">还原</button>
+      <div class="acts">
+        <button class="btn sm ghost" data-trash-act="restore" data-id="${esc(t.id)}">还原</button>
+      </div>
     </div>`;
 }
 

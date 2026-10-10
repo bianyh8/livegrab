@@ -402,6 +402,14 @@ async function main() {
     return storage.restoreTrash(body.ids || []);
   });
   route('POST', '/api/trash/empty', async () => storage.emptyTrash());
+  // 回收站缩略图：按回收站条目 id 取首个媒体文件的预览（无则 fallback 到首帧抽帧）
+  route('GET', '/api/trash/:id/thumb', async (req, res) => {
+    const t = store.trash.find((x) => x.id === req.params.id);
+    if (!t) throw new HttpError('NOT_FOUND', '回收站条目不存在', 404);
+    const media = (t.items || []).find((it) => it.kind !== 'sidecar' && it.kind !== 'poster' && it.kind !== 'nfo' && (it.trashPath || it.origPath));
+    if (!media) throw new HttpError('NOT_FOUND', '无媒体文件', 404);
+    return serveThumb(res, media.trashPath || media.origPath);
+  });
 
   // ---- 回放 ----
   route('POST', '/api/play', async (req) => {
