@@ -122,16 +122,6 @@ function paint(ctx, status) {
       <div class="card-b" style="padding:0">
         ${recording.length ? recording.map(recItem).join('') : emptyBox('当前没有正在录制的任务')}
       </div>
-    </div>
-
-    <div class="card">
-      <div class="card-h"><h3>任务状态</h3><span class="hint">非录制中的 ${idle.length} 项</span><div class="spacer"></div>
-        ${[['', '全部'], ['waiting', '等待开播'], ['queued', '排队'], ['monitor', '仅监控']]
-          .map(([v, t]) => `<button class="mini${state.idleFilter === v ? ' sel' : ''}" data-idle="${v}">${t}</button>`).join('')}
-      </div>
-      <div class="card-b" style="padding:12px">
-        ${idleFiltered.length ? `<div class="idle-grid">${idleFiltered.map(idleRow).join('')}</div>` : emptyBox('这里没有符合该状态的任务')}
-      </div>
     </div>`;
 
   bind(root, ctx);
@@ -158,7 +148,10 @@ function todayDuration(sec) {
 function platformStoreBlock(pstore) {
   const total = (pstore || []).reduce((a, p) => a + (p.bytes || 0), 0);
   const list = (pstore || []).filter((p) => p.bytes > 0);
-  if (!total || !list.length) return '<div class="pk-empty">暂无录制文件</div>';
+  // 无录制文件也显示环形（空环），便于与磁盘信息同卡展示
+  if (!total || !list.length) {
+    return `<div class="pkbody"><div class="pkdonut"><svg viewBox="0 0 60 60" width="54" height="54"><circle cx="30" cy="30" r="20" fill="none" stroke="rgba(255,255,255,.10)" stroke-width="7"/></svg></div><div class="pkleg pk-empty" style="margin-top:0">暂无录制文件</div></div>`;
+  }
   const colors = ['#4f9cf7', '#34c77b', '#f2b93d', '#e0615d', '#9b6ff0', '#2bb3c0', '#f472b6', '#a3b0c2'];
   const R = 20, C = 2 * Math.PI * R;
   let offset = 0;
