@@ -839,16 +839,23 @@ export class Scheduler {
     let bytes = 0;
     let durationSec = 0;
     for (const s of this.store.sessions) {
-      for (const f of (s.segments || [])) {
+      const segs = s.segments || [];
+      const segIds = new Set(segs.map((f) => f.id));
+      for (const f of segs) {
         if (dayOf(f) !== day) continue;
         files++;
         bytes += Number(f.bytes) || 0;
         durationSec += Number(f.durationSec) || 0;
       }
+      // extras 转封装/合并出：ts 源删除后 mp4 是唯一副本，必须计入时长；
+      // 仅当对应源 ts 仍保留（sourceFileId 命中）或整场合并件且 segments 未删时去重，避免重复计时
       for (const f of (s.extras || [])) {
         if (dayOf(f) !== day) continue;
         files++;
         bytes += Number(f.bytes) || 0;
+        const dupSeg = !!f.sourceFileId && segIds.has(f.sourceFileId);
+        const dupMerge = !f.sourceFileId && segs.length > 0;
+        if (!dupSeg && !dupMerge) durationSec += Number(f.durationSec) || 0;
       }
     }
     return { todayFiles: files, todayBytes: bytes, todayDurationSec: durationSec + this.liveTodayElapsedSec() };
