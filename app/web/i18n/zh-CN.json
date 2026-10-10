@@ -197,7 +197,6 @@
   "files.libraryTitle": "录制文件库",
   "files.videoCount": "{0} 个视频文件",
   "files.searchPlaceholder": "搜索 文件名/主播/标题",
-  "files.anchorPlaceholder": "主播名称",
   "files.allTypes": "全部类型",
   "files.extTs": ".ts 直播流",
   "files.extMp4": ".mp4 / m4a",
@@ -740,5 +739,9 @@
   "logs.clear7d": "过去7天",
   "logs.clear1m": "过去一个月",
   "logs.clearAll": "所有时间",
-  "logs.clearAllConfirm": "确定清除所有日志吗？删除后不可恢复。"
+  "logs.clearAllConfirm": "确定清除所有日志吗？删除后不可恢复。",
+  "tasks.anchorNameLabel": "主播名称",
+  "files.dateFrom": "起始日期",
+  "files.dateTo": "结束日期",
+  "files.dateSep": "至"
 }

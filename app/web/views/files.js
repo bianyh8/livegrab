@@ -13,8 +13,8 @@ const state = {
   sessions: [],
   q: '',
   platform: '',
-  anchor: '',
-  date: '',
+  dateFrom: '',
+  dateTo: '',
   ext: '',
   picked: new Set(),
   hash: '',
@@ -64,11 +64,12 @@ function allFiles() {
 
 function filtered() {
   const q = state.q.trim().toLowerCase();
-  const anchorQ = state.anchor.trim().toLowerCase();
   return allFiles().filter(({ f, s, tag }) => {
     if (state.platform && s.platform !== state.platform) return false;
-    if (anchorQ && !String(s.streamer || '').toLowerCase().includes(anchorQ)) return false;
-    if (state.date && String(s.startedAt || '').slice(0, 10) !== state.date) return false;
+    // 日期按场次开始日期做闭区间过滤：仅起始 / 仅结束 / 都填均生效
+    const day = String(s.startedAt || '').slice(0, 10);
+    if (state.dateFrom && day < state.dateFrom) return false;
+    if (state.dateTo && day > state.dateTo) return false;
     if (state.ext) {
       const e = String(f.ext || tag || '').toLowerCase();
       if (e !== state.ext && !(state.ext === 'mp4' && (e === 'mp4' || e === 'm4a'))) return false;
@@ -88,7 +89,7 @@ function paint(ctx, force) {
   const allSel = list.length > 0 && list.every(({ f }) => state.picked.has(f.id));
   const platforms = [...new Set(state.sessions.map((s) => s.platform).filter(Boolean))];
   const hash = JSON.stringify([list.map(({ f, s }) => [f.id, f.status, s.platform, s.streamer, s.startedAt]),
-    state.q, state.platform, state.anchor, state.date, state.ext, Array.from(state.picked)]);
+    state.q, state.platform, state.dateFrom, state.dateTo, state.ext, Array.from(state.picked)]);
   if (!force && hash === state.hash) return;
   state.hash = hash;
 
@@ -108,8 +109,9 @@ function paint(ctx, force) {
           <option value="">${t('common.allPlatforms')}</option>
           ${platforms.map((p) => `<option value="${esc(p)}"${state.platform === p ? ' selected' : ''}>${esc(platNameOf(p))}</option>`).join('')}
         </select>
-        <input class="input" id="flAnchor" style="width:150px" placeholder="${t('files.anchorPlaceholder')}" value="${esc(state.anchor)}" />
-        <input type="date" class="input" id="flDate" style="width:150px" value="${esc(state.date)}" />
+        <input type="date" class="input" id="flDateFrom" style="width:150px" title="${t('files.dateFrom')}" value="${esc(state.dateFrom)}" />
+        <span style="color:var(--txt-3);font-size:12px">${t('files.dateSep')}</span>
+        <input type="date" class="input" id="flDateTo" style="width:150px" title="${t('files.dateTo')}" value="${esc(state.dateTo)}" />
         <select class="select" id="flExt" style="width:120px">
           ${[['', 'files.allTypes'], ['ts', 'files.extTs'], ['mp4', 'files.extMp4'], ['m4a', 'files.extM4a']].map(([v, k]) => `<option value="${v}"${state.ext === v ? ' selected' : ''}>${t(k)}</option>`).join('')}
         </select>
@@ -167,6 +169,14 @@ function filenameRow({ f, s, tag }) {
 
 /* ---------- 交互 ---------- */
 
+/* 让 date 输入框点击任意位置都能弹出日历（Chrome/Edge 默认只有点尾部图标才有反应） */
+function bindDatePicker(input) {
+  if (!input || typeof input.showPicker !== 'function') return;
+  input.addEventListener('click', () => {
+    try { input.showPicker(); } catch { /* 已聚焦或浏览器不支持，忽略 */ }
+  });
+}
+
 function bind(ctx) {
   const root = boundRoot;
   if (!root) return;
@@ -175,10 +185,16 @@ function bind(ctx) {
   if (q) q.oninput = () => { state.q = q.value; state.hash = ''; paint(ctx, true); };
   const plat = root.querySelector('#flPlat');
   if (plat) plat.onchange = () => { state.platform = plat.value; state.hash = ''; paint(ctx, true); };
-  const anchor = root.querySelector('#flAnchor');
-  if (anchor) anchor.oninput = () => { state.anchor = anchor.value; state.hash = ''; paint(ctx, true); };
-  const date = root.querySelector('#flDate');
-  if (date) date.onchange = () => { state.date = date.value; state.hash = ''; paint(ctx, true); };
+  const dateFrom = root.querySelector('#flDateFrom');
+  if (dateFrom) {
+    bindDatePicker(dateFrom);
+    dateFrom.onchange = () => { state.dateFrom = dateFrom.value; state.hash = ''; paint(ctx, true); };
+  }
+  const dateTo = root.querySelector('#flDateTo');
+  if (dateTo) {
+    bindDatePicker(dateTo);
+    dateTo.onchange = () => { state.dateTo = dateTo.value; state.hash = ''; paint(ctx, true); };
+  }
   const ext = root.querySelector('#flExt');
   if (ext) ext.onchange = () => { state.ext = ext.value; state.hash = ''; paint(ctx, true); };
 

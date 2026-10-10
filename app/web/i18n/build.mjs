@@ -235,6 +235,11 @@ const ADD = {
   'logs.clearConfirm': '确定清除 {0} 至 {1} 的日志吗？删除后不可恢复。',
   'logs.clearDone': '已清除 {0} 个日志文件',
   'logs.clearFail': '清除日志失败',
+
+  // files（日期时间范围查询）
+  'files.dateFrom': '起始日期',
+  'files.dateTo': '结束日期',
+  'files.dateSep': '至',
 };
 
 /* ---------------- ② 废弃键（已统一到 common.*） ---------------- */
@@ -244,6 +249,7 @@ const REMOVE = [
   'dashboard.checkLiveTip', 'dashboard.diskTrash',
   'ui.waitSlot', 'ui.pollSec', 'ui.recorded', 'ui.playback',
   'files.completed', 'files.replay', 'files.unknownAnchor',
+  'files.anchorPlaceholder',
   'tasks.unknownAnchor', 'tasks.monitorOnly',
   // 最近事件并入运行日志 + 移除引擎状态提示
   'events.title', 'events.hint', 'events.loading', 'events.loadFailed', 'events.fullLog', 'events.empty',
