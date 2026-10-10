@@ -36,13 +36,28 @@
 
 ## 快速开始（Docker）
 
+**前提**：目标机器装好 Docker（Linux 用 Docker Engine + Compose 插件；Windows/Mac 用 Docker Desktop）。
+
+**① 克隆代码**
+```bash
+git clone https://github.com/bianyh8/liverecord.git
+cd liverecord
+```
+
+**② 构建并启动**
 ```bash
 docker compose up -d --build
 ```
+> 镜像名 `livegrab:0.1.0`，容器名 `livegrab`，`restart: unless-stopped` 自动开机自启。
 
-首次启动后打开 `http://<主机IP>:8080`，页面会引导**初始化管理员账号**（设置用户名与密码）。
+**③ 打开页面**
+```
+http://<主机IP>:8080
+```
+首次打开会引导**初始化管理员账号**（设置用户名与密码）。
 
-### 目录挂载
+**④ 数据落盘位置**
+compose 相对 `liverecord/` 目录挂载：
 
 | 挂载点 | 内容 | 建议 |
 |---|---|---|
@@ -59,7 +74,30 @@ docker compose up -d --build
 
 > 需要走代理拉流时，在 compose 里给容器加 `HTTPS_PROXY`（参考文件内注释）。
 
-停止：`docker compose stop`（已配置 `stop_grace_period: 30s`，会先把当前分段收尾再退出）。
+### 日常更新
+
+```bash
+cd liverecord
+git pull
+docker compose up -d --build
+```
+> `docker compose up` 检测到镜像/配置变化会自动重建，数据在挂载卷里不受影响。改端口用 `LIVEGRAB_PORT=9000 docker compose up -d`，改时区用 `TZ=Asia/Shanghai`。
+
+### 不想克隆也能直接构建
+
+```bash
+docker build -t livegrab:0.1.0 https://github.com/bianyh8/liverecord.git
+docker run -d --name livegrab -p 8080:8080 \
+  -v "$PWD/data:/data" -v "$PWD/config:/config" \
+  -e TZ=Asia/Shanghai --restart unless-stopped \
+  livegrab:0.1.0
+```
+（compose 方式更省事，这个适合想手写 `run` 的情况。）
+
+### 停止 / 排障
+
+- 停止：`docker compose stop`（已配置 `stop_grace_period: 30s`，会先把当前分段收尾再退出）；彻底移除：`docker compose down`。
+- 看日志：`docker compose logs -f --tail=200 livegrab`。
 
 ---
 
