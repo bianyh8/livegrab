@@ -197,6 +197,7 @@ label.fl{display:block;font-size:12.5px;color:var(--txt-2);margin:0 0 7px}
 .ov-grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:16px;align-items:stretch}
 .ov-grid3 .card{display:flex;flex-direction:column}
 .ov-grid3 .card-b.ov-col{display:flex;flex-direction:column;gap:9px;justify-content:center;padding:10px 15px}
+.ov-grid3 .card-b.pkb{display:flex;flex-direction:column;flex:1;min-height:0;padding:12px 14px 10px}
 .ovstat .k{color:var(--txt-3);font-size:11.5px;letter-spacing:.3px}
 .ovstat .v{font-size:19px;font-weight:700;color:var(--ok);margin-top:2px;letter-spacing:.3px}
 .ovstat .v small{font-size:11.5px;font-weight:400;color:var(--txt-3);margin-left:4px}
@@ -375,8 +376,8 @@ label.fl{display:block;font-size:12.5px;color:var(--txt-2);margin:0 0 7px}
 .pkfoot b{color:var(--txt-1);font-weight:600;font-size:13px}
 .pkfoot .pkmore{margin-left:auto}
 .pk-empty{font-size:11.5px;color:var(--txt-3);text-align:center}
-/* 磁盘信息块(并入存储统计) */
-.pkdisk{margin-top:8px;padding-top:6px;border-top:1px dashed var(--line)}
+/* 磁盘信息块(并入存储统计)，置于底部占满 */
+.pkdisk{margin-top:auto;padding-top:6px;border-top:1px dashed var(--line)}
 .pkdisk .dd{display:flex;flex-wrap:wrap;gap:3px 10px;font-size:11px;color:var(--txt-3);margin-bottom:6px}
 .pkdisk .dd b{color:var(--txt-1);font-weight:600}
 .pkdisk .dd b.c-rem{color:var(--ok)}

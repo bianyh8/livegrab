@@ -150,11 +150,11 @@ function platformStoreBlock(pstore) {
   const list = (pstore || []).filter((p) => p.bytes > 0);
   // 无录制文件也显示环形（空环），便于与磁盘信息同卡展示
   if (!total || !list.length) {
-    const empty = `<svg viewBox="0 0 88 88" width="86" height="86"><circle cx="44" cy="44" r="33" fill="none" stroke="rgba(255,255,255,.12)" stroke-width="11"/><text x="44" y="48" text-anchor="middle" fill="var(--err)" font-size="13" font-weight="700">0 B</text></svg>`;
+    const empty = `<svg viewBox="0 0 100 100" width="100" height="100"><circle cx="50" cy="50" r="38" fill="none" stroke="rgba(255,255,255,.12)" stroke-width="12"/><text x="50" y="54" text-anchor="middle" fill="var(--warn)" font-size="14" font-weight="700">0 B</text></svg>`;
     return `<div class="pkbody"><div class="pkdonut">${empty}</div><div class="pkleg pk-empty" style="justify-content:center">暂无录制文件</div></div>`;
   }
   const colors = ['#4f9cf7', '#34c77b', '#f2b93d', '#e0615d', '#9b6ff0', '#2bb3c0', '#f472b6', '#a3b0c2'];
-  const R = 33, C = 2 * Math.PI * R;
+  const R = 38, C = 2 * Math.PI * R;
   let offset = 0;
   const arcs = list.map((p, i) => {
     const frac = (p.bytes || 0) / total;
@@ -169,11 +169,11 @@ function platformStoreBlock(pstore) {
     offset += len;
     return a;
   });
-  const svg = `<svg viewBox="0 0 88 88" width="86" height="86">
-    <circle cx="44" cy="44" r="${R}" fill="none" stroke="rgba(255,255,255,.08)" stroke-width="11"/>
-    ${arcs.map((a) => `<circle cx="44" cy="44" r="${R}" fill="none" stroke="${a.color}" stroke-width="11" stroke-dasharray="${a.dasharray}" stroke-dashoffset="${a.dashoffset}" transform="rotate(-90 44 44)"/>`).join('')}
-    <text x="44" y="42" text-anchor="middle" fill="var(--err)" font-size="12" font-weight="700">${esc(formatBytes(total))}</text>
-    <text x="44" y="59" text-anchor="middle" fill="var(--txt-3)" font-size="8">${list.length} 平台</text>
+  const svg = `<svg viewBox="0 0 100 100" width="100" height="100">
+    <circle cx="50" cy="50" r="${R}" fill="none" stroke="rgba(255,255,255,.08)" stroke-width="12"/>
+    ${arcs.map((a) => `<circle cx="50" cy="50" r="${R}" fill="none" stroke="${a.color}" stroke-width="12" stroke-dasharray="${a.dasharray}" stroke-dashoffset="${a.dashoffset}" transform="rotate(-90 50 50)"/>`).join('')}
+    <text x="50" y="47" text-anchor="middle" fill="var(--warn)" font-size="13" font-weight="700">${esc(formatBytes(total))}</text>
+    <text x="50" y="65" text-anchor="middle" fill="var(--txt-3)" font-size="8.5">${list.length} 平台</text>
   </svg>`;
   const leg = `<div class="pkleg">${arcs.slice(0, 10).map((a) => `<span><i style="background:${a.color}"></i>${a.name}<b>${a.size}</b></span>`).join('')}</div>`;
   return `<div class="pkbody"><div class="pkdonut">${svg}</div>${leg}</div>`;
