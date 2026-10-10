@@ -99,7 +99,7 @@ function paint(ctx, status) {
     <div class="grid2b">
       <div class="card">
         <div class="card-h"><h3>正在录制</h3><span class="hint">${recCount} 路 · 分段写入中</span><div class="spacer"></div>${recCount ? `<button class="btn sm ghost" data-act="pause-all">全部暂停</button>` : ''}</div>
-        <div class="card-b" style="padding:0">${recording.length ? recording.map(recItem).join('') : emptyBox('当前没有正在录制的任务')}</div>
+        <div class="card-b" style="padding:12px">${recording.length ? `<div class="task-grid">${recording.map(recItem).join('')}</div>` : emptyBox('当前没有正在录制的任务')}</div>
       </div>
       <div class="card">
         <div class="card-h"><h3>存储分布</h3></div>
@@ -112,8 +112,8 @@ function paint(ctx, status) {
         ${[['', '全部'], ['waiting', '等待开播'], ['queued', '排队'], ['monitor', '仅监控']]
           .map(([v, t]) => `<button class="mini${state.idleFilter === v ? ' sel' : ''}" data-idle="${v}">${t}</button>`).join('')}
       </div>
-      <div class="card-b" style="padding:0">
-        ${idleFiltered.length ? idleFiltered.map(idleRow).join('') : emptyBox('这里没有符合该状态的任务')}
+      <div class="card-b" style="padding:12px">
+        ${idleFiltered.length ? `<div class="task-grid">${idleFiltered.map(idleRow).join('')}</div>` : emptyBox('这里没有符合该状态的任务')}
       </div>
     </div>`;
 
