@@ -30,10 +30,11 @@ export function roomIdFrom(input) {
   return m ? m[1] : s;
 }
 
-/** 优先用户 Cookie；否则抓首页拿 ttwid（仅 web 接口需要；移动端接口免登录，不用 Cookie） */
+/** 优先用户 Cookie / 已保存的 ttwid；否则抓首页拿 ttwid（仅 web 接口需要） */
 async function ensureCookie(settings, logger) {
   const userCookie = settings?.cookies?.douyin?.value || '';
   if (userCookie) return userCookie;
+  if (settings?.__ttwid) return `ttwid=${settings.__ttwid}`;
   if (settings?.cookies?.douyin?.ttwid) return `ttwid=${settings.cookies.douyin.ttwid}`;
   try {
     const r = await httpGet('https://live.douyin.com/', { retries: 1, logger, label: 'douyin.home' });
@@ -91,10 +92,14 @@ function headers(cookie, roomId) {
 
 async function enterRoom(roomId, settings, logger) {
   const idStr = String(roomId || '');
-  // 抖音直播间地址里的短号（web_rid，数字短号或主播自定义文字短号）与内部房间号（19 位）是两套 ID：
-  // 实测免登录的移动端接口只认 19 位内部房间号，短号会返回 10011，需用 web 接口（ttwid 即可）映射出 19 位内部号
+  // 直播间地址短号(web_rid，数字或文字)与 19 位内部房间号是两套 ID。
+  // 移动端 reflow 只认 19 位内部号；web/enter 需要短号 web_rid。
   const isFullId = /^\d{19}$/.test(idStr);
-  // ① 移动端接口优先：2026-10 实测免登录可用（web 端已要求登录态/签名校验，匿名返回 4001038）
+  // ① 移动端接口：主要借它的「房间元数据」（owner.short_id / sec_uid / 主播名）。
+  //    注意：移动端对部分直播间会把"已开播"误报成 status=4（且其 flv 常为不可拉的 _thirdor4 占位），
+  //    所以不采信移动端直播状态，只用它取元数据；权威开播/真流由 web/enter 判定。
+  let mobileRoom = null;
+  let shortId = isFullId ? '' : idStr; // 短号可直接作 web/enter 的 web_rid
   let mobileNote = '';
   try {
     const j = await httpJson(mobileUrl(roomId), {
@@ -103,16 +108,13 @@ async function enterRoom(roomId, settings, logger) {
     });
     const room = j?.data?.room;
     if (j?.status_code === 0 && room) {
-      logger?.debug(`抖音移动端接口解析成功（免登录），房间 ${room.id_str || roomId} 状态 ${room.status}`);
-      return { room, cookie: '', source: 'mobile' };
-    }
-    mobileNote = `移动端接口 status_code=${j?.status_code}${j?.data?.message ? ` ${j.data.message}` : ''}`;
-    if (j?.status_code === 10011) {
-      if (!isFullId) {
-        // 19 位以内的数字短号或文字自定义短号：转为 web 接口用 web_rid 映射出 19 位内部号
-        mobileNote += `（「${idStr}」像抖音 web_rid 短号，免登录接口只认 19 位内部房间号，转 web 接口映射）`;
-      } else {
-        // 实测：已下播的 19 位房间号与无效房间号都返回 10011，按"未开播"处理，让任务继续等待开播
+      mobileRoom = room;
+      shortId = room.owner?.short_id || room.owner?.display_id || shortId;
+      logger?.debug(`抖音移动端接口取到房间元数据 ${room.id_str || roomId} 状态 ${room.status}（开播以 web 判定）`);
+    } else {
+      mobileNote = `移动端接口 status_code=${j?.status_code}${j?.data?.message ? ` ${j.data.message}` : ''}`;
+      if (j?.status_code === 10011 && isFullId) {
+        // 已下播的 19 位房间号与无效房间号都返回 10011，按"未开播"处理，让任务继续等待开播
         logger?.info(`抖音移动端接口返回 10011（未开播或房间号无效），按未开播处理：${idStr}`, {});
         return {
           room: { _fallback: true, urls: [], nickname: '', title: '', status: 4 },
@@ -125,27 +127,33 @@ async function enterRoom(roomId, settings, logger) {
     logger?.debug(`抖音移动端接口失败，转 web 接口：${e.message}`);
   }
 
-  // ② web 接口（含 a_bogus 签名 + ttwid；无需登录即可拿到多数直播间的真实流）
+  // ② web/enter：权威的开播状态 + 真实 HLS 流（需有效 ttwid + a_bogus；web_rid 用短号）
   const cookie = await ensureCookie(settings, logger);
+  const webRid = shortId || idStr;
   let apiNote = '';
   try {
     const webHdrs = {
       'User-Agent': WEB_UA,
-      Referer: `https://live.douyin.com/${roomId}`,
+      Referer: `https://live.douyin.com/${webRid}`,
       Accept: 'application/json, text/plain, */*',
       ...(cookie ? { Cookie: cookie } : {}),
     };
-    const j = await httpJson(webEnterUrl(roomId), { headers: webHdrs, logger, label: 'douyin.enter', retries: 1 });
-    if (j && j.status_code && j.status_code !== 0) {
-      apiNote = `web 接口 status_code=${j.status_code}`;
-      logger?.warn(`抖音 web enter 接口返回 status_code=${j.status_code}（需要登录 Cookie 或风控），转页面兜底`, {});
-    }
+    const j = await httpJson(webEnterUrl(webRid), { headers: webHdrs, logger, label: 'douyin.enter', retries: 1 });
     const room = j?.data?.data?.[0];
-    if (room) return { room, cookie, source: 'api' };
+    if (j?.status_code === 0 && room) {
+      // web 房间数据缺 owner 时用移动端元数据补全（主播名/头像/短号）
+      if (mobileRoom && !(room.owner && room.owner.nickname)) room.owner = mobileRoom.owner;
+      return { room, cookie, source: 'web', shortId: webRid };
+    }
+    apiNote = `web 接口 status_code=${j?.status_code}${j?.data?.message ? ` ${j.data.message}` : ''}`;
+    logger?.debug(`抖音 web enter 无有效数据（${apiNote}），${mobileRoom ? '退回移动端' : '转页面兜底'}`);
   } catch (e) {
     apiNote = `web 接口异常：${e.message}`;
-    logger?.debug(`抖音 webcast 接口失败，转页面解析：${e.message}`);
+    logger?.debug(`抖音 webcast 接口失败：${e.message}`);
   }
+
+  // ③ web 失败但移动端拿到房间元数据：退回移动端（其状态可能不准，供 resolveRoom 兜底）
+  if (mobileRoom) return { room: mobileRoom, cookie: '', source: 'mobile', shortId };
 
   // ③ 兜底：直接解析直播间页面（2026-10 实测页面已不再内嵌流地址、RENDER_DATA 也已移除）
   let pageErr = '';
@@ -232,25 +240,44 @@ export async function resolveRoom({ roomId, settings, logger }) {
   };
 }
 
+/** 取直播间的最高画质 HLS（m3u8 主播单）——live_core_sdk_data 里的 origin */
+function originMainHls(su) {
+  try {
+    const sd = su?.live_core_sdk_data?.pull_data?.stream_data;
+    if (!sd) return '';
+    const origin = JSON.parse(sd)?.data?.origin?.main;
+    return (origin && origin.hls) || '';
+  } catch { return ''; }
+}
+
 export async function resolveStream({ roomId, quality, settings, logger }) {
-  const { room, cookie } = await enterRoom(roomId, settings, logger);
+  const { room, cookie, shortId } = await enterRoom(roomId, settings, logger);
   const keys = QUALITY_KEYS[quality] || QUALITY_KEYS.origin;
   if (room._fallback) {
     if (!room.urls.length) throw new HttpError('NO_STREAM', '主播未开播或未拿到流地址', 502);
     return { url: room.urls[0], resolution: '', headers: headers(cookie, roomId), qualityActual: quality };
   }
   const su = room.stream_url || {};
-  const flv = su.flv_pull_url || {};
-  const hls = su.hls_pull_url_map || {};
+  // HLS 优先：抖音 flv 边缘节点在本网络常 404/超时，HLS(m3u8) 可稳定拉流
+  const hlsMaster = originMainHls(su);
+  const hlsMap = su.hls_pull_url_map || {};
+  const flvMap = su.flv_pull_url || {};
+  const isTop = quality === 'origin' || quality === 'bluray';
   for (const k of keys) {
-    const url = flv[k] || hls[k];
-    if (url) {
+    // 每个质量的候选：origin HLS(master) → 该档 HLS → 该档 flv
+    const candidates = [];
+    if (isTop || !hlsMap[k]) candidates.push(hlsMaster);
+    if (hlsMap[k]) candidates.push(hlsMap[k]);
+    if (flvMap[k]) candidates.push(flvMap[k]);
+    for (const url of candidates) {
+      if (!url) continue;
       return {
         url,
         resolution: su.default_resolution || '',
         headers: headers(cookie, roomId),
         qualityActual: quality,
         qualityKey: k,
+        proto: /\.m3u8/.test(url) ? 'hls' : 'flv',
       };
     }
   }
