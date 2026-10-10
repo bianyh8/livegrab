@@ -6,7 +6,7 @@ import { Recorder } from './recorder.js';
 import { Store } from './store.js';
 import { qualityLabel } from './naming.js';
 import {
-  resolveRoom, resolveStream, getPlatform, platformList, detectPlatform, roomIdFrom,
+  resolveRoom, resolveStream, getPlatform, platformList, detectPlatform, roomIdFrom, probeLive,
 } from './resolvers/index.js';
 import { uid, nowIso, HttpError, formatBytes, formatDuration, dateKey, formatDate, formatTime, sleep } from './util.js';
 
@@ -697,7 +697,7 @@ export class Scheduler {
 
         let info;
         try {
-          info = await resolveRoom(task.sourceUrl || `${task.platform}:${task.roomId}`, {
+          info = await probeLive(task.sourceUrl || `${task.platform}:${task.roomId}`, {
             platform: task.platform, settings, logger: this.logger,
           });
         } catch (e) {
@@ -725,9 +725,8 @@ export class Scheduler {
 
         task.failCount = 0;
         task.failNotified = false;
-        if (!task.nameLocked) task.anchorName = info.anchorName || task.anchorName;
-        task.title = info.title || task.title;
-        task.avatar = info.avatar || task.avatar;
+        // 轮询只刷新直播状态；主播信息仅在「编辑界面点解析 / 创建任务 / 开始录制」时刷新，
+        // 避免每次轮询重写主播名与标题（减少流量与资源消耗，且不覆盖用户自定义名称）。
         const wasLive = task.liveStatus === 'live';
         task.liveStatus = info.liveStatus; // 始终落盘真实直播状态，避免"状态未知"
 

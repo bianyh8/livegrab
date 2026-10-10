@@ -223,6 +223,15 @@ const ADD = {
   'tasks.saveFail': '保存失败', 'tasks.currentPlatform': '当前平台：', 'tasks.notSpecified': '未指定',
   'tasks.gb': 'GB',
   'tasks.fillRoom19': '· <span class="h">填 19 位房间号</span>', 'tasks.wan': '万',
+
+  // logs（清除日志：按日期范围清理）
+  'logs.clear': '清除日志',
+  'logs.clearFrom': '起始日期',
+  'logs.clearTo': '结束日期',
+  'logs.clearNoRange': '请选择起始或结束日期',
+  'logs.clearConfirm': '确定清除 {0} 至 {1} 的日志吗？删除后不可恢复。',
+  'logs.clearDone': '已清除 {0} 个日志文件',
+  'logs.clearFail': '清除日志失败',
 };
 
 /* ---------------- ② 废弃键（已统一到 common.*） ---------------- */
@@ -233,6 +242,9 @@ const REMOVE = [
   'ui.waitSlot', 'ui.pollSec', 'ui.recorded', 'ui.playback',
   'files.completed', 'files.replay', 'files.unknownAnchor',
   'tasks.unknownAnchor', 'tasks.monitorOnly',
+  // 最近事件并入运行日志 + 移除引擎状态提示
+  'events.title', 'events.hint', 'events.loading', 'events.loadFailed', 'events.fullLog', 'events.empty',
+  'nav.eventsSub', 'common.engineOk', 'common.ffmpegUnavailable',
 ];
 
 /* ---------------- ③ 去重：同文案归一到单一 key ---------------- */

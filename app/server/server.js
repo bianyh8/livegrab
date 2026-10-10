@@ -442,6 +442,10 @@ async function main() {
     retentionDays: store.settings.logRetentionDays,
     level: store.settings.logLevel,
   }));
+  route('POST', '/api/logs/clear', async (req) => {
+    const body = await readBody(req).catch(() => ({}));
+    return logger.clear({ from: body.from, to: body.to });
+  });
   route('POST', '/api/notify/test', async () => notifier.test());
   route('GET', '/api/events', async (req, res) => {
     res.writeHead(200, {

@@ -132,6 +132,26 @@ export async function resolveRoom(input, ctx = {}) {
   };
 }
 
+/**
+ * 轻量直播状态探测（公用轮询方法）：
+ * 只判断直播开/关，不回传 / 不写主播信息（anchorName/title/avatar 等）。
+ * 调度器定时轮询统一走这里，主播信息只在「编辑界面点解析」时通过 resolveRoom 刷新，
+ * 从而减少轮询带来的流量与资源消耗，也避免覆盖用户自定义的主播名。
+ */
+export async function probeLive(input, ctx = {}) {
+  const url = String(input || '').trim();
+  const platformId = ctx.platform || detectPlatform(url);
+  if (!platformId) return { platform: null, liveStatus: 'unknown', online: null };
+  const p = getPlatform(platformId);
+  if (!p?.handler) return { platform: p?.id || platformId, liveStatus: 'unknown', online: null };
+  const roomId = roomIdFrom(platformId, url);
+  const info = await p.handler.resolveRoom({ roomId, url, settings: ctx.settings, logger: ctx.logger });
+  return {
+    platform: p.id, platformName: p.name, roomId: info.roomId || roomId,
+    liveStatus: info.liveStatus || 'unknown', online: info.online ?? null,
+  };
+}
+
 /** 按 task.quality → settings.qualityFallback 依次尝试，返回第一个可用流 */
 export async function resolveStream(task, ctx = {}) {
   const p = getPlatform(task.platform);

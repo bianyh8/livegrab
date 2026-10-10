@@ -223,13 +223,17 @@ export class Storage {
       if (file && file.path) dirs.add(path.dirname(file.path));
       const items = await moveOne(file);
       if (items.length) {
-        const entry = {
-          id: uid('tr'), kind: 'file', name: file.name, bytes: items.reduce((a, b) => a + (b.bytes || 0), 0), deletedAt: nowIso(),
-          expireAt: new Date(Date.now() + (Number(settings.trashRetentionDays) || 7) * 86400_000).toISOString(),
-          items, sessionId: session?.id || null,
-        };
-        await this.store.addTrash(entry);
-        moved.push(entry.id);
+        // 与 session 分支一致：按「删除时移入回收站」开关决定是否登记回收站
+        // （否则开关关闭时文件被永久删除，回收站仍残留清单 ghost 项）
+        if (useTrash) {
+          const entry = {
+            id: uid('tr'), kind: 'file', name: file.name, bytes: items.reduce((a, b) => a + (b.bytes || 0), 0), deletedAt: nowIso(),
+            expireAt: new Date(Date.now() + (Number(settings.trashRetentionDays) || 7) * 86400_000).toISOString(),
+            items, sessionId: session?.id || null,
+          };
+          await this.store.addTrash(entry);
+          moved.push(entry.id);
+        }
       }
       if (session) {
         session.segments = (session.segments || []).filter((x) => x.id !== fid);

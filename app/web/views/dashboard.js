@@ -55,7 +55,6 @@ function paint(ctx, status) {
   }
   const stats = (status && status.stats) || {};
   const disk = (status && status.disk) || {};
-  const engine = (status && status.engine) || {};
   const recording = (status && status.recording) || [];
   const waiting = (status && status.waiting) || [];
   const queue = (status && status.queue) || [];

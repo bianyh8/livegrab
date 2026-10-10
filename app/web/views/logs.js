@@ -1,10 +1,10 @@
 /* LiveGrab · views/logs.js —— 运行日志
-   级别 / 任务 / 平台 / 关键字过滤 ＋ SSE 实时追加 ＋ 保留策略说明 ＋ 导出 / 复制。
-   「最近事件」在左侧导航里独立的页面（views/events.js），这里只放完整运行日志。 */
+   级别 / 任务 / 平台 / 关键字过滤 ＋ SSE 实时追加 ＋ 保留策略说明 ＋ 导出 / 复制 ＋ 按日期清除日志。
+   「最近事件」已并入本页（不再有独立最近事件页），这里是完整的运行日志。 */
 
 import { api, normalizeLogLine } from '../api.js';
 import { t } from '../i18n.js';
-import { esc, formatLogTime, formatBytes, emptyBox, toast, copyText, downloadText } from '../ui.js';
+import { esc, formatLogTime, formatBytes, emptyBox, toast, copyText, downloadText, confirmDialog } from '../ui.js';
 
 const MAX_ROWS = 2000;
 
@@ -15,7 +15,6 @@ const state = {
   q: '',
   rows: [],
   files: [],
-  engine: null,
   newestFirst: true,
   lastTs: 0,
   paused: false,
@@ -80,8 +79,6 @@ async function refresh(ctx, initial) {
     }
     if (initial || !state.rows.length || root.querySelector('#lgTable') === null) {
       const r = await api.logs({ level: state.level, taskId: state.taskId, q: state.q || '', limit: MAX_ROWS });
-      const st = await api.status().catch(() => null);
-      if (st) state.engine = st.engine || null;
       const items = (r && r.items) || [];
       state.rows = items.slice(-MAX_ROWS);
       state.files = (r && r.files) || [];
@@ -91,8 +88,6 @@ async function refresh(ctx, initial) {
     }
     /* 轮询兜底：SSE 断线时用增量补齐 */
     const r = await api.logs({ level: state.level, taskId: state.taskId, q: state.q || '', limit: MAX_ROWS });
-    const st = await api.status().catch(() => null);
-    if (st) state.engine = st.engine || null;
     const items = (r && r.items) || [];
     state.files = (r && r.files) || [];
     const fresh = items.filter((l) => new Date(l.ts || 0).getTime() > state.lastTs);
@@ -134,13 +129,10 @@ function paint(ctx) {
   if (!root) return;
   const tasks = [...new Set(state.rows.map((l) => l.taskName).filter(Boolean))];
   const totalBytes = state.files.reduce((n, f) => n + (Number(f.bytes) || 0), 0);
-  const eng = state.engine || {};
-  const ffv = String(eng.ffmpegVersion || '').split('\n')[0].replace(/\s*Copyright\b.*$/i, '').trim();
   const retDays = Number(state.limits.logRetentionDays) || 14;
   const retLevel = esc(state.limits.logLevel || 'INFO');
   let hint = t('logs.hint', retDays, retLevel, MAX_ROWS);
   if (state.files.length) hint += t('logs.filesNote', state.files.length, esc(formatBytes(totalBytes)));
-  if (ffv) hint += t('logs.engineNote', eng.ffmpegAvailable ? t('common.engineOk') : t('common.ffmpegUnavailable'), esc(ffv));
 
   root.innerHTML = `
     <div class="card">
@@ -165,6 +157,9 @@ function paint(ctx) {
         <input class="input" id="lgQ" style="width:200px" placeholder="${t('logs.qPlaceholder')}" value="${esc(state.q)}" />
         <button class="btn sm ghost" id="lgOrder" title="${t('logs.toggleOrder')}">${state.newestFirst ? t('logs.newestFirst') : t('logs.newestLast')}</button>
         <div class="spacer"></div>
+        <input type="date" class="input" id="lgFrom" style="width:158px" title="${t('logs.clearFrom')}" />
+        <input type="date" class="input" id="lgTo" style="width:158px" title="${t('logs.clearTo')}" />
+        <button class="btn sm ghost" id="lgClear">${t('logs.clear')}</button>
         <span class="chip ${state.paused ? 'wait' : 'on'}" id="lgLive" style="cursor:pointer"><i class="dot"></i>${state.paused ? t('logs.livePaused') : t('logs.liveStreaming')}</span>
         <button class="btn sm ghost" id="lgCopy">${t('common.copy')}</button>
         <button class="btn sm ghost" id="lgExport">${t('logs.export')}</button>
@@ -290,5 +285,31 @@ function bind(ctx) {
     const text = filtered().map((l) => `[${formatLogTime(l.ts)}] ${String(l.level || 'INFO').toUpperCase()} ${l.taskName || '-'} ${l.msg || ''}`).join('\r\n');
     downloadText(`livegrab_logs_${new Date().toISOString().slice(0, 10)}.txt`, text, 'text/plain;charset=utf-8');
     toast(t('logs.exportedToast'));
+  };
+
+  const fFrom = root.querySelector('#lgFrom');
+  const fTo = root.querySelector('#lgTo');
+  const clear = root.querySelector('#lgClear');
+  if (clear) clear.onclick = () => {
+    const from = (fFrom && fFrom.value) || '';
+    const to = (fTo && fTo.value) || '';
+    if (!from && !to) { toast(t('logs.clearNoRange'), 'warn'); return; }
+    confirmDialog({
+      title: t('logs.clear'),
+      text: t('logs.clearConfirm', from || '…', to || '…'),
+      ok: t('logs.clear'),
+      danger: true,
+      onOk: async () => {
+        try {
+          const r = await api.clearLogs(from, to);
+          toast(t('logs.clearDone', String((r && r.removed) || 0)));
+          state.rows = [];
+          state.files = [];
+          await refresh(ctx, true);
+        } catch (e) {
+          toast((e && e.message) || t('logs.clearFail'), 'err');
+        }
+      },
+    });
   };
 }

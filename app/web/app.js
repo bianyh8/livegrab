@@ -14,7 +14,6 @@ const ROUTES = [
   { page: 'dashboard', file: 'dashboard', title: t('nav.overview'), sub: t('nav.overviewSub') },
   { page: 'tasks', file: 'tasks', title: t('nav.tasks'), sub: t('nav.tasksSub') },
   { page: 'files', file: 'files', title: t('nav.files'), sub: t('nav.filesSub') },
-  { page: 'events', file: 'events', title: t('events.title'), sub: t('nav.eventsSub') },
   { page: 'settings', file: 'settings/index', title: t('nav.settings'), sub: t('nav.settingsSub') },
   { page: 'logs', file: 'logs', title: t('nav.logs'), sub: t('nav.logsSub') },
   { page: 'trash', file: 'trash', title: t('nav.trash'), sub: t('nav.trashSub') },
@@ -385,15 +384,8 @@ async function pullStatus() {
 function applyStatus(st) {
   if (!st || typeof st !== 'object') return;
   const stats = st.stats || {};
-  const engine = st.engine || {};
 
   if (typeof stats.concurrencyCap === 'number') runtime.limits.maxConcurrency = stats.concurrencyCap;
-
-  const chip = el('engineChip');
-  if (chip) {
-    if (engine.ffmpegAvailable) { chip.className = 'chip on'; chip.innerHTML = '<i class="dot"></i>' + t('common.engineOk'); }
-    else { chip.className = 'chip err'; chip.innerHTML = '<i class="dot"></i>' + t('common.ffmpegUnavailable'); }
-  }
 
   const nDash = el('navDashBadge');
   if (nDash) {

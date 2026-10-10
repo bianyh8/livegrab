@@ -61,6 +61,26 @@ export class Logger {
     }
   }
 
+  /** 按日期范围清除日志文件（from/to 形如 YYYY-MM-DD，可只给其一，闭区间按天）并清空环形缓冲 */
+  async clear({ from, to } = {}) {
+    let removed = 0;
+    const files = await fsp.readdir(this.dir).catch(() => []);
+    for (const f of files) {
+      if (!/\.log$/.test(f)) continue;
+      const day = f.split('.')[0];
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) continue;
+      if (from && day < from) continue;
+      if (to && day > to) continue;
+      await fsp.rm(path.join(this.dir, f), { force: true }).catch(() => {});
+      removed++;
+    }
+    this.ring = [];
+    this._day = null;
+    this._size = 0;
+    this._part = 0;
+    return { removed };
+  }
+
   log(level, msg, meta = {}) {
     const lv = LEVEL_ORDER[level] ? level : 'INFO';
     if (LEVEL_ORDER[lv] < LEVEL_ORDER[this.level]) return;

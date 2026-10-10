@@ -154,6 +154,7 @@ export const api = {
   trashPurge: (ids) => request('POST', '/api/trash/purge', { ids }),
 
   logs: async (params) => normalizeLogs(await request('GET', '/api/logs' + qs(params))),
+  clearLogs: (from, to) => request('POST', '/api/logs/clear', { from: from || '', to: to || '' }),
 };
 
 export default api;
