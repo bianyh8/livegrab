@@ -98,11 +98,11 @@ function paint(ctx, status) {
       <div class="card">
         <div class="card-h"><h3>${t('dashboard.taskStats')}</h3></div>
         <div class="card-b ov-col">
-          <div class="ovstat"><div class="k">${t('dashboard.statRecording')}</div><div class="v">${recCount}<small>${t('dashboard.unitRoad')}</small></div></div>
-          <div class="ovstat"><div class="k">${t('dashboard.statLive')}</div><div class="v">${liveCount}<small>${t('dashboard.unitItem')}</small></div></div>
-          <div class="ovstat"><div class="k">${t('dashboard.statMonitor')}</div><div class="v">${monitorList.length}<small>${t('dashboard.unitItem')}</small></div></div>
-          <div class="ovstat"><div class="k">${t('dashboard.statQueued')}</div><div class="v">${queuedCount}<small>${t('dashboard.unitItem')}</small></div></div>
-          <div class="ovstat"><div class="k">${t('dashboard.statWaiting')}</div><div class="v">${waitNum}<small>${t('dashboard.unitItem')}</small></div></div>
+          <div class="ovstat"><div class="k">${t('dashboard.statRecording')}</div><div class="v">${recCount}<small>${t('common.unitRoad')}</small></div></div>
+          <div class="ovstat"><div class="k">${t('dashboard.statLive')}</div><div class="v">${liveCount}<small>${t('common.unitItem')}</small></div></div>
+          <div class="ovstat"><div class="k">${t('dashboard.statMonitor')}</div><div class="v">${monitorList.length}<small>${t('common.unitItem')}</small></div></div>
+          <div class="ovstat"><div class="k">${t('dashboard.statQueued')}</div><div class="v">${queuedCount}<small>${t('common.unitItem')}</small></div></div>
+          <div class="ovstat"><div class="k">${t('dashboard.statWaiting')}</div><div class="v">${waitNum}<small>${t('common.unitItem')}</small></div></div>
           <div class="ovstat"><div class="k">${t('dashboard.statConcur')}</div><div class="v"><span style="color:var(--ok);vertical-align:middle">${recCount}</span> <span style="color:var(--txt-2);vertical-align:middle">/</span> <span style="color:var(--err);vertical-align:middle">${cap}</span></div><div class="minibar"><i style="width:${usePct}%"></i></div></div>
         </div>
       </div>
@@ -112,7 +112,7 @@ function paint(ctx, status) {
         <div class="card-b ov-col">
           <div class="ovstat"><div class="k">${t('dashboard.todayDuration')}</div><div class="v">${todayDuration(stats.todayDurationSec)}</div></div>
           <div class="ovstat"><div class="k">${t('dashboard.totalDuration')}</div><div class="v">${todayDuration(totalDurationSec)}</div></div>
-          <div class="ovstat"><div class="k">${t('dashboard.todayFiles')}</div><div class="v">${Number(stats.todayFiles) || 0}<small>${t('dashboard.unitItem')}</small></div></div>
+          <div class="ovstat"><div class="k">${t('dashboard.todayFiles')}</div><div class="v">${Number(stats.todayFiles) || 0}<small>${t('common.unitItem')}</small></div></div>
           <div class="ovstat"><div class="k">${t('dashboard.todayBytes')}</div><div class="v">${esc(formatBytes(stats.todayBytes))}</div></div>
           <div class="ovstat"><div class="k">${t('dashboard.bandwidth')}</div><div class="v">${bwText}</div></div>
         </div>
@@ -148,8 +148,8 @@ function todayDuration(sec) {
   const s = Number(sec) || 0;
   const h = Math.floor(s / 3600);
   const m = Math.floor((s % 3600) / 60);
-  if (h > 0) return `${h}<small>${t('dashboard.hour')}</small> ${m}<small>${t('dashboard.minute')}</small>`;
-  return `${m}<small>${t('dashboard.minutes')}</small>`;
+  if (h > 0) return `${h}<small>${t('common.hour')}</small> ${m}<small>${t('common.minute')}</small>`;
+  return `${m}<small>${t('common.minutes')}</small>`;
 }
 
 /* 下载带宽字段 live.speed 由后端实时下发，已改在 app.js 顶部状态栏展示 */
@@ -227,12 +227,12 @@ function recItem(t) {
         <img class="tk-thumb" loading="lazy" src="/api/tasks/${esc(t.id)}/thumb" alt="" onerror="this.style.display='none'" />
       </div>
       <div class="rec-main">
-        <div class="ttl">${esc(t.name || t.anchorName || '未命名任务')}${t.title ? ' · ' + esc(t.title) : ''}</div>
+        <div class="ttl">${esc(t.name || t.anchorName || t('dashboard.unnamed'))}${t.title ? ' · ' + esc(t.title) : ''}</div>
         <div class="meta">
-          ${platBadge(t.platform, t.platformName)}<span>房间 ${esc(t.roomId || '—')}</span>
+          ${platBadge(t.platform, t.platformName)}<span>${t('dashboard.room', esc(t.roomId || '—'))}</span>
           <span class="chip">${esc(quality)}</span>
-          <span class="chip">${segOf === 'none' ? '不分段' : esc(segOf)}</span>
-          <span class="chip on"><i class="dot"></i>${segOf === 'none' ? `单文件 · 已写 ${esc(formatBytes(bytes))}` : `第 ${segIndex} 段 · 已写 ${esc(formatBytes(bytes))}`}</span>
+          <span class="chip">${segOf === 'none' ? t('seg.none') : esc(segOf)}</span>
+          <span class="chip on"><i class="dot"></i>${segOf === 'none' ? t('dashboard.writtenSingle', esc(formatBytes(bytes))) : t('dashboard.writtenSeg', segIndex, esc(formatBytes(bytes)))}</span>
         </div>
         ${isAudio && segOf === 'none'
           ? `<div class="bar" style="width:100%"><i style="width:${Math.min(95, Math.max(4, Math.round((current / (60 * 60)) * 100)))}%"></i></div>`
@@ -240,9 +240,9 @@ function recItem(t) {
       </div>
       <div class="rec-right">
         <div class="tm">${esc(formatDuration(elapsed))}</div>
-        <div style="font-size:11px;color:var(--txt-3)">${segOf === 'none' ? '单文件' : '本段 ' + esc(formatDuration(current)) /* current=本段已录秒数，仅用于时长 */}</div>
+        <div style="font-size:11px;color:var(--txt-3)">${segOf === 'none' ? t('dashboard.singleFile') : t('dashboard.currentSeg', esc(formatDuration(current))) /* current=本段已录秒数，仅用于时长 */}</div>
         <div class="acts" style="margin-top:7px">
-          <button class="btn sm danger" data-act="stop" data-id="${esc(t.id)}">停止录制</button>
+          <button class="btn sm danger" data-act="stop" data-id="${esc(t.id)}">${t('common.stopRecord')}</button>
         </div>
       </div>
     </div>`;
@@ -250,8 +250,8 @@ function recItem(t) {
 
 function segLabel(t) {
   if (t.segmentMode === 'none') return 'none';
-  if (t.segmentMode === 'size') return `按大小 ${Math.round((t.segmentSizeMB || 2048) / 1024 * 10) / 10} GB`;
-  return `${t.segmentMinutes || 60} 分钟/段`;
+  if (t.segmentMode === 'size') return t('seg.bySize', Math.round((t.segmentSizeMB || 2048) / 1024 * 10) / 10);
+  return t('dashboard.segPerMin', t.segmentMinutes || 60);
 }
 
 function queueItem(q, ctx) {
@@ -259,14 +259,14 @@ function queueItem(q, ctx) {
   const qtask = state.tasks.find((x) => x.id === q.id) || null;
   return `
     <div class="rec-item" style="padding:11px 16px">
-      ${dashThumb(qtask || q, '排队')}
+      ${dashThumb(qtask || q, t('dashboard.queuedTag'))}
       ${platBadge(name.platform)}
       <div class="rec-main">
         <div class="ttl" style="font-size:13px">${esc(name.text)}</div>
-        <div class="meta"><span class="chip wait"><i class="dot"></i>排队中</span><span>${esc(q.reason || '等待并发空位')}</span></div>
+        <div class="meta"><span class="chip wait"><i class="dot"></i>${t('common.queued')}</span><span>${esc(q.reason || t('dashboard.waitSlot'))}</span></div>
       </div>
       <div class="acts">
-        <button class="btn sm" data-act="detail" data-id="${esc(q.id)}">详情</button>
+        <button class="btn sm" data-act="detail" data-id="${esc(q.id)}">${t('common.detail')}</button>
       </div>
     </div>`;
 }
@@ -286,16 +286,16 @@ function waitItem(t) {
   const poll = t.pollIntervalSec || 60;
   return `
     <div class="rec-item" style="padding:11px 16px">
-      ${dashThumb(t, '待播')}
+      ${dashThumb(t, t('dashboard.toPlay'))}
       ${platBadge(t.platform, t.platformName)}
       <div class="rec-main">
-        <div class="ttl" style="font-size:13px">${esc(t.name || t.anchorName || '未命名任务')}</div>
-        <div class="meta"><span>轮询 ${Number(poll)} 秒</span><span>${esc(quality)}</span>${t.statusMessage ? `<span>${esc(t.statusMessage)}</span>` : ''}</div>
+        <div class="ttl" style="font-size:13px">${esc(t.name || t.anchorName || t('dashboard.unnamed'))}</div>
+        <div class="meta"><span>${t('dashboard.pollSec', Number(poll))}</span><span>${esc(quality)}</span>${t.statusMessage ? `<span>${esc(t.statusMessage)}</span>` : ''}</div>
       </div>
-      <span class="chip wait"><i class="dot"></i>未开播</span>
+      <span class="chip wait"><i class="dot"></i>${t('dashboard.notLive')}</span>
       <div class="acts">
-        <button class="btn sm" data-act="check" data-id="${esc(t.id)}" title="立即检测该直播间是否已开播">立即检测</button>
-        <button class="btn sm ghost" data-act="detail" data-id="${esc(t.id)}">详情</button>
+        <button class="btn sm" data-act="check" data-id="${esc(t.id)}" title="${t('dashboard.checkLiveTip')}">${t('common.checkLive')}</button>
+        <button class="btn sm ghost" data-act="detail" data-id="${esc(t.id)}">${t('common.detail')}</button>
       </div>
     </div>`;
 }
