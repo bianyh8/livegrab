@@ -1,6 +1,7 @@
 // 抖音直播解析（多策略兜底：webcast 接口 → 页面 RENDER_DATA → 正则兜底）
 import { HttpError } from '../util.js';
 import { httpGet, httpJson, pickSetCookie, cookiesToString, DESKTOP_UA } from './http.js';
+import { abSign } from './douyin-sign.js';
 
 const QUALITY_KEYS = {
   origin: ['FULL_HD1', 'HD1', 'SD1', 'SD2'],
@@ -59,17 +60,24 @@ const MOBILE_PARAMS = {
 
 function mobileUrl(roomId) {
   const p = new URLSearchParams({ ...MOBILE_PARAMS, room_id: String(roomId) });
-  return `https://webcast.amemv.com/webcast/room/reflow/info/?${p.toString()}`;
+  return signedUrl('https://webcast.amemv.com/webcast/room/reflow/info/', p, MOBILE_UA);
 }
 
-function enterUrl(roomId) {
+/** 给参数附 a_bogus（AB-Log 签名）生成最终请求 URL：签名基于「不含 a_bogus 的 query」计算 */
+function signedUrl(base, params, ua) {
+  const q = params instanceof URLSearchParams ? params.toString() : new URLSearchParams(params).toString();
+  return `${base}?${q}&a_bogus=${encodeURIComponent(abSign(q, ua))}`;
+}
+
+/** 直播间 Web UA 与 web/enter 参数（顺序需与 a_bogus 计算一致） */
+const WEB_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
+function webEnterUrl(roomId) {
   const p = new URLSearchParams({
     aid: '6383', app_name: 'douyin_web', live_id: '1', device_platform: 'web', language: 'zh-CN',
-    enter_from: 'web_live', cookie_enabled: 'true', screen_width: '1920', screen_height: '1080',
-    browser_language: 'zh-CN', browser_platform: 'Win32', browser_name: 'Chrome',
-    browser_version: '124.0.0.0', web_rid: String(roomId),
+    browser_language: 'zh-CN', browser_platform: 'Win32', browser_name: 'Chrome', browser_version: '124.0.0.0',
+    web_rid: String(roomId), is_need_double_stream: 'false', msToken: '',
   });
-  return `https://live.douyin.com/webcast/room/web/enter/?${p.toString()}`;
+  return signedUrl('https://live.douyin.com/webcast/room/web/enter/', p, WEB_UA);
 }
 
 function headers(cookie, roomId) {
@@ -117,14 +125,20 @@ async function enterRoom(roomId, settings, logger) {
     logger?.debug(`抖音移动端接口失败，转 web 接口：${e.message}`);
   }
 
-  // ② web 接口（需要登录 Cookie）
+  // ② web 接口（含 a_bogus 签名 + ttwid；无需登录即可拿到多数直播间的真实流）
   const cookie = await ensureCookie(settings, logger);
   let apiNote = '';
   try {
-    const j = await httpJson(enterUrl(roomId), { headers: headers(cookie, roomId), logger, label: 'douyin.enter', retries: 1 });
+    const webHdrs = {
+      'User-Agent': WEB_UA,
+      Referer: `https://live.douyin.com/${roomId}`,
+      Accept: 'application/json, text/plain, */*',
+      ...(cookie ? { Cookie: cookie } : {}),
+    };
+    const j = await httpJson(webEnterUrl(roomId), { headers: webHdrs, logger, label: 'douyin.enter', retries: 1 });
     if (j && j.status_code && j.status_code !== 0) {
       apiNote = `web 接口 status_code=${j.status_code}`;
-      logger?.warn(`抖音 web enter 接口返回 status_code=${j.status_code}（需要登录 Cookie），转页面兜底`, {});
+      logger?.warn(`抖音 web enter 接口返回 status_code=${j.status_code}（需要登录 Cookie 或风控），转页面兜底`, {});
     }
     const room = j?.data?.data?.[0];
     if (room) return { room, cookie, source: 'api' };
