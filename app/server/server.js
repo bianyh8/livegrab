@@ -402,6 +402,10 @@ async function main() {
     return storage.restoreTrash(body.ids || []);
   });
   route('POST', '/api/trash/empty', async () => storage.emptyTrash());
+  route('POST', '/api/trash/purge', async (req) => {
+    const body = await readBody(req);
+    return storage.purgeTrash(body.ids || []);
+  });
   // 回收站缩略图：按回收站条目 id 取首个媒体文件的预览（无则 fallback 到首帧抽帧）
   route('GET', '/api/trash/:id/thumb', async (req, res) => {
     const t = store.trash.find((x) => x.id === req.params.id);

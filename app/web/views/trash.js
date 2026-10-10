@@ -89,6 +89,7 @@ function trashLine(t, ctx) {
       </div>
       <div class="acts">
         <button class="btn sm ghost" data-trash-act="restore" data-id="${esc(t.id)}">还原</button>
+        <button class="btn sm danger" data-trash-act="purge" data-id="${esc(t.id)}">清除</button>
       </div>
     </div>`;
 }
@@ -124,6 +125,20 @@ function bind(ctx) {
     btn.onclick = async () => {
       try { await api.trashRestore([btn.dataset.id]); toast('已还原'); state.hash = ''; await tick(ctx, true); }
       catch (e) { toast(e.message || '还原失败', 'err'); }
+    };
+  });
+  root.querySelectorAll('[data-trash-act="purge"]').forEach((btn) => {
+    btn.onclick = () => {
+      const id = btn.dataset.id;
+      const t = state.items.find((x) => x.id === id);
+      confirmDialog({
+        title: '永久清除', danger: true, ok: '清除',
+        text: `将从回收站 <b>永久清除</b> 「${esc(t && t.name || '该项')}」（${esc(formatBytes(t && t.bytes || 0))}）及其全部文件（含刮削图片/描述），<b>不可还原</b>。`,
+        onOk: async () => {
+          try { const r = await api.trashPurge([id]); toast(`已清除 ${Number(r && r.purged) || 1} 项`); state.hash = ''; await tick(ctx, true); }
+          catch (e) { toast(e.message || '清除失败', 'err'); }
+        },
+      });
     };
   });
 }

@@ -301,20 +301,30 @@ export class Storage {
     return { removed: count, bytes };
   }
 
-  async purgeTrash() {
+  async purgeTrash(ids = []) {
     const now = Date.now();
-    const expired = this.store.trash.filter((t) => new Date(t.expireAt).getTime() < now);
-    for (const t of expired) {
+    let targets;
+    let reason = '过期清理';
+    if (ids && ids.length) {
+      targets = this.store.trash.filter((t) => ids.includes(t.id));
+      reason = '已清除';
+    } else {
+      targets = this.store.trash.filter((t) => new Date(t.expireAt).getTime() < now);
+    }
+    let bytes = 0;
+    for (const t of targets) {
       for (const it of t.items || []) {
-        if (it.trashPath) await fsp.rm(it.trashPath, { force: true }).catch(() => {});
+        if (it.trashPath) { await fsp.rm(it.trashPath, { force: true }).catch(() => {}); bytes += it.bytes || 0; }
       }
     }
-    if (expired.length) {
-      this.store.state.trash = this.store.state.trash.filter((t) => !expired.includes(t));
+    if (targets.length) {
+      const idset = new Set(targets.map((t) => t.id));
+      this.store.state.trash = this.store.state.trash.filter((t) => !idset.has(t.id));
       await this.store.persist();
-      this.logger.info(`回收站过期清理 ${expired.length} 项`);
+      this.logger.info(`回收站${reason} ${targets.length} 项（${formatBytes(bytes)}）`);
     }
-    return { purged: expired.length };
+    this.onEvent({ type: 'files' });
+    return { purged: targets.length, bytes };
   }
 
   // ---------- 转封装 / 合并（异步任务） ----------

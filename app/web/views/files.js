@@ -214,13 +214,17 @@ function bind(ctx) {
         openPlayer(ctx, filePlayer(found.f, found.s, found.tag));
       } else if (act === 'delete') {
         if (found.f.status === 'recording') { toast('录制中的分段不可删除', 'warn'); return; }
+        const toTrash = await trashEnabled();
+        const tr = toTrash ? '移入回收站' : '永久删除';
         confirmDialog({
-          title: '删除录制文件', danger: true, ok: '移入回收站',
-          text: `将删除 <b>${esc(found.f.name || '该文件')}</b>（${esc(formatBytes(found.f.bytes || 0))}）并移入回收站 <span class="mono">/data/.trash</span>（同名的刮削图片/描述 .jpg/.nfo 一并已随行可还原）。<br><span style="color:var(--txt-3)">源 .ts 是否保留由「系统设置」决定，不在本次删除范围。保留 7 天，可去「回收站」页还原。</span>`,
+          title: '删除录制文件', danger: true, ok: tr,
+          text: toTrash
+            ? `将删除 <b>${esc(found.f.name || '该文件')}</b>（${esc(formatBytes(found.f.bytes || 0))}）并移入回收站 <span class="mono">/data/.trash</span>（同名的刮削图片/描述 .jpg/.nfo 一并已随行可还原）。<br><span style="color:var(--txt-3)">源 .ts 是否保留由「系统设置」决定，不在本次删除范围。保留 7 天，可去「回收站」页还原。</span>`
+            : `将从磁盘 <b>永久删除</b> <b>${esc(found.f.name || '该文件')}</b>（${esc(formatBytes(found.f.bytes || 0))}）及同名的刮削图片/描述 .jpg/.nfo，<b>不可还原</b>。<br><span style="color:var(--txt-3)">源 .ts 是否保留由「系统设置」决定，不在本次删除范围。若需留底请先到系统设置打开「删除时移入回收站」。</span>`,
           onOk: async () => {
             try {
               const r = await api.filesDelete({ fileIds: [id] });
-              toast(`已移入回收站（${Number(r && r.movedToTrash) || 1} 项）`);
+              toast((r && r.useTrash === false ? '已永久删除' : '已移入回收站') + `（${Number(r && r.movedToTrash) || 1} 项）`);
               state.picked.delete(id);
               state.hash = '';
               await tick(ctx, true);
@@ -263,19 +267,32 @@ function deleteFiles(ids, ctx) {
   const rows = ids.map((id) => findFile(id)).filter(Boolean);
   let bytes = 0;
   rows.forEach(({ f }) => { bytes += Number(f.bytes) || 0; });
-  confirmDialog({
-    title: '删除录制文件',
-    danger: true,
-    ok: '移入回收站',
-    text: `将删除选中的 <b>${ids.length}</b> 个文件 / <b>${esc(formatBytes(bytes))}</b>，并移入回收站 <span class="mono">/data/.trash</span>（连同同名的刮削图片/描述，可去「回收站」页还原）。<br><span style="color:var(--txt-3)">录制中的分段不会被删除。</span>`,
-    onOk: async () => {
-      try {
-        const r = await api.filesDelete({ fileIds: ids });
-        toast(`已移入回收站（${Number(r && r.movedToTrash) || ids.length} 项 / ${esc(formatBytes(r && r.bytes != null ? r.bytes : bytes))}）`);
-        ids.forEach((id) => state.picked.delete(id));
-        state.hash = '';
-        await tick(ctx, true);
-      } catch (e) { toast(e.message || '删除失败', 'err'); }
-    },
+  trashEnabled().then((toTrash) => {
+    const tr = toTrash ? '移入回收站' : '永久删除';
+    confirmDialog({
+      title: '删除录制文件',
+      danger: true,
+      ok: tr,
+      text: toTrash
+        ? `将删除选中的 <b>${ids.length}</b> 个文件 / <b>${esc(formatBytes(bytes))}</b>，并移入回收站 <span class="mono">/data/.trash</span>（连同同名的刮削图片/描述，可去「回收站」页还原）。<br><span style="color:var(--txt-3)">录制中的分段不会被删除。</span>`
+        : `将从磁盘 <b>永久删除</b> 选中的 <b>${ids.length}</b> 个文件 / <b>${esc(formatBytes(bytes))}</b> 及其同名的刮削图片/描述，<b>不可还原</b>。<br><span style="color:var(--txt-3)">录制中的分段不会被删除。若需留底请先到系统设置打开「删除时移入回收站」。</span>`,
+      onOk: async () => {
+        try {
+          const r = await api.filesDelete({ fileIds: ids });
+          toast((r && r.useTrash === false ? '已永久删除' : '已移入回收站') + `（${Number(r && r.movedToTrash) || ids.length} 项 / ${esc(formatBytes(r && r.bytes != null ? r.bytes : bytes))}）`);
+          ids.forEach((id) => state.picked.delete(id));
+          state.hash = '';
+          await tick(ctx, true);
+        } catch (e) { toast(e.message || '删除失败', 'err'); }
+      },
+    });
+  }).catch(() => {
+    toast('读取删除设置失败，请重试', 'err');
   });
+}
+
+/* 读取「删除时移入回收站」开关（默认开） */
+async function trashEnabled() {
+  try { const s = await api.settings(); return s.deleteToTrash !== false; }
+  catch { return true; }
 }
