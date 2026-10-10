@@ -35,6 +35,7 @@ export class Recorder extends EventEmitter {
     this._rateBits = 0;       // 各任务实时下载速率（bit/s）
     this._tickRateRef = null; // { idx, bytes, t } 采样基准
     this._cumBase = 0;        // 已轮转关闭分段累计字节（保持整场单调，供速率采样）
+    this._detailTick = 0;     // 周期详情日志计数
   }
 
   _meta() { return { taskId: this.task.id, taskName: this.task.anchorName || this.task.title || this.task.id }; }
@@ -192,6 +193,12 @@ export class Recorder extends EventEmitter {
     this.currentSegment = cur;
     this.currentBytes = (await fsp.stat(cur.path).catch(() => ({ size: 0 }))).size;
     this._sampleRate(cur);
+    // 详情日志：间隔 ~30s 记一次「从哪个 url 拉流、已写多少/实时速率」，便于核查下载来源与数据量
+    this._detailTick++;
+    if (this._detailTick % 20 === 1 && (this.currentBytes > 0 || this._rateBits > 0)) {
+      const mb = (n) => (n >= 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${Math.round(n / 1024)} KB`);
+      this.logger.info(`${cur.name} 从 ${this.streamUrl || '(未知 URL)'} 拉流，本段已写 ${mb(this.currentBytes)}，累计 ${mb(this._cumBase + this.currentBytes)}，实时 ${Math.round(this._rateBits / 1000)} kb/s`, this._meta());
+    }
     if (this.task.segmentMode === 'size' && !this.rotating && !this.stopping && !this.paused) {
       const limit = Math.max(16, Number(this.task.segmentSizeMB) || 2048) * 1024 * 1024;
       if (this.currentBytes >= limit) await this._rotate();

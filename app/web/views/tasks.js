@@ -154,21 +154,21 @@ function paint(ctx, force) {
 
   root.innerHTML = `
     <div class="card">
-      <div class="toolbar">
-        <input class="input" id="tkQ" style="width:250px" placeholder="搜索主播 / 房间号 / 标题…" value="${esc(state.q)}" />
-        <select class="select" id="tkPlat" style="width:150px">
+      <div class="toolbar tq">
+        <input class="input" id="tkQ" style="width:170px" placeholder="搜索主播 / 房间号 / 标题…" value="${esc(state.q)}" />
+        <select class="select" id="tkPlat" style="width:108px">
           <option value="">全部平台</option>
           ${state.platforms.filter((p) => state.enabledSet[p.id] !== false || state.platform === p.id).map((p) => `<option value="${esc(p.id)}"${state.platform === p.id ? ' selected' : ''}>${esc(p.name)}</option>`).join('')}
         </select>
-        <select class="select" id="tkLive" style="width:150px">
+        <select class="select" id="tkLive" style="width:118px">
           ${[['', '全部直播状态'], ['live', '直播中'], ['offline', '未直播'], ['unknown', '未知']]
             .map(([v, t]) => `<option value="${v}"${state.liveStatus === v ? ' selected' : ''}>${t}</option>`).join('')}
         </select>
-        <select class="select" id="tkStatus" style="width:150px">
+        <select class="select" id="tkStatus" style="width:128px">
           ${[['', '全部录制状态'], ['recording', '录制中'], ['stopped', '已停止'], ['queued', '排队中'], ['waiting', '等待开播'], ['completed', '已完成'], ['error', '错误'], ['idle', '待机']]
             .map(([v, t]) => `<option value="${v}"${state.status === v ? ' selected' : ''}>${t}</option>`).join('')}
         </select>
-        <select class="select" id="tkSort" style="width:158px">
+        <select class="select" id="tkSort" style="width:138px">
           ${[['custom', '自定义排序'], ['created', '按创建时间排序'], ['duration', '按已录时长排序'], ['size', '按文件大小排序'], ['status', '按状态排序']]
             .map(([v, t]) => `<option value="${v}"${state.sort === v ? ' selected' : ''}>${t}</option>`).join('')}
         </select>

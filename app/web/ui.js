@@ -67,11 +67,11 @@ export function formatTime(ts) {
   return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
-/** 21:04:12.318 —— 日志行用的毫秒级时间戳 */
+/** 2025-06-01 21:04:12.318 —— 日志行用的日期+毫秒级时间戳 */
 export function formatLogTime(ts) {
   const d = toDate(ts);
   if (!d) return '—';
-  return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}.${String(d.getMilliseconds()).padStart(3, '0')}`;
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}.${String(d.getMilliseconds()).padStart(3, '0')}`;
 }
 
 /** 相对时间：「刚刚 / 12 分钟前 / 3 天前」 */
