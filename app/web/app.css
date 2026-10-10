@@ -364,17 +364,16 @@ label.fl{display:block;font-size:12.5px;color:var(--txt-2);margin:0 0 7px}
 .toolbar.tq{flex-wrap:nowrap}
 .toolbar.tq .input,.toolbar.tq .select{flex:0 1 auto;min-width:52px;padding:6px 7px}
 .toolbar.tq .input{flex:1 1 auto}
-/* 存储分布：左侧小环 + 右侧明细 + 底部汇总 */
-.pkbody{display:flex;gap:12px;align-items:center;margin-top:10px}
-.pkdonut{flex:0 0 auto}
-.pkleg{display:flex;flex-direction:column;gap:3px;min-width:0;flex:1}
-.pkleg span{display:flex;align-items:center;gap:6px;font-size:11.5px;color:var(--txt-2);white-space:nowrap}
-.pkleg span i{width:8px;height:8px;border-radius:3px;flex:0 0 auto}
+/* 存储统计：大环形居中 + 图例双列铺满 */
+.pkdonut-wrap{display:flex;justify-content:center;margin:0 0 12px}
+.pkleg{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px 16px;margin-top:2px}
+.pkleg span{display:flex;align-items:center;gap:7px;font-size:12px;color:var(--txt-2);white-space:nowrap;min-width:0}
+.pkleg span i{width:9px;height:9px;border-radius:3px;flex:0 0 auto}
 .pkleg span b{margin-left:auto;color:var(--txt-1);font-weight:600}
-.pkfoot{display:flex;align-items:baseline;gap:5px;margin-top:8px;padding-top:7px;border-top:1px dashed var(--line);font-size:11.5px;color:var(--txt-3)}
-.pkfoot b{color:var(--txt-1);font-weight:600;font-size:14px}
+.pkfoot{display:flex;align-items:baseline;gap:5px;margin-top:12px;padding-top:8px;border-top:1px dashed var(--line);font-size:12px;color:var(--txt-3)}
+.pkfoot b{color:var(--txt-1);font-weight:600;font-size:15px}
 .pkfoot .pkmore{margin-left:auto}
-.pk-empty{font-size:11.5px;color:var(--txt-3);margin-top:10px}
+.pk-empty{font-size:12px;color:var(--txt-3);text-align:center}
 /* 磁盘信息块(并入存储分布) */
 .pkdisk{margin-top:12px;padding-top:10px;border-top:1px dashed var(--line)}
 .pkdisk .dd{display:flex;flex-wrap:wrap;gap:4px 12px;font-size:11.5px;color:var(--txt-3);margin-bottom:7px}
