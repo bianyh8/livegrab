@@ -115,7 +115,7 @@ function paint(ctx, status) {
           .map(([v, t]) => `<button class="mini${state.idleFilter === v ? ' sel' : ''}" data-idle="${v}">${t}</button>`).join('')}
       </div>
       <div class="card-b" style="padding:12px">
-        ${idleFiltered.length ? `<div class="task-grid">${idleFiltered.map(idleRow).join('')}</div>` : emptyBox('这里没有符合该状态的任务')}
+        ${idleFiltered.length ? `<div class="idle-grid">${idleFiltered.map(idleRow).join('')}</div>` : emptyBox('这里没有符合该状态的任务')}
       </div>
     </div>`;
 
@@ -301,7 +301,7 @@ function monitorItem(t) {
     </div>`;
 }
 
-/** 任务状态统一行（排队 / 等待开播 / 仅监控） */
+/** 任务状态统一行（排队 / 等待开播 / 仅监控）：头像+平台+主播名+直播状态+立即检测+详情 单行一行 */
 function idleRow(t) {
   const isMonitor = t.kind === 'monitor';
   const live = t.liveStatus === 'live';
@@ -311,21 +311,16 @@ function idleRow(t) {
   else statusChip = '<span class="chip wait"><i class="dot"></i>等待开播</span>';
   const name = t.anchorName || String(t.name || '').replace(/^【.+?】/, '') || '未命名任务';
   const plat = t.platform || parseName(t.name).platform;
-  const flag = isMonitor ? '<span class="chip bili" style="margin-left:6px"><i class="dot"></i>仅监控</span>' : '';
-  let act = '';
-  if (isMonitor && live) act = `<button class="btn sm ok" data-act="start" data-id="${esc(t.id)}">开始录制</button>`;
-  else if (t.kind === 'waiting') act = `<button class="btn sm" data-act="check" data-id="${esc(t.id)}">立即检测</button>`;
-  else if (t.kind === 'queued') act = `<button class="btn sm" data-act="detail" data-id="${esc(t.id)}">详情</button>`;
-  act += ` <button class="btn sm ghost" data-act="detail" data-id="${esc(t.id)}" title="查看详情">详情</button>`;
+  const platName = PLATMAP[plat] || (t.platformName || '未知');
+  const avLabel = isMonitor ? '监控' : (t.kind === 'queued' ? '排队' : '待播');
   return `
-    <div class="rec-item" style="padding:11px 16px">
-      ${dashThumb(t, isMonitor ? '监控' : (t.kind === 'queued' ? '排队' : '待播'))}
-      ${platBadge(plat, t.platformName)}
-      <div class="rec-main">
-        <div class="ttl" style="font-size:13px">${esc(name)}${flag}</div>
-        <div class="meta">${statusChip}${t.roomId ? `<span>房号 ${esc(t.roomId)}</span>` : ''}${t.reason ? `<span>${esc(t.reason)}</span>` : ''}${t.statusMessage ? `<span>${esc(t.statusMessage)}</span>` : ''}</div>
-      </div>
-      <div class="acts">${act}</div>
+    <div class="idle3" title="${esc(name)}">
+      ${dashThumb(t, avLabel)}
+      <span class="idle-plat">${esc(platName)}</span>
+      <span class="idle-anchor">${esc(name)}</span>
+      ${statusChip}
+      <button class="btn sm" data-act="check" data-id="${esc(t.id)}" title="立即检测该直播间是否已开播">立即检测</button>
+      <button class="btn sm ghost" data-act="detail" data-id="${esc(t.id)}">详情</button>
     </div>`;
 }
 
