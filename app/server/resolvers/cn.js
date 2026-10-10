@@ -21,6 +21,7 @@ export const huya = {
     const nick = /"nick":"([^"]{1,40})"/.exec(html)?.[1] || /<h1[^>]*class="[^"]*host-name[^"]*"[^>]*>([^<]+)</.exec(html)?.[1] || '';
     const title = /"introduction":"([^"]{1,80})"/.exec(html)?.[1] || /<h1[^>]*class="[^"]*title[^"]*"[^>]*>([^<]+)</.exec(html)?.[1] || '';
     const live = /"liveStatus":"?(\d)/.exec(html)?.[1] === '1' || /"isOn":true/.test(html) || /class="[^"]*live[^"]*"/.test(html);
+    logger?.debug(`虎牙取到房间元数据：主播「${nick.trim() || '未知主播'}」，状态：${live ? '开播' : '未开播'}`);
     return {
       roomId: String(roomId), anchorName: nick.trim(), title: title.trim(), avatar: '',
       liveStatus: live ? 'live' : 'offline', online: null,
@@ -59,6 +60,7 @@ export const douyu = {
       headers: { Referer: `https://www.douyu.com/${roomId}` }, logger, label: 'douyu.betard',
     }).catch(() => null);
     const room = j?.room || {};
+    logger?.debug(`斗鱼取到房间元数据：主播「${room.nickname || room.owner_name || '未知主播'}」，状态：${Number(room.show_status) === 1 ? '开播' : '未开播'}`);
     return {
       roomId: String(room.room_id || roomId),
       anchorName: room.nickname || room.owner_name || '',
@@ -100,6 +102,7 @@ export const kuaishou = {
     const nick = /"name":"([^"]{1,40})"/.exec(html)?.[1] || '';
     const title = /"caption":"([^"]{1,80})"/.exec(html)?.[1] || '';
     const live = /"liveStreamId"/.test(html) || /"playUrls"/.test(html);
+    logger?.debug(`快手取到房间元数据：主播「${nick || '未知主播'}」，状态：${live ? '开播' : '未开播'}`);
     return {
       roomId: String(roomId), anchorName: nick, title, avatar: '',
       liveStatus: live ? 'live' : 'offline', online: null,

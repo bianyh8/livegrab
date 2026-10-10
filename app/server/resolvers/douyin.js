@@ -217,7 +217,7 @@ export async function resolveRoom({ roomId, settings, logger, probe = false }) {
       if (inner && inner.room && !inner.room._fallback && inner.room.owner && inner.room.owner.nickname) {
         room.owner = inner.room.owner;
         if (!room.title && inner.room.title) room.title = inner.room.title;
-        logger?.debug(`抖音短号 ${roomId} 映射内部号 ${room.id_str}，回查补全主播名：${inner.room.owner?.nickname}`, {});
+        logger?.debug(`抖音短号映射内部号，回查补全主播名：「${inner.room.owner?.nickname}」`, {});
       }
     } catch (e) {
       logger?.debug(`抖音短号回查补全失败：${e.message}`, {});
@@ -282,5 +282,5 @@ export async function resolveStream({ roomId, quality, settings, logger }) {
       };
     }
   }
-  throw new HttpError('NO_STREAM', `直播间没有可用流（状态 ${room.status}），可能未开播或需要登录 Cookie`, 502);
+  throw new HttpError('NO_STREAM', `直播间没有可用流（状态：${room.status === 2 ? '开播' : '未开播'}），可能未开播或需要登录 Cookie`, 502);
 }

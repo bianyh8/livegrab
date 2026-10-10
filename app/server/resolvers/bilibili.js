@@ -51,6 +51,7 @@ export async function resolveRoom({ roomId, settings, logger, probe = false }) {
       logger?.debug(`主播信息获取失败（不影响开播判断）：${e.message}`);
     }
   }
+  if (anchorName) logger?.debug(`B站取到房间元数据：主播「${anchorName}」，状态：${Number(d.live_status) === 1 ? '开播' : '未开播'}`);
   return {
     roomId: realId,
     anchorName,
