@@ -486,7 +486,7 @@ async function boot() {
     await api.health();
   } catch { /* 后端尚未就绪也不阻塞登录页 */ }
   await checkAuth();
-  await loadI18n().catch(() => {}); // 鉴权后拉取界面字典（失败不阻塞）
+  void loadI18n().catch(() => {}); // 拉取可外部编辑的字典覆盖（默认字典已同步可用，不阻塞首帧）
   startSse();
 }
 
