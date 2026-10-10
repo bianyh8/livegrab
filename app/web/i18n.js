@@ -23,8 +23,10 @@ export async function loadI18n() {
   try {
     const res = await fetch('/api/i18n', { credentials: 'same-origin' });
     if (!res.ok) return;
-    const data = await res.json();
-    if (data && typeof data === 'object') { dict = data; loaded.push(Date.now()); }
+    const payload = await res.json();
+    // 后端 ok() 统一包成 { ok:true, data:... }，取 data 层为字典本体
+    const obj = payload && typeof payload === 'object' ? (payload.data ?? payload) : null;
+    if (obj && typeof obj === 'object') { dict = obj; loaded.push(Date.now()); }
   } catch { /* 网络失败：保留当前 dict（可能为空），不阻塞启动 */ }
   return i18nLoaded();
 }
