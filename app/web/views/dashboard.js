@@ -158,7 +158,7 @@ function platformStoreBlock(pstore) {
   const list = (pstore || []).filter((p) => p.bytes > 0);
   if (!total || !list.length) return '<div class="pk-empty">暂无录制文件</div>';
   const colors = ['#4f9cf7', '#34c77b', '#f2b93d', '#e0615d', '#9b6ff0', '#2bb3c0', '#f472b6', '#a3b0c2'];
-  const R = 46, C = 2 * Math.PI * R;
+  const R = 20, C = 2 * Math.PI * R;
   let offset = 0;
   const arcs = list.map((p, i) => {
     const frac = (p.bytes || 0) / total;
@@ -173,10 +173,9 @@ function platformStoreBlock(pstore) {
     offset += len;
     return a;
   });
-  const svg = `<svg viewBox="0 0 120 120" width="96" height="96">
-    <circle cx="60" cy="60" r="${R}" fill="none" stroke="rgba(255,255,255,.07)" stroke-width="13"/>
-    ${arcs.map((a) => `<circle cx="60" cy="60" r="${R}" fill="none" stroke="${a.color}" stroke-width="13" stroke-dasharray="${a.dasharray}" stroke-dashoffset="${a.dashoffset}" transform="rotate(-90 60 60)"/>`).join('')}
-    <text x="60" y="60" text-anchor="middle" fill="var(--txt-1)" font-size="12.5" font-weight="600">${esc(formatBytes(total))}</text>
+  const svg = `<svg viewBox="0 0 60 60" width="54" height="54">
+    <circle cx="30" cy="30" r="${R}" fill="none" stroke="rgba(255,255,255,.08)" stroke-width="7"/>
+    ${arcs.map((a) => `<circle cx="30" cy="30" r="${R}" fill="none" stroke="${a.color}" stroke-width="7" stroke-dasharray="${a.dasharray}" stroke-dashoffset="${a.dashoffset}" transform="rotate(-90 30 30)"/>`).join('')}
   </svg>`;
   const leg = `<div class="pkleg">${arcs.map((a) => `<span><i style="background:${a.color}"></i>${a.name} <b>${a.size}</b></span>`).join('')}</div>`;
   return `<div class="pkbody"><div class="pkdonut">${svg}</div>${leg}</div>`;
