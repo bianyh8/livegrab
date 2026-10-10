@@ -1,5 +1,5 @@
 /* LiveGrab · views/settings/index.js —— 系统设置入口
-   5 个页签：① 录制与存储 ② 命名规则 ③ 平台账号 ④ 通知 ⑤ 安全与登录（§6.5.1 修正）。
+   6 个页签：① 录制 ② 存储 ③ 命名规则 ④ 平台账号 ⑤ 通知 ⑥ 安全与登录。
    各页签实现放 views/settings/tab-*.js，统一通过 tabkit.js 读写设置。 */
 
 import { esc, toast } from '../../ui.js';
@@ -10,6 +10,7 @@ export const page = 'settings';
 
 const TABS = [
   { id: 'rec', label: t('settings.tabRec') },
+  { id: 'store', label: t('settings.tabStore') },
   { id: 'naming', label: t('settings.tabNaming') },
   { id: 'platform', label: t('settings.tabPlatform') },
   { id: 'notify', label: t('settings.tabNotify') },
@@ -81,6 +82,7 @@ async function mount(ctx) {
   let mod;
   try {
     if (state.tab === 'rec') mod = await import('./tab-rec.js');
+    else if (state.tab === 'store') mod = await import('./tab-store.js');
     else if (state.tab === 'naming') mod = await import('./tab-naming.js');
     else if (state.tab === 'platform') mod = await import('./tab-platform.js');
     else if (state.tab === 'notify') mod = await import('./tab-notify.js');

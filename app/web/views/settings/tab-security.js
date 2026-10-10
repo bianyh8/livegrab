@@ -1,4 +1,4 @@
-/* LiveGrab · views/settings/tab-security.js —— ⑤ 安全与登录
+/* LiveGrab · views/settings/tab-security.js —— ⑥ 安全与登录
    修改密码（POST /api/auth/password）＋ 登录有效期 / 失败锁定说明 ＋ 退出登录 / 注销所有会话
    ＋ scrypt 与 Cookie 存储位置说明。 */
 

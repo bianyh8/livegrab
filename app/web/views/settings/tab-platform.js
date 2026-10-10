@@ -1,4 +1,4 @@
-/* LiveGrab · views/settings/tab-platform.js —— ③ 平台账号
+/* LiveGrab · views/settings/tab-platform.js —— ④ 平台账号
    平台表格：平台 / 登录与 Cookie / 可用清晰度 / 并发上限 / 稳定性 / 启用 / 操作（D13）
    ＋ Cookie 批量导入 ＋ 网络代理 ＋ 开播监控参数。 */
 

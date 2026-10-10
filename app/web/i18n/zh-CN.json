@@ -254,7 +254,7 @@
   "logs.noLogs": "（无日志）",
   "logs.copied": "日志已复制到剪贴板",
   "logs.exportedToast": "已导出日志",
-  "settings.tabRec": "录制与存储",
+  "settings.tabRec": "录制",
   "settings.tabNaming": "命名规则",
   "settings.tabPlatform": "平台账号",
   "settings.tabNotify": "通知",
@@ -743,5 +743,6 @@
   "tasks.anchorNameLabel": "主播名称",
   "files.dateFrom": "起始日期",
   "files.dateTo": "结束日期",
-  "files.dateSep": "至"
+  "files.dateSep": "至",
+  "settings.tabStore": "存储"
 }

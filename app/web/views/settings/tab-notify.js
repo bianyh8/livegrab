@@ -1,4 +1,4 @@
-/* LiveGrab · views/settings/tab-notify.js —— ④ 通知
+/* LiveGrab · views/settings/tab-notify.js —— ⑤ 通知
    Webhook ＋ 6 个事件开关 ＋ 60 秒去重开关（D18）＋ 5/15/45 秒重试开关 ＋ 测试发送。 */
 
 import { api } from '../../api.js';

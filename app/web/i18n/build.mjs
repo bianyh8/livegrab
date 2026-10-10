@@ -108,7 +108,7 @@ const ADD = {
   'logs.copied': '日志已复制到剪贴板', 'logs.exportedToast': '已导出日志',
 
   // settings
-  'settings.tabRec': '录制与存储', 'settings.tabNaming': '命名规则', 'settings.tabPlatform': '平台账号',
+  'settings.tabRec': '录制', 'settings.tabStore': '存储', 'settings.tabNaming': '命名规则', 'settings.tabPlatform': '平台账号',
   'settings.tabNotify': '通知', 'settings.tabSecurity': '安全与登录',
   'settings.loading': '正在加载设置…', 'settings.loadFailed': '读取设置失败：{0}',
   'settings.tabLoadFailed': '该页签加载失败：{0}', 'settings.saved': '设置已保存',

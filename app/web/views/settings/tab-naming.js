@@ -1,4 +1,4 @@
-/* LiveGrab · views/settings/tab-naming.js —— ② 命名规则（核心页签）
+/* LiveGrab · views/settings/tab-naming.js —— ③ 命名规则（核心页签）
    命名配置卡片（下拉 / 绑定范围 / 新建 / 复制 / 删除，D12）＋ 文件名模板 + 变量 chip 插入光标处
    ＋ 目录模板 ＋ 日期格式 / 序号位数 / 时间格式 / 非法字符 / 重名策略 / 截断长度
    ＋ 右侧实时预览（POST /api/naming/preview 渲染 3 行）＋ 变量表（12 个变量）。 */
