@@ -40,8 +40,8 @@
 
 **① 克隆代码**
 ```bash
-git clone https://github.com/bianyh8/LiveGrab.git
-cd liverecord
+git clone https://github.com/bianyh8/livegrab.git
+cd livegrab
 ```
 
 **② 构建并启动**
