@@ -182,7 +182,7 @@ function recItem(t) {
           ${platBadge(t.platform, t.platformName)}<span>房间 ${esc(t.roomId || '—')}</span>
           <span class="chip">${esc(quality)}</span>
           <span class="chip">${segOf === 'none' ? '不分段' : esc(segOf)}</span>
-          <span class="chip on"><i class="dot"></i>${segOf === 'none' ? `单文件 · 已写 ${esc(formatBytes(bytes))}` : `第 ${segIndex} 段 / 已写 ${esc(formatBytes(current))}`}</span>
+          <span class="chip on"><i class="dot"></i>${segOf === 'none' ? `单文件 · 已写 ${esc(formatBytes(bytes))}` : `第 ${segIndex} 段 · 已写 ${esc(formatBytes(bytes))}`}</span>
         </div>
         ${isAudio && segOf === 'none'
           ? `<div class="bar" style="width:100%"><i style="width:${Math.min(95, Math.max(4, Math.round((current / (60 * 60)) * 100)))}%"></i></div>`
@@ -190,7 +190,7 @@ function recItem(t) {
       </div>
       <div class="rec-right">
         <div class="tm">${esc(formatDuration(elapsed))}</div>
-        <div style="font-size:11px;color:var(--txt-3)">${segOf === 'none' ? '单文件' : '本段 ' + esc(formatDuration(current))}</div>
+        <div style="font-size:11px;color:var(--txt-3)">${segOf === 'none' ? '单文件' : '本段 ' + esc(formatDuration(current)) /* current=本段已录秒数，仅用于时长 */}</div>
         <div class="acts" style="margin-top:7px">
           <button class="btn sm danger" data-act="stop" data-id="${esc(t.id)}">停止录制</button>
         </div>
