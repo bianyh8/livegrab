@@ -11,7 +11,7 @@ import {
 
 export const page = 'dashboard';
 
-const state = { tasks: [], booted: false, pending: false, lastStatus: null, collapsed: new Set() };
+const state = { tasks: [], booted: false, pending: false, lastStatus: null, collapsed: new Set(['rec', 'wait', 'monitor']) };
 
 export async function render(root, ctx) {
   root.innerHTML = `<div class="stack"><div class="card"><div class="empty">正在加载总览…</div></div></div>`;
