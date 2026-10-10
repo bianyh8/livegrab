@@ -408,7 +408,7 @@ function applyStatus(st) {
   if (nTask) { nTask.textContent = taskCnt || ''; nTask.style.display = taskCnt ? '' : 'none'; }
   const fileBytes = (st.platformStore || []).reduce((a, p) => a + (p.bytes || 0), 0);
   const nFile = el('navFileBadge');
-  if (nFile) { const t = fileBytes ? formatBytes(fileBytes) : ''; nFile.textContent = t; nFile.style.display = t ? '' : 'none'; }
+  if (nFile) { const txt = fileBytes ? formatBytes(fileBytes) : ''; nFile.textContent = txt; nFile.style.display = txt ? '' : 'none'; }
 
   // 顶栏不再显示「下载带宽」：与总览『实时带宽』同源(stats.downSpeed)，已下放总览展示，删去冗余
 }

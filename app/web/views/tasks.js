@@ -117,9 +117,9 @@ async function moveTask(id, dir) {
   if (i < 0) return;
   const j = i + dir;
   if (j < 0 || j >= state.tasks.length) return;
-  const t = state.tasks[i];
+  const item = state.tasks[i];
   state.tasks.splice(i, 1);
-  state.tasks.splice(j, 0, t);
+  state.tasks.splice(j, 0, item);
   state.hash = '';
   try { await api.tasksReorder(state.tasks.map((x) => x.id)); }
   catch (e) { toast(e.message || t('tasks.sortSaveFail'), 'err'); }
@@ -210,68 +210,68 @@ function table(list) {
   </table>`;
 }
 
-function row(t) {
-  const name = state.platforms.find((p) => p.id === t.platform);
-  const checked = state.selected.has(t.id) ? ' checked' : '';
-  const isLive = t.liveStatus === 'live' || t.status === 'recording';
+function row(item) {
+  const name = state.platforms.find((p) => p.id === item.platform);
+  const checked = state.selected.has(item.id) ? ' checked' : '';
+  const isLive = item.liveStatus === 'live' || item.status === 'recording';
   const avatarImg = isLive
-    ? `<img class="tk-thumb" loading="lazy" src="/api/tasks/${esc(t.id)}/thumb" alt="" onerror="this.style.display='none'" />`
-    : (t.avatar ? `<img class="tk-thumb" loading="lazy" src="${esc(t.avatar)}" alt="" onerror="this.style.display='none'" />` : '');
-  return `<tr data-id="${esc(t.id)}">
-    <td><input type="checkbox" class="cb" data-pick="${esc(t.id)}"${checked} /></td>
+    ? `<img class="tk-thumb" loading="lazy" src="/api/tasks/${esc(item.id)}/thumb" alt="" onerror="this.style.display='none'" />`
+    : (item.avatar ? `<img class="tk-thumb" loading="lazy" src="${esc(item.avatar)}" alt="" onerror="this.style.display='none'" />` : '');
+  return `<tr data-id="${esc(item.id)}">
+    <td><input type="checkbox" class="cb" data-pick="${esc(item.id)}"${checked} /></td>
     <td>
       <div class="tk-cell">
         <div class="tk-avatar">
-          <span class="tk-ph">${esc((t.anchorName || t.name || '?').slice(0, 1))}</span>
+          <span class="tk-ph">${esc((item.anchorName || item.name || '?').slice(0, 1))}</span>
           ${avatarImg}
           ${isLive ? '<span class="tk-live"><i></i>' + t('tasks.live') + '</span>' : ''}
         </div>
         <div class="tk-bio">
-          <div style="font-weight:600">${esc(t.anchorName || t.name || t('common.unnamed'))}${t.monitorOnly ? ' <span class="tag">' + t('common.monitorOnly') + '</span>' : ''}</div>
-          <div class="sub">${esc(t.title || t('tasks.noTitle'))} · ${t('tasks.roomNoShort', esc(t.roomId || '—'))}</div>
+          <div style="font-weight:600">${esc(item.anchorName || item.name || t('common.unnamed'))}${item.monitorOnly ? ' <span class="tag">' + t('common.monitorOnly') + '</span>' : ''}</div>
+          <div class="sub">${esc(item.title || t('tasks.noTitle'))} · ${t('tasks.roomNoShort', esc(item.roomId || '—'))}</div>
         </div>
       </div>
     </td>
-    <td>${platIcon(t.platform, (name && name.name) || platName(t.platform) || t.platformName)}</td>
-    <td>${liveStatusCell(t)}</td>
-    <td>${recStatusCell(t)}</td>
-    <td><span class="chip">${esc(qualityLabelOf(t))}</span></td>
+    <td>${platIcon(item.platform, (name && name.name) || platName(item.platform) || item.platformName)}</td>
+    <td>${liveStatusCell(item)}</td>
+    <td>${recStatusCell(item)}</td>
+    <td><span class="chip">${esc(qualityLabelOf(item))}</span></td>
     ${state.sort === 'custom' ? `<td>
       <div class="mvrow">
-        <span class="rnk">${esc(String(state.tasks.indexOf(t) + 1))}</span>
-        <button class="mvbtn" data-mv="up" data-id="${esc(t.id)}" title="${t('tasks.moveUp')}">↑</button>
-        <button class="mvbtn" data-mv="down" data-id="${esc(t.id)}" title="${t('tasks.moveDown')}">↓</button>
+        <span class="rnk">${esc(String(state.tasks.indexOf(item) + 1))}</span>
+        <button class="mvbtn" data-mv="up" data-id="${esc(item.id)}" title="${t('tasks.moveUp')}">↑</button>
+        <button class="mvbtn" data-mv="down" data-id="${esc(item.id)}" title="${t('tasks.moveDown')}">↓</button>
       </div>
     </td>` : ''}
-    <td><div class="acts">${rowActions(t).join('')}</div></td>
+    <td><div class="acts">${rowActions(item).join('')}</div></td>
   </tr>`;
 }
 
 /* 状态拆为两列：直播状态（看播） + 录制状态（任务自身的录制工作流） */
-function liveStatusCell(t) {
-  const live = t.liveStatus === 'live' || t.status === 'recording';
+function liveStatusCell(item) {
+  const live = item.liveStatus === 'live' || item.status === 'recording';
   return live
     ? '<span class="chip on"><i class="dot"></i>' + t('tasks.live') + '</span>'
     : '<span class="chip off"><i class="dot"></i>' + t('tasks.notLive') + '</span>';
 }
 
-function recStatusCell(t) {
-  const recording = ['recording', 'stopping', 'merging'].includes(t.status);
+function recStatusCell(item) {
+  const recording = ['recording', 'stopping', 'merging'].includes(item.status);
   if (recording) return '<span class="pulse"><b></b>' + t('common.recording') + '</span>';
-  if (t.monitorOnly) return '<span class="chip bili" title="' + t('tasks.monitorOnlyTip') + '"><i class="dot"></i>' + t('common.monitorOnly') + '</span>';
-  if (t.manualHeld || t.status === 'stopped') return '<span class="chip off" title="' + t('tasks.stoppedTip') + '"><i class="dot"></i>' + t('tasks.stopped') + '</span>';
-  if (t.status === 'error') return '<span class="chip err"><i class="dot"></i>' + t('tasks.abnormal') + '</span>';
+  if (item.monitorOnly) return '<span class="chip bili" title="' + t('tasks.monitorOnlyTip') + '"><i class="dot"></i>' + t('common.monitorOnly') + '</span>';
+  if (item.manualHeld || item.status === 'stopped') return '<span class="chip off" title="' + t('tasks.stoppedTip') + '"><i class="dot"></i>' + t('tasks.stopped') + '</span>';
+  if (item.status === 'error') return '<span class="chip err"><i class="dot"></i>' + t('tasks.abnormal') + '</span>';
   return '<span class="chip"><i class="dot"></i>' + t('tasks.notRecorded') + '</span>';
 }
 
-function rowActions(t) {
-  const id = esc(t.id);
+function rowActions(item) {
+  const id = esc(item.id);
   const acts = [];
-  const recording = ['recording', 'stopping', 'merging'].includes(t.status);
+  const recording = ['recording', 'stopping', 'merging'].includes(item.status);
   if (recording) {
     acts.push(`<button class="btn sm danger" data-act="stop" data-id="${id}">${t('common.stopRecord')}</button>`);
-  } else if (t.liveStatus === 'live') {
-    acts.push(`<button class="btn sm ok" data-act="start" data-id="${id}"${t.monitorOnly ? ' title="' + t('tasks.monitorOnlyStartTip') + '"' : ''}>${t('tasks.startRecord')}</button>`);
+  } else if (item.liveStatus === 'live') {
+    acts.push(`<button class="btn sm ok" data-act="start" data-id="${id}"${item.monitorOnly ? ' title="' + t('tasks.monitorOnlyStartTip') + '"' : ''}>${t('tasks.startRecord')}</button>`);
   } else {
     acts.push(`<button class="btn sm" data-act="check" data-id="${id}" title="${t('common.checkLiveTip')}">${t('common.checkLive')}</button>`);
   }

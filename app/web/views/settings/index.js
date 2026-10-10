@@ -4,7 +4,7 @@
 
 import { esc, toast } from '../../ui.js';
 import { makeKit } from './tabkit.js';
-import { t } from '../i18n.js';
+import { t } from '../../i18n.js';
 
 export const page = 'settings';
 
