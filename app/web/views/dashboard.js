@@ -144,14 +144,14 @@ function todayDuration(sec) {
 
 /* 下载带宽字段 live.speed 由后端实时下发，已改在 app.js 顶部状态栏展示 */
 
-/* 存储分布：大环形居中 + 图例铺满 + 合计 */
+/* 存储分布：左侧环形 + 右侧平台文字，环形中心合计为红色 */
 function platformStoreBlock(pstore) {
   const total = (pstore || []).reduce((a, p) => a + (p.bytes || 0), 0);
   const list = (pstore || []).filter((p) => p.bytes > 0);
   // 无录制文件也显示环形（空环），便于与磁盘信息同卡展示
   if (!total || !list.length) {
-    const empty = `<svg viewBox="0 0 120 120" width="132" height="132"><circle cx="60" cy="60" r="46" fill="none" stroke="rgba(255,255,255,.10)" stroke-width="16"/><text x="60" y="64" text-anchor="middle" fill="var(--txt-3)" font-size="13">0 B</text></svg>`;
-    return `<div class="pkdonut-wrap">${empty}</div><div class="pkleg pk-empty" style="justify-content:center">暂无录制文件</div>`;
+    const empty = `<svg viewBox="0 0 120 120" width="110" height="110"><circle cx="60" cy="60" r="46" fill="none" stroke="rgba(255,255,255,.10)" stroke-width="16"/><text x="60" y="64" text-anchor="middle" fill="var(--err)" font-size="14" font-weight="700">0 B</text></svg>`;
+    return `<div class="pkbody"><div class="pkdonut">${empty}</div><div class="pkleg pk-empty" style="justify-content:center">暂无录制文件</div></div>`;
   }
   const colors = ['#4f9cf7', '#34c77b', '#f2b93d', '#e0615d', '#9b6ff0', '#2bb3c0', '#f472b6', '#a3b0c2'];
   const R = 46, C = 2 * Math.PI * R;
@@ -169,16 +169,16 @@ function platformStoreBlock(pstore) {
     offset += len;
     return a;
   });
-  const svg = `<svg viewBox="0 0 120 120" width="132" height="132">
+  const svg = `<svg viewBox="0 0 120 120" width="110" height="110">
     <circle cx="60" cy="60" r="${R}" fill="none" stroke="rgba(255,255,255,.08)" stroke-width="16"/>
     ${arcs.map((a) => `<circle cx="60" cy="60" r="${R}" fill="none" stroke="${a.color}" stroke-width="16" stroke-dasharray="${a.dasharray}" stroke-dashoffset="${a.dashoffset}" transform="rotate(-90 60 60)"/>`).join('')}
-    <text x="60" y="60" text-anchor="middle" fill="var(--txt-1)" font-size="15" font-weight="700">${esc(formatBytes(total))}</text>
+    <text x="60" y="59" text-anchor="middle" fill="var(--err)" font-size="14" font-weight="700">${esc(formatBytes(total))}</text>
     <text x="60" y="76" text-anchor="middle" fill="var(--txt-3)" font-size="10">共 ${list.length} 平台</text>
   </svg>`;
   const leg = `<div class="pkleg">${arcs.slice(0, 10).map((a) => `<span><i style="background:${a.color}"></i>${a.name}<b>${a.size}</b></span>`).join('')}</div>`;
   const extra = list.length > 10 ? `<span class="pkmore">另有 ${list.length - 10} 个平台</span>` : '';
   const foot = `<div class="pkfoot">合计 <b>${esc(formatBytes(total))}</b><span>· 共 ${list.length} 平台</span>${extra}</div>`;
-  return `<div class="pkdonut-wrap">${svg}</div>${leg}${foot}`;
+  return `<div class="pkbody"><div class="pkdonut">${svg}</div>${leg}</div>${foot}`;
 }
 
 function diskAlert(free) {
