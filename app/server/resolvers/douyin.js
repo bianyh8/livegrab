@@ -194,7 +194,7 @@ async function enterRoom(roomId, settings, logger) {
   );
 }
 
-export async function resolveRoom({ roomId, settings, logger }) {
+export async function resolveRoom({ roomId, settings, logger, probe = false }) {
   const { room, source, note } = await enterRoom(roomId, settings, logger);
   if (room._fallback) {
     return {
@@ -210,7 +210,8 @@ export async function resolveRoom({ roomId, settings, logger }) {
   }
   // 短号（web_rid）映射到 19 位内部号时，移动接口常只返回极简 room（有 id_str 但缺 owner），
   // 这里用映射出的内部号再回查一次，把主播名/头像/标题补全，避免"房间能解析但主播名为空"。
-  if (!(room.owner && room.owner.nickname) && room.id_str && String(room.id_str) !== String(roomId)) {
+  // 轮询（probe=true）只取直播状态，跳过该回查：不补全主播名，减少一次请求与日志噪音。
+  if (!probe && !(room.owner && room.owner.nickname) && room.id_str && String(room.id_str) !== String(roomId)) {
     try {
       const inner = await enterRoom(room.id_str, settings, logger);
       if (inner && inner.room && !inner.room._fallback && inner.room.owner && inner.room.owner.nickname) {

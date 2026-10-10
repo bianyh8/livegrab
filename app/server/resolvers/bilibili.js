@@ -23,7 +23,7 @@ function headers(roomId, settings) {
   };
 }
 
-export async function resolveRoom({ roomId, settings, logger }) {
+export async function resolveRoom({ roomId, settings, logger, probe = false }) {
   const init = await httpJson(`https://api.live.bilibili.com/room/v1/Room/room_init?id=${encodeURIComponent(roomId)}`, {
     headers: headers(roomId, settings), logger, label: 'bili.room_init',
   });
@@ -40,13 +40,16 @@ export async function resolveRoom({ roomId, settings, logger }) {
   const d = info.data || {};
   let anchorName = '';
   let avatar = '';
-  try {
-    const a = await httpJson(`https://api.live.bilibili.com/live_user/v1/UserInfo/get_anchor_in_room?roomid=${realId}`, {
-      headers: headers(realId, settings), logger, label: 'bili.anchor',
-    });
-    if (a.code === 0) { anchorName = a.data?.info?.uname || ''; avatar = a.data?.info?.face || ''; }
-  } catch (e) {
-    logger?.debug(`主播信息获取失败（不影响开播判断）：${e.message}`);
+  // 轮询（probe=true）只取直播状态：跳过主播信息接口，减少一次请求
+  if (!probe) {
+    try {
+      const a = await httpJson(`https://api.live.bilibili.com/live_user/v1/UserInfo/get_anchor_in_room?roomid=${realId}`, {
+        headers: headers(realId, settings), logger, label: 'bili.anchor',
+      });
+      if (a.code === 0) { anchorName = a.data?.info?.uname || ''; avatar = a.data?.info?.face || ''; }
+    } catch (e) {
+      logger?.debug(`主播信息获取失败（不影响开播判断）：${e.message}`);
+    }
   }
   return {
     roomId: realId,

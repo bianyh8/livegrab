@@ -145,7 +145,8 @@ export async function probeLive(input, ctx = {}) {
   const p = getPlatform(platformId);
   if (!p?.handler) return { platform: p?.id || platformId, liveStatus: 'unknown', online: null };
   const roomId = roomIdFrom(platformId, url);
-  const info = await p.handler.resolveRoom({ roomId, url, settings: ctx.settings, logger: ctx.logger });
+  // probe:true 通知解析器跳过主播信息补全请求（抖音短号回查、B站主播信息接口等），只返回直播状态
+  const info = await p.handler.resolveRoom({ roomId, url, settings: ctx.settings, logger: ctx.logger, probe: true });
   return {
     platform: p.id, platformName: p.name, roomId: info.roomId || roomId,
     liveStatus: info.liveStatus || 'unknown', online: info.online ?? null,
