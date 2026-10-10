@@ -868,7 +868,7 @@ export class Scheduler {
         activeCount: active,
         concurrencyCap: Number(settings.maxConcurrency) || 8,
         queuedCount: queued.length,
-        waitingCount: waiting.filter((t) => t.status === 'waiting').length,
+        waitingCount: waiting.filter((t) => t.status === 'waiting' && t.monitorOnly !== true).length,
         platformCount: new Set(recording.map((t) => t.platform)).size,
         downSpeed: recording.reduce((a, t) => a + (Number(t.live?.speed) || 0), 0),
         ...this.todayStats(),

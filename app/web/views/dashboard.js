@@ -67,7 +67,8 @@ function paint(ctx, status) {
   const recCount = num(stats.recordingCount, recording.length);
   const cap = num(stats.concurrencyCap, ctx.limits.maxConcurrency);
   const queuedCount = num(stats.queuedCount, queue.length);
-  const waitCount = queueView.length + waitingView.length;
+  // 等待开播：与顶部状态栏同源（后端 stats.waitingCount），仅计「待录制、未开播」非仅监控任务，排队单独显示
+  const waitCount = num(stats.waitingCount, queueView.length + waitingView.length);
   const usedBytes = Number(disk.usedBytes) || 0;
   const totalBytes = Number(disk.totalBytes) || 0;
   const freeBytes = Number(disk.freeBytes) || Math.max(0, totalBytes - usedBytes);
