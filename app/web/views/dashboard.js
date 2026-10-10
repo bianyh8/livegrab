@@ -85,27 +85,42 @@ function paint(ctx, status) {
     ...monitorList.map((m) => ({ kind: 'monitor', ...m })),
   ];
   const idleFiltered = state.idleFilter ? idle.filter((t) => t.kind === state.idleFilter) : idle;
+  const liveCount = state.tasks.filter((t) => t.liveStatus === 'live').length;
 
   root.innerHTML = `
     ${diskAlert(freeBytes)}
-    <div class="ops-strip">
-      <div class="ops-item"><div class="k">今日录制时长</div><div class="v">${todayDuration(stats.todayDurationSec)}</div></div>
-      <div class="ops-item"><div class="k">今日新增文件</div><div class="v">${Number(stats.todayFiles) || 0}<small>个 · ${esc(formatBytes(stats.todayBytes))}</small></div></div>
-      <div class="ops-item"><div class="k">平台存储合计</div><div class="v">${esc(formatBytes(platformTotal))}<small>· ${pstoreCount} 平台</small></div></div>
-      <div class="ops-item"><div class="k">实时带宽</div><div class="v">${bwText}</div></div>
-    </div>
-
-    <div class="grid2b">
+    <div class="ov-grid3">
       <div class="card">
-        <div class="card-h"><h3>正在录制</h3><span class="hint">${recCount} 路 · 分段写入中</span><div class="spacer"></div>${recCount ? `<button class="btn sm ghost" data-act="pause-all">全部暂停</button>` : ''}</div>
-        <div class="card-b" style="padding:12px">${recording.length ? `<div class="task-grid">${recording.map(recItem).join('')}</div>` : emptyBox('当前没有正在录制的任务')}</div>
+        <div class="card-h"><h3>任务统计</h3></div>
+        <div class="card-b ov-col">
+          <div class="ovstat"><div class="k">正在录制</div><div class="v">${recCount}<small>路</small></div></div>
+          <div class="ovstat"><div class="k">正在直播</div><div class="v">${liveCount}<small>个</small></div></div>
+          <div class="ovstat"><div class="k">仅监控</div><div class="v">${monitorList.length}<small>个</small></div></div>
+        </div>
       </div>
+
       <div class="card">
-        <div class="card-h"><h3>存储分布</h3><span class="hint">含磁盘剩余</span></div>
-        <div class="card-b pkb" style="padding:16px">
+        <div class="card-h"><h3>当日统计</h3></div>
+        <div class="card-b ov-col">
+          <div class="ovstat"><div class="k">当日录制时长</div><div class="v">${todayDuration(stats.todayDurationSec)}</div></div>
+          <div class="ovstat"><div class="k">当日新增文件</div><div class="v">${Number(stats.todayFiles) || 0}<small>个 · ${esc(formatBytes(stats.todayBytes))}</small></div></div>
+          <div class="ovstat"><div class="k">实时带宽</div><div class="v">${bwText}</div></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-h"><h3>存储统计</h3><span class="hint">${esc(formatBytes(platformTotal))}</span></div>
+        <div class="card-b pkb" style="padding:14px 14px 12px">
           ${platformStoreBlock(pstore)}
           ${diskSection({ usedBytes, totalBytes, freeBytes, trashBytes })}
         </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-h"><h3>正在录制</h3><span class="hint">${recCount} 路 · 分段写入中</span><div class="spacer"></div>${recCount ? `<button class="btn sm ghost" data-act="pause-all">全部暂停</button>` : ''}</div>
+      <div class="card-b" style="padding:0">
+        ${recording.length ? recording.map(recItem).join('') : emptyBox('当前没有正在录制的任务')}
       </div>
     </div>
 
