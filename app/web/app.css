@@ -196,11 +196,14 @@ label.fl{display:block;font-size:12.5px;color:var(--txt-2);margin:0 0 7px}
 /* 总览三栏统计：左任务 / 中当日 / 右存储 —— 紧凑且以任务统计高度为限 */
 .ov-grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:16px;align-items:stretch}
 .ov-grid3 .card{display:flex;flex-direction:column}
-.ov-grid3 .card-b.ov-col{display:flex;flex-direction:column;gap:9px;justify-content:center;padding:10px 15px}
+.ov-grid3 .card-b.ov-col{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px 14px;align-content:center;padding:12px 15px}
 .ov-grid3 .card-b.pkb{display:flex;flex-direction:column;flex:1;min-height:0;padding:12px 14px 10px}
-.ovstat .k{color:var(--txt-3);font-size:11.5px;letter-spacing:.3px}
-.ovstat .v{font-size:19px;font-weight:700;color:var(--ok);margin-top:2px;letter-spacing:.3px}
+.ovstat .k{color:var(--txt-3);font-size:11px;letter-spacing:.2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ovstat .v{font-size:18px;font-weight:700;color:var(--ok);margin-top:2px;letter-spacing:.2px}
 .ovstat .v small{font-size:11.5px;font-weight:400;color:var(--txt-3);margin-left:4px}
+.ovstat.ov-wide{grid-column:1/-1}
+.minibar{height:6px;background:rgba(255,255,255,.08);border-radius:3px;overflow:hidden;margin-top:5px}
+.minibar i{display:block;height:100%;background:var(--ok);border-radius:3px}
 .ov-grid3 .card-b.pkb .pkbody{margin:0}
 @media (max-width:1100px){.ov-grid3{grid-template-columns:1fr}
   .ov-grid3 .card-b.ov-col{gap:8px}

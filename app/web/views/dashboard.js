@@ -86,6 +86,10 @@ function paint(ctx, status) {
   ];
   const idleFiltered = state.idleFilter ? idle.filter((t) => t.kind === state.idleFilter) : idle;
   const liveCount = state.tasks.filter((t) => t.liveStatus === 'live').length;
+  const waitNum = Number(stats.waitingCount) || 0;
+  const usePct = recCount && cap ? Math.round((recCount / cap) * 100) : 0;
+  const avgRateText = recCount ? `${((bw / Math.max(1, recCount)) / (8 * 1024 * 1024)).toFixed(1)} MB/s` : '—';
+  const totalDurationSec = Number(stats.totalDurationSec) || 0;
 
   root.innerHTML = `
     ${diskAlert(freeBytes)}
@@ -96,6 +100,9 @@ function paint(ctx, status) {
           <div class="ovstat"><div class="k">正在录制</div><div class="v">${recCount}<small>路</small></div></div>
           <div class="ovstat"><div class="k">正在直播</div><div class="v">${liveCount}<small>个</small></div></div>
           <div class="ovstat"><div class="k">仅监控</div><div class="v">${monitorList.length}<small>个</small></div></div>
+          <div class="ovstat"><div class="k">排队中</div><div class="v">${queuedCount}<small>个</small></div></div>
+          <div class="ovstat"><div class="k">等待开播</div><div class="v">${waitNum}<small>个</small></div></div>
+          <div class="ovstat ov-wide"><div class="k">并发使用率</div><div class="v">${recCount}<small> / ${cap}</small></div><div class="minibar"><i style="width:${usePct}%"></i></div></div>
         </div>
       </div>
 
@@ -103,8 +110,11 @@ function paint(ctx, status) {
         <div class="card-h"><h3>当日统计</h3></div>
         <div class="card-b ov-col">
           <div class="ovstat"><div class="k">当日录制时长</div><div class="v">${todayDuration(stats.todayDurationSec)}</div></div>
-          <div class="ovstat"><div class="k">当日新增文件</div><div class="v">${Number(stats.todayFiles) || 0}<small>个 · ${esc(formatBytes(stats.todayBytes))}</small></div></div>
+          <div class="ovstat"><div class="k">当日新增文件</div><div class="v">${Number(stats.todayFiles) || 0}<small>个</small></div></div>
+          <div class="ovstat"><div class="k">今日已录大小</div><div class="v">${esc(formatBytes(stats.todayBytes))}</div></div>
           <div class="ovstat"><div class="k">实时带宽</div><div class="v">${bwText}</div></div>
+          <div class="ovstat"><div class="k">录制码率均值</div><div class="v">${avgRateText}<small>/ 路</small></div></div>
+          <div class="ovstat ov-wide"><div class="k">累计录制时长</div><div class="v">${todayDuration(totalDurationSec)}</div></div>
         </div>
       </div>
 

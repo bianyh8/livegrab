@@ -861,6 +861,26 @@ export class Scheduler {
     return { todayFiles: files, todayBytes: bytes, todayDurationSec: durationSec + this.liveTodayElapsedSec() };
   }
 
+  /* 累计录制时长（所有会话，跨天），口径同 todayStats：分段实际时长累加，extra 派生件去重 */
+  totalDurationSec() {
+    const now = Date.now();
+    if (this._dTotalAt && now - this._dTotalAt < 15000 && this._dTotalSec != null) return this._dTotalSec;
+    let dur = 0;
+    for (const s of this.store.sessions) {
+      const segs = s.segments || [];
+      const segIds = new Set(segs.map((f) => f.id));
+      for (const f of segs) dur += Number(f.durationSec) || 0;
+      for (const f of (s.extras || [])) {
+        const dupSeg = !!f.sourceFileId && segIds.has(f.sourceFileId);
+        const dupMerge = !f.sourceFileId && segs.length > 0;
+        if (!dupSeg && !dupMerge) dur += Number(f.durationSec) || 0;
+      }
+    }
+    this._dTotalAt = now;
+    this._dTotalSec = dur;
+    return dur;
+  }
+
   // 实时「今日已录时长」：把正在录制、尚未轮转的当前分段时长也计入，随趋势实时刷新
   liveTodayElapsedSec() {
     let sec = 0;
@@ -916,6 +936,7 @@ export class Scheduler {
         waitingCount: waiting.filter((t) => t.status === 'waiting' && t.monitorOnly !== true).length,
         platformCount: new Set(recording.map((t) => t.platform)).size,
         downSpeed: recording.reduce((a, t) => a + (Number(t.live?.speed) || 0), 0),
+        totalDurationSec: this.totalDurationSec(),
         ...this.todayStats(),
       },
       disk: this.storage.disk(),
