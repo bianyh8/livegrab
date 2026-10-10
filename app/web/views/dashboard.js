@@ -184,7 +184,7 @@ function diskSection({ usedBytes, totalBytes, freeBytes, trashBytes }) {
   const low = freeBytes > 0 && freeBytes < 5 * 1024 * 1024 * 1024;
   return `
     <div class="pkdisk">
-      <div class="dd"><span>磁盘剩余 <b class="${low ? 'down' : ''}">${esc(formatBytes(freeBytes))}</b></span><span>已用 ${esc(formatBytes(usedBytes))}</span><span>共 ${esc(formatBytes(totalBytes))}</span>${trashBytes ? `<span>回收站 ${esc(formatBytes(trashBytes))}</span>` : ''}</div>
+      <div class="dd"><span>磁盘剩余 <b class="c-rem${low ? ' down' : ''}">${esc(formatBytes(freeBytes))}</b></span><span>已用 <b class="c-used">${esc(formatBytes(usedBytes))}</b></span><span>共 <b>${esc(formatBytes(totalBytes))}</b></span>${trashBytes ? `<span>回收站 <b class="c-trash">${esc(formatBytes(trashBytes))}</b></span>` : ''}</div>
       <div class="bar"><i style="width:${pct}%"></i></div>
     </div>`;
 }

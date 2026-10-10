@@ -359,7 +359,10 @@ label.fl{display:block;font-size:12.5px;color:var(--txt-2);margin:0 0 7px}
 .pkdisk{margin-top:12px;padding-top:10px;border-top:1px dashed var(--line)}
 .pkdisk .dd{display:flex;flex-wrap:wrap;gap:4px 12px;font-size:11.5px;color:var(--txt-3);margin-bottom:7px}
 .pkdisk .dd b{color:var(--txt-1);font-weight:600}
-.pkdisk .dd b.down{color:var(--warn)}
+.pkdisk .dd b.c-rem{color:var(--ok)}
+.pkdisk .dd b.c-rem.down{color:var(--warn)}
+.pkdisk .dd b.c-used{color:var(--warn)}
+.pkdisk .dd b.c-trash{color:var(--err)}
 table{width:100%;border-collapse:collapse}
 th{
   text-align:left;font-size:11.5px;color:var(--txt-3);font-weight:600;letter-spacing:.4px;
