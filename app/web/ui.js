@@ -281,12 +281,13 @@ export function promptDialog({ title = t('ui.promptTitle'), label = '', value = 
 }
 
 /** 通用弹窗骨架：body 传 HTML 字符串，footer 传 (close, bodyEl)=>[buttons] */
-export function openDialog({ title = '', body = '', footer = null, wide = false }) {
+export function openDialog({ title = '', body = '', footer = null, wide = false, width = '' }) {
   const mask = document.getElementById('modalMask');
   if (!mask) return { close() {} };
   mask.innerHTML = '';
   const modal = el('div', 'modal');
   if (wide) modal.style.width = 'min(1000px,94vw)';
+  if (width) modal.style.width = width;
   const head = el('div', 'modal-h');
   head.innerHTML = `<h3>${esc(title)}</h3><span class="x">✕</span>`;
   const bodyEl = el('div', 'modal-b');

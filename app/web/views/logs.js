@@ -156,9 +156,9 @@ function paint(ctx) {
         </select>
         <input class="input" id="lgQ" style="width:200px" placeholder="${t('logs.qPlaceholder')}" value="${esc(state.q)}" />
         <button class="btn sm ghost" id="lgOrder" title="${t('logs.toggleOrder')}">${state.newestFirst ? t('logs.newestFirst') : t('logs.newestLast')}</button>
-        <div class="spacer"></div>
-        <button class="btn sm ghost" id="lgClear">${t('logs.clear')}</button>
         <span class="chip ${state.paused ? 'wait' : 'on'}" id="lgLive" style="cursor:pointer"><i class="dot"></i>${state.paused ? t('logs.livePaused') : t('logs.liveStreaming')}</span>
+        <div class="spacer"></div>
+        <button class="btn sm danger" id="lgClear">${t('logs.clear')}</button>
         <button class="btn sm ghost" id="lgCopy">${t('common.copy')}</button>
         <button class="btn sm ghost" id="lgExport">${t('logs.export')}</button>
       </div>
@@ -268,8 +268,8 @@ function bind(ctx) {
   if (order) order.onclick = () => {
     state.newestFirst = !state.newestFirst;
     order.textContent = state.newestFirst ? t('logs.newestFirst') : t('logs.newestLast');
-    const t = root.querySelector('#lgTable');
-    if (t) t.innerHTML = table();
+    const tb = root.querySelector('#lgTable');
+    if (tb) tb.innerHTML = table();
     syncCount();
   };
 
@@ -299,11 +299,21 @@ const CLEAR_RANGES = [
   ['all', t('logs.clearAll')],
 ];
 
+/* 不同时间范围用不同颜色标记（绿/蓝/黄/紫/红，红为最破坏性操作） */
+const CLEAR_STYLE = {
+  '1h': 'color:#9bf3d3;border-color:rgba(46,230,168,.35);background:rgba(46,230,168,.10)',
+  '24h': 'color:#cfe0ff;border-color:rgba(91,140,255,.4);background:rgba(91,140,255,.12)',
+  '7d': 'color:#ffd08a;border-color:rgba(247,178,59,.35);background:rgba(247,178,59,.10)',
+  '30d': 'color:#d9c6ff;border-color:rgba(169,123,255,.4);background:rgba(169,123,255,.12)',
+  'all': 'color:#ffa3a8;border-color:rgba(242,84,91,.4);background:rgba(242,84,91,.12)',
+};
+
 function askClearRange(ctx) {
   openDialog({
     title: t('logs.clear'),
+    width: '320px',
     body: `<div style="display:flex;flex-direction:column;gap:8px;padding:2px 0">${CLEAR_RANGES
-      .map(([v, label]) => `<button class="btn" data-clear="${v}" style="width:100%">${esc(label)}</button>`).join('')}</div>`,
+      .map(([v, label]) => `<button class="btn" data-clear="${v}" style="width:100%;${CLEAR_STYLE[v] || ''}">${esc(label)}</button>`).join('')}</div>`,
     footer: (close, bodyEl) => {
       bodyEl.querySelectorAll('[data-clear]').forEach((btn) => {
         btn.onclick = () => { close(); doClear(btn.dataset.clear, ctx); };
