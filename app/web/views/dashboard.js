@@ -11,7 +11,7 @@ import {
 
 export const page = 'dashboard';
 
-const state = { tasks: [], booted: false, pending: false, lastStatus: null, collapsed: new Set(['rec', 'wait', 'monitor']) };
+const state = { tasks: [], booted: false, pending: false, lastStatus: null, collapsed: new Set(['rec', 'wait', 'monitor']), idleFilter: '' };
 
 export async function render(root, ctx) {
   root.innerHTML = `<div class="stack"><div class="card"><div class="empty">正在加载总览…</div></div></div>`;
@@ -74,60 +74,46 @@ function paint(ctx, status) {
   const freeBytes = Number(disk.freeBytes) || Math.max(0, totalBytes - usedBytes);
   const trashBytes = Number(disk.trashBytes) || 0;
   const pstore = (status && status.platformStore) || [];
+  const platformTotal = pstore.reduce((a, p) => a + (p.bytes || 0), 0);
+  const pstoreCount = pstore.filter((p) => p.bytes > 0).length;
+  const bw = Number(stats.downSpeed) || 0;
+  const bwText = bw > 8 * 1024 * 1024 ? `${(bw / (8 * 1024 * 1024)).toFixed(1)} MB/s` : (bw > 0 ? `${Math.round(bw / (8 * 1024))} KB/s` : '0');
+  // 任务状态表：排队 + 等待开播 + 仅监控 合并，按 kind 区分
+  const idle = [
+    ...queueView.map((q) => ({ kind: 'queued', ...q })),
+    ...waitingView.map((w) => ({ kind: 'waiting', ...w })),
+    ...monitorList.map((m) => ({ kind: 'monitor', ...m })),
+  ];
+  const idleFiltered = state.idleFilter ? idle.filter((t) => t.kind === state.idleFilter) : idle;
 
   root.innerHTML = `
     ${diskAlert(freeBytes)}
-    <div class="stats">
-      <div class="stat b">
-        <div class="k">今日录制时长</div>
-        <div class="v">${todayDuration(stats.todayDurationSec)}</div>
-        <div class="d">当日各分段实际时长累加（非墙钟）</div>
+    <div class="ops-strip">
+      <div class="ops-item"><div class="k">今日录制时长</div><div class="v">${todayDuration(stats.todayDurationSec)}</div></div>
+      <div class="ops-item"><div class="k">今日新增文件</div><div class="v">${Number(stats.todayFiles) || 0}<small>个 · ${esc(formatBytes(stats.todayBytes))}</small></div></div>
+      <div class="ops-item"><div class="k">磁盘剩余</div><div class="v ${freeBytes < 20 * 1024 * 1024 * 1024 ? 'down' : ''}">${esc(formatBytes(freeBytes))}<small>/ ${formatBytes(totalBytes)}</small></div></div>
+      <div class="ops-item"><div class="k">平台存储合计</div><div class="v">${esc(formatBytes(platformTotal))}<small>· ${pstoreCount} 平台</small></div></div>
+      <div class="ops-item"><div class="k">实时带宽</div><div class="v">${bwText}</div></div>
+    </div>
+
+    <div class="grid2b">
+      <div class="card">
+        <div class="card-h"><h3>正在录制</h3><span class="hint">${recCount} 路 · 分段写入中</span><div class="spacer"></div>${recCount ? `<button class="btn sm ghost" data-act="pause-all">全部暂停</button>` : ''}</div>
+        <div class="card-b" style="padding:0">${recording.length ? recording.map(recItem).join('') : emptyBox('当前没有正在录制的任务')}</div>
       </div>
-      <div class="stat g">
-        <div class="k">今日新增文件</div>
-        <div class="v">${Number(stats.todayFiles) || 0}<small>个 / ${formatBytes(stats.todayBytes)}</small></div>
-        <div class="d">当天 00:00 起算</div>
-      </div>
-      <div class="stat p">
-        <div class="k">磁盘占用</div>
-        <div class="v">${formatBytes(usedBytes)}<small>/ ${formatBytes(totalBytes)}</small></div>
-        <div class="d">剩余 <b class="${freeBytes < 20 * 1024 * 1024 * 1024 ? 'down' : ''}">${formatBytes(freeBytes)}</b>${trashBytes ? ` · 回收站 ${esc(formatBytes(trashBytes))}` : ''}</div>
-      </div>
-      <div class="stat s">
-        <div class="k">存储分布</div>
-        ${platformStoreBlock(pstore)}
+      <div class="card">
+        <div class="card-h"><h3>存储分布</h3></div>
+        <div class="card-b" style="padding:16px 14px">${platformStoreBlock(pstore)}</div>
       </div>
     </div>
 
-    <div class="stack">
-      <div class="card">
-        <div class="card-h">
-          ${collapseBtn('rec', open('rec'))}
-          <h3>正在录制</h3><span class="hint">${recCount} 路 · 分段写入中</span>
-          <div class="spacer"></div>
-          ${open('rec') ? `<button class="btn sm ghost" data-act="pause-all">全部暂停</button>` : ''}
-        </div>
-        ${open('rec') ? `<div class="card-b" style="padding:0">
-          ${recording.length ? recording.map(recItem).join('') : emptyBox('当前没有正在录制的任务')}
-        </div>` : ''}
+    <div class="card">
+      <div class="card-h"><h3>任务状态</h3><span class="hint">非录制中的 ${idle.length} 项</span><div class="spacer"></div>
+        ${[['', '全部'], ['waiting', '等待开播'], ['queued', '排队'], ['monitor', '仅监控']]
+          .map(([v, t]) => `<button class="mini${state.idleFilter === v ? ' sel' : ''}" data-idle="${v}">${t}</button>`).join('')}
       </div>
-
-      <div class="card">
-        <div class="card-h">${collapseBtn('wait', open('wait'))}<h3>等待录制</h3><span class="hint">${queueView.length + waitingView.length} 个 · 需录制但尚未开播</span></div>
-        ${open('wait') ? `<div class="card-b" style="padding:0">
-          ${(queueView.length || waitingView.length)
-            ? queueView.map((q) => queueItem(q, ctx)).join('') + waitingView.map((w) => waitItem(w)).join('')
-            : emptyBox('没有等待录制的任务')}
-        </div>` : ''}
-      </div>
-
-      <div class="card">
-        <div class="card-h">${collapseBtn('monitor', open('monitor'))}<h3>仅监控</h3><span class="hint">${monitorList.length} 个 · 只监控直播状态，不自动录制</span></div>
-        ${open('monitor') ? `<div class="card-b" style="padding:0">
-          ${monitorList.length
-            ? monitorList.map((t) => monitorItem(t, ctx)).join('')
-            : emptyBox('没有「仅监控」的任务')}
-        </div>` : ''}
+      <div class="card-b" style="padding:0">
+        ${idleFiltered.length ? idleFiltered.map(idleRow).join('') : emptyBox('这里没有符合该状态的任务')}
       </div>
     </div>`;
 
@@ -302,6 +288,34 @@ function monitorItem(t) {
     </div>`;
 }
 
+/** 任务状态统一行（排队 / 等待开播 / 仅监控） */
+function idleRow(t) {
+  const isMonitor = t.kind === 'monitor';
+  const live = t.liveStatus === 'live';
+  let statusChip;
+  if (t.kind === 'queued') statusChip = '<span class="chip wait"><i class="dot"></i>排队中</span>';
+  else if (isMonitor) statusChip = `<span class="chip ${live ? 'on' : 'off'}"><i class="dot"></i>${live ? '直播中' : '未直播'}</span>`;
+  else statusChip = '<span class="chip wait"><i class="dot"></i>等待开播</span>';
+  const name = t.anchorName || String(t.name || '').replace(/^【.+?】/, '') || '未命名任务';
+  const plat = t.platform || parseName(t.name).platform;
+  const flag = isMonitor ? '<span class="chip bili" style="margin-left:6px"><i class="dot"></i>仅监控</span>' : '';
+  let act = '';
+  if (isMonitor && live) act = `<button class="btn sm ok" data-act="start" data-id="${esc(t.id)}">开始录制</button>`;
+  else if (t.kind === 'waiting') act = `<button class="btn sm" data-act="check" data-id="${esc(t.id)}">立即检测</button>`;
+  else if (t.kind === 'queued') act = `<button class="btn sm" data-act="detail" data-id="${esc(t.id)}">详情</button>`;
+  act += ` <button class="btn sm ghost" data-act="detail" data-id="${esc(t.id)}" title="查看详情">详情</button>`;
+  return `
+    <div class="rec-item" style="padding:11px 16px">
+      ${dashThumb(t, isMonitor ? '监控' : (t.kind === 'queued' ? '排队' : '待播'))}
+      ${platBadge(plat, t.platformName)}
+      <div class="rec-main">
+        <div class="ttl" style="font-size:13px">${esc(name)}${flag}</div>
+        <div class="meta">${statusChip}${t.roomId ? `<span>房号 ${esc(t.roomId)}</span>` : ''}${t.reason ? `<span>${esc(t.reason)}</span>` : ''}${t.statusMessage ? `<span>${esc(t.statusMessage)}</span>` : ''}</div>
+      </div>
+      <div class="acts">${act}</div>
+    </div>`;
+}
+
 /** TaskLite.name 形如「【抖音】某某小主播」；缺失平台时回退到平台未知 */
 function parseName(name) {
   const s = String(name || '未命名任务');
@@ -322,6 +336,12 @@ function bind(root, ctx) {
       if (state.collapsed.has(key)) state.collapsed.delete(key);
       else state.collapsed.add(key);
       if (state.lastStatus) paint(ctx, state.lastStatus); // 本页重画，不重新拉取
+    });
+  });
+  root.querySelectorAll('[data-idle]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      state.idleFilter = btn.dataset.idle || '';
+      if (state.lastStatus) paint(ctx, state.lastStatus);
     });
   });
   root.querySelectorAll('[data-act]').forEach((btn) => {
