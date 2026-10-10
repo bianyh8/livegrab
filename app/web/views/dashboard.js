@@ -102,19 +102,18 @@ function paint(ctx, status) {
           <div class="ovstat"><div class="k">仅监控</div><div class="v">${monitorList.length}<small>个</small></div></div>
           <div class="ovstat"><div class="k">排队中</div><div class="v">${queuedCount}<small>个</small></div></div>
           <div class="ovstat"><div class="k">等待开播</div><div class="v">${waitNum}<small>个</small></div></div>
-          <div class="ovstat"><div class="k">并发使用率</div><div class="v">${recCount}<small>/ ${cap}</small></div><div class="minibar"><i style="width:${usePct}%"></i></div></div>
+          <div class="ovstat"><div class="k">并发使用率</div><div class="v">${recCount}<span style="color:var(--err);font-weight:700"> / ${cap}</span></div><div class="minibar"><i style="width:${usePct}%"></i></div></div>
         </div>
       </div>
 
       <div class="card">
-        <div class="card-h"><h3>当日统计</h3></div>
+        <div class="card-h"><h3>今日统计</h3></div>
         <div class="card-b ov-col">
-          <div class="ovstat"><div class="k">当日录制时长</div><div class="v">${todayDuration(stats.todayDurationSec)}</div></div>
-          <div class="ovstat"><div class="k">当日新增文件</div><div class="v">${Number(stats.todayFiles) || 0}<small>个</small></div></div>
+          <div class="ovstat"><div class="k">今日录制时长</div><div class="v">${todayDuration(stats.todayDurationSec)}</div></div>
+          <div class="ovstat"><div class="k">累计录制时长</div><div class="v">${todayDuration(totalDurationSec)}</div></div>
+          <div class="ovstat"><div class="k">今日新增文件</div><div class="v">${Number(stats.todayFiles) || 0}<small>个</small></div></div>
           <div class="ovstat"><div class="k">今日已录大小</div><div class="v">${esc(formatBytes(stats.todayBytes))}</div></div>
           <div class="ovstat"><div class="k">实时带宽</div><div class="v">${bwText}</div></div>
-          <div class="ovstat"><div class="k">录制码率均值</div><div class="v">${avgRateText}<small>/ 路</small></div></div>
-          <div class="ovstat"><div class="k">累计录制时长</div><div class="v">${todayDuration(totalDurationSec)}</div></div>
         </div>
       </div>
 
