@@ -1,6 +1,7 @@
 // 调度：开播轮询、并发排队、任务生命周期（D3/D6/D16）
 import path from 'node:path';
 import fsp from 'node:fs/promises';
+import fs from 'node:fs';
 import { Recorder } from './recorder.js';
 import { Store } from './store.js';
 import { qualityLabel } from './naming.js';
@@ -864,6 +865,32 @@ export class Scheduler {
     return sec;
   }
 
+  // 「平台存储分布」：按平台汇总当前实际占用空间的录制文件大小（statSync 精确到真实大小，
+  // 去重避免同一文件被分段/转封装重复计）；5s TTL 缓存，避免每次轮询都全量 stat（status 走同步）。
+  platformStore() {
+    const now = Date.now();
+    if (this._pstore && now - (this._pstoreAt || 0) < 5000) return this._pstore;
+    const map = new Map();
+    const seen = new Set();
+    const cands = [];
+    for (const s of this.store.sessions) {
+      const key = s.platform || 'direct';
+      if (!map.has(key)) map.set(key, { platform: key, name: s.platformName || key, bytes: 0 });
+      for (const f of [...(s.segments || []), ...(s.extras || []), s.merged, s.mp4].filter(Boolean)) {
+        if (f && f.path && !seen.has(f.path)) { seen.add(f.path); cands.push([key, f.path]); }
+      }
+    }
+    for (const [key, p] of cands) {
+      let size = 0;
+      try { size = fs.statSync(p).size; } catch { continue; }
+      const e = map.get(key);
+      if (e) e.bytes += size;
+    }
+    this._pstore = [...map.values()].filter((e) => e.bytes > 0).sort((a, b) => b.bytes - a.bytes);
+    this._pstoreAt = now;
+    return this._pstore;
+  }
+
   status() {
     const full = this.store.tasks.map((t) => this.serializeTask(t));
     // recording 用完整形状（前端总览读 live.segmentIndex/elapsedSec/bytes 显示实时进度）
@@ -902,6 +929,7 @@ export class Scheduler {
       queue: queued.map((t) => ({ id: t.id, name: t.name, reason: t.queueReason || '并发已满' })),
       recent: this.logger.recent(8),
       platforms: platformList(settings).map((p) => ({ ...p, active: this.platformActive(p.id) })),
+      platformStore: this.platformStore(),
       tasks: tasks.map((t) => LITE(t)),
     };
   }

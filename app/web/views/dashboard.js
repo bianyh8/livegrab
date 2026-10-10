@@ -73,15 +73,11 @@ function paint(ctx, status) {
   const totalBytes = Number(disk.totalBytes) || 0;
   const freeBytes = Number(disk.freeBytes) || Math.max(0, totalBytes - usedBytes);
   const trashBytes = Number(disk.trashBytes) || 0;
+  const pstore = (status && status.platformStore) || [];
 
   root.innerHTML = `
     ${diskAlert(freeBytes)}
     <div class="stats">
-      <div class="stat">
-        <div class="k"><span class="pulse" style="font-size:11px"><b></b>正在录制</span></div>
-        <div class="v"><b>${recCount}</b><small> 路 / 上限 ${cap}</small></div>
-        <div class="d">等待开播 <b>${waitCount}</b></div>
-      </div>
       <div class="stat b">
         <div class="k">今日录制时长</div>
         <div class="v">${todayDuration(stats.todayDurationSec)}</div>
@@ -96,6 +92,11 @@ function paint(ctx, status) {
         <div class="k">磁盘占用</div>
         <div class="v">${formatBytes(usedBytes)}<small>/ ${formatBytes(totalBytes)}</small></div>
         <div class="d">剩余 <b class="${freeBytes < 20 * 1024 * 1024 * 1024 ? 'down' : ''}">${formatBytes(freeBytes)}</b>${trashBytes ? ` · 回收站 ${esc(formatBytes(trashBytes))}` : ''}</div>
+      </div>
+      <div class="stat s">
+        <div class="k">平台存储分布</div>
+        <div class="v"><b>${esc(formatBytes(pstore.reduce((a, p) => a + (p.bytes || 0), 0)))}</b><small> 各平台</small></div>
+        ${platformStoreBlock(pstore)}
       </div>
     </div>
 
@@ -150,6 +151,16 @@ function todayDuration(sec) {
 }
 
 /* 下载带宽字段 live.speed 由后端实时下发，已改在 app.js 顶部状态栏展示 */
+
+/* 平台存储分布：横向堆叠条 + 平台名/大小图例 */
+function platformStoreBlock(pstore) {
+  const total = (pstore || []).reduce((a, p) => a + (p.bytes || 0), 0);
+  if (!total || !pstore.length) return '<div class="pk-empty">暂无录制文件</div>';
+  const colors = ['#4f9cf7', '#34c77b', '#f2b93d', '#e0615d', '#9b6ff0', '#2bb3c0', '#f472b6', '#a3b0c2'];
+  return `
+    <div class="pkstack">${pstore.map((p, i) => `<i style="flex:${(p.bytes || 0) / total};background:${colors[i % colors.length]}"></i>`).join('')}</div>
+    <div class="pkleg">${pstore.map((p, i) => `<span><i style="background:${colors[i % colors.length]}"></i>${esc(p.name || p.platform || '未知')} <b>${esc(formatBytes(p.bytes))}</b></span>`).join('')}</div>`;
+}
 
 function diskAlert(free) {
   const limit = 20 * 1024 * 1024 * 1024;
