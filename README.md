@@ -40,7 +40,7 @@
 
 **① 克隆代码**
 ```bash
-git clone https://github.com/bianyh8/liverecord.git
+git clone https://github.com/bianyh8/LiveGrab.git
 cd liverecord
 ```
 
