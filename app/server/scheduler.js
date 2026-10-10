@@ -850,7 +850,18 @@ export class Scheduler {
         bytes += Number(f.bytes) || 0;
       }
     }
-    return { todayFiles: files, todayBytes: bytes, todayDurationSec: durationSec };
+    return { todayFiles: files, todayBytes: bytes, todayDurationSec: durationSec + this.liveTodayElapsedSec() };
+  }
+
+  // 实时「今日已录时长」：把正在录制、尚未轮转的当前分段时长也计入，随趋势实时刷新
+  liveTodayElapsedSec() {
+    let sec = 0;
+    for (const [, r] of this.recorders) {
+      if (r.paused) continue;
+      const segEl = r.getStats ? (r.getStats().currentSegElapsedSec || 0) : 0;
+      sec += segEl;
+    }
+    return sec;
   }
 
   status() {

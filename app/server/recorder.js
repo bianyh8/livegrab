@@ -36,6 +36,7 @@ export class Recorder extends EventEmitter {
     this._tickRateRef = null; // { idx, bytes, t } 采样基准
     this._cumBase = 0;        // 已轮转关闭分段累计字节（保持整场单调，供速率采样）
     this._detailTick = 0;     // 周期详情日志计数
+    this._segStartAt = null;  // 当前分段开始时间，用于实时「今日已录时长」
   }
 
   _meta() { return { taskId: this.task.id, taskName: this.task.anchorName || this.task.title || this.task.id }; }
@@ -190,6 +191,7 @@ export class Recorder extends EventEmitter {
       this.emit('segment-close', { index: s.index, path: s.path, name: s.name, bytes: st.size, endedAt: nowIso(), durationSec: durationSec || 0 });
     }
     const cur = segs[segs.length - 1];
+    if (!this.currentSegment || this.currentSegment.path !== cur.path) this._segStartAt = Date.now();
     this.currentSegment = cur;
     this.currentBytes = (await fsp.stat(cur.path).catch(() => ({ size: 0 }))).size;
     this._sampleRate(cur);
@@ -371,6 +373,7 @@ export class Recorder extends EventEmitter {
     return {
       bytes: this.currentBytes || 0,
       elapsedSec: this.startedAt ? Math.round((Date.now() - this.startedAt.getTime()) / 1000) : 0,
+      currentSegElapsedSec: this._segStartAt ? Math.round((Date.now() - this._segStartAt) / 1000) : 0,
       currentFile: this.currentSegment?.path || null,
       currentName: this.currentSegment?.name || null,
       segmentIndex: this.currentSegment?.index || 0,
