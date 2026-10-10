@@ -176,9 +176,7 @@ function platformStoreBlock(pstore) {
     <text x="33" y="45" text-anchor="middle" fill="var(--txt-3)" font-size="6.5">${list.length} 平台</text>
   </svg>`;
   const leg = `<div class="pkleg">${arcs.slice(0, 10).map((a) => `<span><i style="background:${a.color}"></i>${a.name}<b>${a.size}</b></span>`).join('')}</div>`;
-  const extra = list.length > 10 ? `<span class="pkmore">另有 ${list.length - 10} 个平台</span>` : '';
-  const foot = `<div class="pkfoot">合计 <b>${esc(formatBytes(total))}</b><span>· ${list.length} 平台</span>${extra}</div>`;
-  return `<div class="pkbody"><div class="pkdonut">${svg}</div>${leg}</div>${foot}`;
+  return `<div class="pkbody"><div class="pkdonut">${svg}</div>${leg}</div>`;
 }
 
 function diskAlert(free) {
