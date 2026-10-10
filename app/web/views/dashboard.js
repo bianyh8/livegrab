@@ -319,8 +319,10 @@ function idleRow(t) {
       <span class="idle-plat">${esc(platName)}</span>
       <span class="idle-anchor">${esc(name)}</span>
       ${statusChip}
-      <button class="btn sm" data-act="check" data-id="${esc(t.id)}" title="立即检测该直播间是否已开播">立即检测</button>
-      <button class="btn sm ghost" data-act="detail" data-id="${esc(t.id)}">详情</button>
+      <div class="idle-acts">
+        <button class="btn sm" data-act="check" data-id="${esc(t.id)}" title="立即检测该直播间是否已开播">立即检测</button>
+        <button class="btn sm ghost" data-act="detail" data-id="${esc(t.id)}">详情</button>
+      </div>
     </div>`;
 }
 
