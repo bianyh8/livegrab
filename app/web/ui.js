@@ -2,6 +2,8 @@
    视图共用的渲染工具：格式化、徽标、开关、toast、确认框、输入框弹窗、播放器弹窗。
    视觉类名全部来自 app.css（从 ui/index.html 抽取），不引入任何第三方资源。 */
 
+import { t } from './i18n.js';
+
 /* ================= 工具 ================= */
 
 /** HTML 转义，所有插入模板的动态文本都必须过一遍 */
@@ -31,9 +33,9 @@ export function formatBytes(n) {
 export function formatDurationCn(sec) {
   const s = Math.max(0, Math.floor(Number(sec) || 0));
   const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), ss = s % 60;
-  if (h > 0) return `${h} 小时 ${m} 分`;
-  if (m > 0) return `${m} 分 ${ss} 秒`;
-  return `${ss} 秒`;
+  if (h > 0) return `${h} ${t('common.hour')} ${m} ${t('common.minute')}`;
+  if (m > 0) return `${m} ${t('common.minute')} ${ss} ${t('common.seconds')}`;
+  return `${ss} ${t('common.seconds')}`;
 }
 
 /** 01:23:45 / 23:45 */
@@ -79,10 +81,10 @@ export function fromNow(ts) {
   const d = toDate(ts);
   if (!d) return '—';
   const diff = Math.floor((Date.now() - d.getTime()) / 1000);
-  if (diff < 60) return '刚刚';
-  if (diff < 3600) return Math.floor(diff / 60) + ' 分钟前';
-  if (diff < 86400) return Math.floor(diff / 3600) + ' 小时前';
-  return Math.floor(diff / 86400) + ' 天前';
+  if (diff < 60) return t('common.justNow');
+  if (diff < 3600) return t('common.minAgo', Math.floor(diff / 60));
+  if (diff < 86400) return t('common.hrAgo', Math.floor(diff / 3600));
+  return t('common.dayAgo', Math.floor(diff / 86400));
 }
 
 function toDate(ts) {
@@ -96,26 +98,26 @@ function toDate(ts) {
 
 /** platform id → { cls, letter, name }；cls 对应 app.css 里的 .plat.xx / .fl-ico.xx */
 export const PLATFORMS = {
-  douyin: { cls: 'dy', letter: '抖', name: '抖音' },
-  bilibili: { cls: 'bili', letter: 'B', name: '哔哩哔哩' },
-  kuaishou: { cls: 'ks', letter: '快', name: '快手' },
-  huya: { cls: 'huya', letter: '虎', name: '虎牙' },
-  douyu: { cls: 'douyu', letter: '鱼', name: '斗鱼' },
-  xiaohongshu: { cls: 'xhs', letter: '红', name: '小红书' },
-  weibo: { cls: 'wb', letter: '微', name: '微博' },
-  acfun: { cls: 'ac', letter: 'A', name: 'AcFun' },
-  cc: { cls: 'cc', letter: 'CC', name: '网易CC' },
+  douyin: { cls: 'dy', letter: '抖', name: t('plat.douyin') },
+  bilibili: { cls: 'bili', letter: 'B', name: t('plat.bilibili') },
+  kuaishou: { cls: 'ks', letter: '快', name: t('plat.kuaishou') },
+  huya: { cls: 'huya', letter: '虎', name: t('plat.huya') },
+  douyu: { cls: 'douyu', letter: '鱼', name: t('plat.douyu') },
+  xiaohongshu: { cls: 'xhs', letter: '红', name: t('plat.xiaohongshu') },
+  weibo: { cls: 'wb', letter: '微', name: t('plat.weibo') },
+  acfun: { cls: 'ac', letter: 'A', name: t('plat.acfun') },
+  cc: { cls: 'cc', letter: 'CC', name: t('plat.cc') },
   yy: { cls: 'yy', letter: 'YY', name: 'YY' },
-  wechat: { cls: 'wx', letter: '视', name: '视频号' },
-  more: { cls: 'more', letter: '＋', name: '更多平台' },
+  wechat: { cls: 'wx', letter: '视', name: t('plat.wechat') },
+  more: { cls: 'more', letter: '＋', name: t('plat.more') },
 };
 
 export function platformInfo(id) {
-  return PLATFORMS[id] || { cls: 'plain', letter: '?', name: id || '未知平台' };
+  return PLATFORMS[id] || { cls: 'plain', letter: '?', name: id || t('plat.unknown') };
 }
 
 /** 平台分层代号 → 中文（stable/experimental/planned 等前台不得出现英文） */
-const TIER_CN = { stable: '稳定', experimental: '实验性', planned: '规划中' };
+const TIER_CN = { stable: t('tier.stable'), experimental: t('tier.experimental'), planned: t('tier.planned') };
 export function tierName(tier) {
   if (!tier) return '';
   return TIER_CN[tier] || String(tier);
@@ -138,19 +140,19 @@ export function platIcon(id, nameOverride) {
 /* ================= 状态语义 ================= */
 
 const STATUS_META = {
-  idle: { text: '待机', chip: 'off' },
-  waiting: { text: '等待开播', chip: 'wait' },
-  queued: { text: '排队中', chip: 'wait' },
-  recording: { text: '录制中', chip: 'on' },
-  stopping: { text: '停止中', chip: 'wait' },
-  merging: { text: '合并中', chip: 'wait' },
-  completed: { text: '已完成', chip: 'on' },
-  stopped: { text: '手动停止', chip: 'off' },
-  error: { text: '错误', chip: 'err' },
+  idle: { text: t('common.idle'), chip: 'off' },
+  waiting: { text: t('common.waiting'), chip: 'wait' },
+  queued: { text: t('common.queued'), chip: 'wait' },
+  recording: { text: t('common.recording'), chip: 'on' },
+  stopping: { text: t('common.stopping'), chip: 'wait' },
+  merging: { text: t('common.merging'), chip: 'wait' },
+  completed: { text: t('common.completed'), chip: 'on' },
+  stopped: { text: t('common.stopped'), chip: 'off' },
+  error: { text: t('common.error'), chip: 'err' },
 };
 
 export function statusMeta(status) {
-  return STATUS_META[status] || { text: status || '未知', chip: '' };
+  return STATUS_META[status] || { text: status || t('common.unknown'), chip: '' };
 }
 
 /** 任务状态单元格：脉冲点 / chip + 子行 */
@@ -160,14 +162,14 @@ export function statusCell(task) {
   if (task.status === 'recording') {
     sub.push(`${formatDuration(task.live ? task.live.elapsedSec : 0)} · ${formatBytes(task.live ? task.live.bytes : 0)}`);
   } else if (task.status === 'queued') {
-    sub.push(esc(task.queueReason || '等待并发空位'));
+    sub.push(esc(task.queueReason || t('common.waitSlot')));
   } else if (task.status === 'error') {
     const max = task.retryMax || 5;
-    sub.push(`${esc(task.lastError || task.statusMessage || '未知错误')} · 自动重试 ${task.retryCount || 0}/${max}`);
+    sub.push(`${esc(task.lastError || task.statusMessage || t('common.unknownError'))}${t('ui.autoRetry', `${task.retryCount || 0}/${max}`)}`);
   } else if (task.status === 'waiting') {
-    sub.push(`轮询 ${task.pollIntervalSec || 60} 秒`);
+    sub.push(t('common.pollSec', task.pollIntervalSec || 60));
   } else if (task.status === 'completed' || task.status === 'stopped') {
-    if (task.endedAt) sub.push(`${formatTime(task.endedAt)} 结束 · ${formatBytes(task.totalBytes || 0)}`);
+    if (task.endedAt) sub.push(t('ui.finishedAt', formatTime(task.endedAt), formatBytes(task.totalBytes || 0)));
   } else if (task.statusMessage) {
     sub.push(esc(task.statusMessage));
   }
@@ -183,9 +185,9 @@ export function qualityLabelOf(task) {
 
 export function segmentStrategyText(task) {
   const mode = task.segmentMode || 'time';
-  if (mode === 'none') return '不分段';
-  if (mode === 'size') return `按大小 · ${Math.round((task.segmentSizeMB || 2048) / 1024 * 10) / 10} GB`;
-  return `按时间 · ${task.segmentMinutes || 60} 分钟`;
+  if (mode === 'none') return t('seg.none');
+  if (mode === 'size') return t('seg.bySize', Math.round((task.segmentSizeMB || 2048) / 1024 * 10) / 10);
+  return t('seg.byTime', task.segmentMinutes || 60);
 }
 
 /* ================= 小组件 ================= */
@@ -233,7 +235,7 @@ export function toast(msg, type) {
 /* ================= 确认框 / 输入框弹窗（共用 #modalMask） ================= */
 
 /** confirmDialog({title,text,ok,danger,onOk}) */
-export function confirmDialog({ title = '请确认', text = '', ok = '确定', cancel = '取消', danger = false, onOk } = {}) {
+export function confirmDialog({ title = t('common.confirm'), text = '', ok = t('common.ok'), cancel = t('common.cancel'), danger = false, onOk } = {}) {
   openDialog({
     title,
     body: `<div style="font-size:13px;line-height:1.9;color:var(--txt-2)">${text}</div>`,
@@ -251,7 +253,7 @@ export function confirmDialog({ title = '请确认', text = '', ok = '确定', c
  * promptDialog({title,label,value,placeholder,multiline,ok,hint,onOk})
  * 用于收集 Cookie / 密码等文本输入（替代不稳定的原生 prompt）。
  */
-export function promptDialog({ title = '请输入', label = '', value = '', placeholder = '', multiline = false, rows = 6, ok = '保存', hint = '', onOk } = {}) {
+export function promptDialog({ title = t('ui.promptTitle'), label = '', value = '', placeholder = '', multiline = false, rows = 6, ok = t('common.save'), hint = '', onOk } = {}) {
   openDialog({
     title,
     body: `<div class="form-row">
@@ -263,12 +265,12 @@ export function promptDialog({ title = '请输入', label = '', value = '', plac
       </div>`,
     footer: (close, body) => {
       const input = body.querySelector('input,textarea');
-      const b1 = el('button', 'btn ghost', '取消');
+      const b1 = el('button', 'btn ghost', t('common.cancel'));
       const b2 = el('button', 'btn primary', ok);
       b1.onclick = close;
       b2.onclick = () => {
         const v = input ? input.value.trim() : '';
-        if (!v) { toast('内容不能为空', 'warn'); return; }
+        if (!v) { toast(t('ui.emptyContent'), 'warn'); return; }
         close();
         if (typeof onOk === 'function') onOk(v);
       };
@@ -340,10 +342,10 @@ export async function openPlayer(ctx, opts) {
     info = await ctx.api.play(opts.fileId);
   } catch (e) {
     if (e.code === 'PLAY_BUSY') {
-      toast('当前回放较多，请稍后再试', 'warn');
+      toast(t('ui.playbackBusy'), 'warn');
       return;
     }
-    toast(e.message || '无法开始回放', 'err');
+    toast(e.message || t('ui.playStartFail'), 'err');
     return;
   }
   const mode = info.mode || 'direct';
@@ -352,16 +354,16 @@ export async function openPlayer(ctx, opts) {
   playerState = { playId: info.playId || null, fileId: opts.fileId };
 
   const modeChip = mode === 'remux'
-    ? { cls: 'chip wait', text: '边转边播 · 不可拖动' }
-    : { cls: 'chip on', text: '直接播放 · 可拖动' };
+    ? { cls: 'chip wait', text: t('ui.remuxStreaming') }
+    : { cls: 'chip on', text: t('ui.directPlay') };
   const srcText = mode === 'remux'
-    ? (opts.kind === 'audio' ? '源：M4A（服务端转封装）' : '源：TS/FLV（服务端 -c copy 转 fMP4）')
-    : '源：MP4 / M4A（直接播放）';
+    ? (opts.kind === 'audio' ? t('ui.srcM4A') : t('ui.srcTSFLV'))
+    : t('ui.srcDirect');
 
   mask.innerHTML = `
     <div class="modal" style="width:min(1000px,94vw)">
       <div class="modal-h">
-        <h3 class="mono" style="font-size:13.5px">${esc(opts.name || '回放')}</h3>
+        <h3 class="mono" style="font-size:13.5px">${esc(opts.name || t('common.playback'))}</h3>
         <span class="chip" style="margin-left:10px">${esc(opts.platformName || platformInfo(opts.platform).name)}</span>
         <span class="chip">${esc(opts.qualityLabel || '—')}</span>
         <span class="${modeChip.cls}" id="plMode"><i class="dot"></i>${esc(modeChip.text)}</span>
@@ -371,7 +373,7 @@ export async function openPlayer(ctx, opts) {
         <div class="player">
           <video id="plVideo" src="${esc(url)}" playsinline style="width:100%;height:100%;background:#000;display:block"></video>
           <div class="pv-badge" id="plSrc">${esc(srcText)}</div>
-          <div class="pv-hint">浏览器内置播放器 · 不调用本机播放器、不依赖桌面环境</div>
+          <div class="pv-hint">${esc(t('ui.browserPlayerHint'))}</div>
         </div>
         <div class="pv-bar">
           <button class="pv-btn" id="plToggle">⏯</button>
@@ -383,20 +385,20 @@ export async function openPlayer(ctx, opts) {
           <button class="pv-btn" id="plFull">⛶</button>
         </div>
         <div style="padding:16px 20px">
-          ${segs.length ? `<div style="font-size:12.5px;color:var(--txt-2)">分段 <span style="color:var(--txt-3)">（共 ${segs.length} 段；可单独播放任意分段，也可合并后整场回放）</span></div>
+          ${segs.length ? `<div style="font-size:12.5px;color:var(--txt-2)">${t('ui.segments')} <span style="color:var(--txt-3)">${t('ui.segsHint', segs.length)}</span></div>
           <div class="pv-segs">${segs.map((s) => {
             const idx = String(s.segmentIndex || 0).padStart(3, '0');
             const cls = s.status === 'recording' ? 'chip wait' : (s.id === opts.fileId ? 'chip on' : 'chip');
-            return `<span class="${cls}" data-seg="${esc(s.id)}" style="cursor:pointer">${s.status === 'recording' ? '<i class="dot"></i>' : ''}${idx} ${s.status === 'recording' ? '录制中' : '已录完'}</span>`;
+            return `<span class="${cls}" data-seg="${esc(s.id)}" style="cursor:pointer">${s.status === 'recording' ? '<i class="dot"></i>' : ''}${idx} ${s.status === 'recording' ? t('common.recording') : t('common.recorded')}</span>`;
           }).join('')}</div>` : ''}
-          <div class="hintline" style="margin-top:12px">TS 片段由服务端 <span class="mono">ffmpeg -c copy</span> 边转边播、不落盘；成品 MP4 直接播放；正在录制的分段只播已写入的部分。若浏览器不支持所选音轨/编码，会给出明确提示而不是静默黑屏。<b>同时最多 2 路转封装回放</b>，超出会提示"当前回放较多，请稍后再试"；关闭播放器即释放；MP4 直放不受此限制。</div>
+          <div class="hintline" style="margin-top:12px">${t('ui.playHint', 2, t('ui.playbackBusy'))}</div>
         </div>
       </div>
       <div class="modal-f">
-        <button class="btn ghost" id="plCopy">复制直链</button>
-        <button class="btn ghost" id="plRemux">转封装 MP4</button>
-        <button class="btn ghost" id="plMerge">合并整场</button>
-        <button class="btn primary" id="plClose2">关闭</button>
+        <button class="btn ghost" id="plCopy">${esc(t('ui.copyDirectLink'))}</button>
+        <button class="btn ghost" id="plRemux">${esc(t('ui.remuxMp4'))}</button>
+        <button class="btn ghost" id="plMerge">${esc(t('ui.mergeWhole'))}</button>
+        <button class="btn primary" id="plClose2">${esc(t('common.close'))}</button>
       </div>
     </div>`;
 
@@ -424,7 +426,7 @@ export async function openPlayer(ctx, opts) {
   };
   video.ontimeupdate = sync;
   video.onloadedmetadata = sync;
-  video.onerror = () => toast('该文件浏览器无法直接播放（编码不支持或转封装失败）', 'err');
+  video.onerror = () => toast(t('ui.playUnsupported'), 'err');
 
   mask.querySelector('#plToggle').onclick = () => { video.paused ? video.play().catch(() => {}) : video.pause(); };
   video.onclick = () => { video.paused ? video.play().catch(() => {}) : video.pause(); };
@@ -432,22 +434,22 @@ export async function openPlayer(ctx, opts) {
   rateBtn.onclick = () => { rateIdx = (rateIdx + 1) % rates.length; video.playbackRate = rates[rateIdx]; rateBtn.textContent = rates[rateIdx].toFixed(1) + 'x'; };
   mask.querySelector('#plFull').onclick = () => { const p = video.parentElement; (document.fullscreenElement ? document.exitFullscreen() : (p.requestFullscreen ? p.requestFullscreen() : Promise.resolve())).catch(() => {}); };
   mask.querySelector('#plTrack').onclick = (e) => {
-    if (mode === 'remux') { toast('边转边播不支持拖动，请等待转完再拖动', 'warn'); return; }
+    if (mode === 'remux') { toast(t('ui.remuxNoSeek'), 'warn'); return; }
     if (!isFinite(video.duration) || !video.duration) return;
     const r = e.currentTarget.getBoundingClientRect();
     video.currentTime = ((e.clientX - r.left) / r.width) * video.duration;
   };
   mask.querySelector('#plClose').onclick = closePlayer;
   mask.querySelector('#plClose2').onclick = closePlayer;
-  mask.querySelector('#plCopy').onclick = () => copyText(location.origin + ctx.api.downloadUrl(opts.fileId), '已复制直链（局域网内可分享）');
+  mask.querySelector('#plCopy').onclick = () => copyText(location.origin + ctx.api.downloadUrl(opts.fileId), t('ui.directLinkCopied'));
   mask.querySelector('#plRemux').onclick = async () => {
-    try { await ctx.api.remux(opts.fileId); toast('已生成 MP4 转封装任务'); if (opts.onChanged) opts.onChanged(); }
-    catch (e) { toast(e.message || '转封装失败', 'err'); }
+    try { await ctx.api.remux(opts.fileId); toast(t('ui.remuxQueued')); if (opts.onChanged) opts.onChanged(); }
+    catch (e) { toast(e.message || t('ui.remuxFail'), 'err'); }
   };
   mask.querySelector('#plMerge').onclick = async () => {
-    if (!opts.session || !opts.session.id) { toast('该文件不属于整场记录，无法合并', 'warn'); return; }
-    try { await ctx.api.merge(opts.session.id); toast('已提交合并整场任务'); if (opts.onChanged) opts.onChanged(); }
-    catch (e) { toast(e.message || '合并失败', 'err'); }
+    if (!opts.session || !opts.session.id) { toast(t('ui.mergeInvalid'), 'warn'); return; }
+    try { await ctx.api.merge(opts.session.id); toast(t('ui.mergeQueued')); if (opts.onChanged) opts.onChanged(); }
+    catch (e) { toast(e.message || t('ui.mergeFail'), 'err'); }
   };
   mask.querySelectorAll('[data-seg]').forEach((node) => {
     node.onclick = () => {
@@ -478,7 +480,7 @@ export function closePlayer() {
 /* ================= 剪贴板 ================= */
 
 export function copyText(text, okMsg) {
-  const done = () => toast(okMsg || '已复制');
+  const done = () => toast(okMsg || t('common.copied'));
   if (navigator.clipboard && navigator.clipboard.writeText) {
     navigator.clipboard.writeText(text).then(done).catch(() => fallback());
   } else fallback();
@@ -493,7 +495,7 @@ export function copyText(text, okMsg) {
       document.execCommand('copy');
       document.body.removeChild(ta);
       done();
-    } catch { toast('复制失败，请手动选择文本', 'warn'); }
+    } catch { toast(t('common.copyFail'), 'warn'); }
   }
 }
 

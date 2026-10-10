@@ -4,15 +4,16 @@
 
 import { esc, toast } from '../../ui.js';
 import { makeKit } from './tabkit.js';
+import { t } from '../i18n.js';
 
 export const page = 'settings';
 
 const TABS = [
-  { id: 'rec', label: '录制与存储' },
-  { id: 'naming', label: '命名规则' },
-  { id: 'platform', label: '平台账号' },
-  { id: 'notify', label: '通知' },
-  { id: 'security', label: '安全与登录' },
+  { id: 'rec', label: t('settings.tabRec') },
+  { id: 'naming', label: t('settings.tabNaming') },
+  { id: 'platform', label: t('settings.tabPlatform') },
+  { id: 'notify', label: t('settings.tabNotify') },
+  { id: 'security', label: t('settings.tabSecurity') },
 ];
 
 const state = {
@@ -33,11 +34,11 @@ let ctxRef = null;
 export async function render(root, ctx) {
   boundRoot = root;
   ctxRef = ctx;
-  root.innerHTML = `<div class="card"><div class="empty">正在加载设置…</div></div>`;
+  root.innerHTML = `<div class="card"><div class="empty">${t('settings.loading')}</div></div>`;
 
   const [s, e, p] = await Promise.allSettled([ctx.api.settings(), ctx.api.env(), ctx.api.platforms()]);
   if (s.status === 'fulfilled') state.settings = s.value || {};
-  else toast('读取设置失败：' + (s.reason && s.reason.message || ''), 'err');
+  else toast(t('settings.loadFailed', (s.reason && s.reason.message) || ''), 'err');
   if (e.status === 'fulfilled') state.env = e.value || {};
   if (p.status === 'fulfilled') state.platforms = (p.value && p.value.items) || [];
 
@@ -87,7 +88,7 @@ async function mount(ctx) {
     activeTab = mod;
     await mod.render(paneHost, ctx, kit);
   } catch (e) {
-    paneHost.innerHTML = `<div class="card"><div class="empty">该页签加载失败：${esc(e && e.message || e)}</div></div>`;
+    paneHost.innerHTML = `<div class="card"><div class="empty">${t('settings.tabLoadFailed', esc((e && e.message) || e))}</div></div>`;
   }
 }
 
@@ -105,9 +106,9 @@ async function flush(ctx) {
   state.saveTimer = null;
   try {
     await ctx.api.saveSettings(state.settings);
-    toast('设置已保存');
+    toast(t('settings.saved'));
   } catch (e) {
-    toast(e.message || '设置保存失败', 'err');
+    toast(e.message || t('settings.saveFailed'), 'err');
   }
 }
 
@@ -115,8 +116,8 @@ async function flush(ctx) {
 export async function saveNaming(ctx, naming) {
   try {
     await ctx.api.saveNaming(naming);
-    toast('命名配置已保存');
+    toast(t('settings.namingSaved'));
   } catch (e) {
-    toast(e.message || '命名配置保存失败', 'err');
+    toast(e.message || t('settings.namingSaveFailed'), 'err');
   }
 }

@@ -4,6 +4,7 @@
 
 import { api } from '../api.js';
 import { esc, formatBytes, formatDateTime, emptyBox, toast, confirmDialog } from '../ui.js';
+import { t } from '../i18n.js';
 
 export const page = 'trash';
 
@@ -13,7 +14,7 @@ let boundRoot = null;
 
 export async function render(root, ctx) {
   boundRoot = root;
-  root.innerHTML = `<div class="card"><div class="empty">正在加载回收站…</div></div>`;
+  root.innerHTML = `<div class="card"><div class="empty">${t('trash.loading')}</div></div>`;
   if (!state.bound) state.bound = true;
   ctx.onRefresh(() => tick(ctx));
   await tick(ctx, true);
@@ -31,7 +32,7 @@ async function tick(ctx, initial) {
     if (r && r.count != null) state.retentionDays = Number(r.retentionDays || state.retentionDays);
     paint(ctx, initial);
   } catch (e) {
-    if (initial) boundRoot.innerHTML = `<div class="card"><div class="empty">回收站加载失败：${esc(e.message || '未知错误')}</div></div>`;
+    if (initial) boundRoot.innerHTML = `<div class="card"><div class="empty">${t('trash.loadFail', esc(e.message || t('common.unknownError')))}</div></div>`;
   } finally {
     state.pending = false;
   }
@@ -48,48 +49,48 @@ function paint(ctx, force) {
   root.innerHTML = `
     <div class="card">
       <div class="card-h">
-        <h3>回收站</h3>
-        <span class="hint">${items.length} 项 · ${esc(formatBytes(state.bytes))}</span>
+        <h3>${t('nav.trash')}</h3>
+        <span class="hint">${items.length} ${t('trash.itemUnit')} · ${esc(formatBytes(state.bytes))}</span>
         <div class="spacer"></div>
-        <button class="btn sm" id="trRestoreAll"${items.length ? '' : ' disabled'}>全部还原</button>
-        <button class="btn sm danger" id="trEmpty"${items.length ? '' : ' disabled'}>清空回收站</button>
+        <button class="btn sm" id="trRestoreAll"${items.length ? '' : ' disabled'}>${t('trash.restoreAll')}</button>
+        <button class="btn sm danger" id="trEmpty"${items.length ? '' : ' disabled'}>${t('trash.purgeAll')}</button>
       </div>
       <div class="card-b">
         ${items.length
-          ? `<div class="hintline" style="margin:0 0 12px">回收站文件保留在 <span class="mono">/data/.trash</span>，按设置保留 ${Number(state.retentionDays) || 7} 天自动清理。含媒体文件与其同名的刮削图片/描述（.jpg/.nfo），均一并可还原。</div>
+          ? `<div class="hintline" style="margin:0 0 12px">${t('trash.retentionHint', Number(state.retentionDays) || 7)}</div>
              ${items.map((t) => trashLine(t, ctx)).join('')}`
-          : emptyBox('回收站为空')}
+          : emptyBox(t('trash.empty'))}
       </div>
     </div>`;
   bind(ctx);
 }
 
-function trashLine(t, ctx) {
-  const meta = t.items || [];
+function trashLine(item, ctx) {
+  const meta = item.items || [];
   const media = meta.find((it) => it.kind !== 'sidecar' && it.kind !== 'poster' && it.kind !== 'nfo') || meta[0] || {};
   const fileCount = meta.filter((it) => it.kind !== 'sidecar').length;
   const hasSidecar = meta.some((it) => it.kind === 'sidecar');
-  const extLabel = (media.name ? String(media.name).split('.').pop() : '媒体').toUpperCase();
+  const extLabel = (media.name ? String(media.name).split('.').pop() : t('trash.media')).toUpperCase();
   const inner = `
         <span class="th-ph" style="display:none">${esc(extLabel)}</span>
-        <img class="tk-thumb" loading="lazy" src="/api/trash/${esc(t.id)}/thumb" alt="" onerror="this.style.display='none';this.previousElementSibling.style.display=''" />`;
+        <img class="tk-thumb" loading="lazy" src="/api/trash/${esc(item.id)}/thumb" alt="" onerror="this.style.display='none';this.previousElementSibling.style.display=''" />`;
   return `
-    <div class="fl-item" style="align-items:flex-start" data-trash="${esc(t.id)}">
+    <div class="fl-item" style="align-items:flex-start" data-trash="${esc(item.id)}">
       <div class="fl-ico plain">${inner}</div>
       <div style="flex:1;min-width:0">
-        <div style="font-size:13px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(t.name || media.name || '未命名')}
-          <span class="chip" style="margin-left:6px">${t.kind === 'session' ? '整场' : '单个文件'}</span>
-          ${hasSidecar ? '<span class="chip" style="margin-left:6px">含刮削</span>' : ''}
+        <div style="font-size:13px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(item.name || media.name || t('trash.unnamed'))}
+          <span class="chip" style="margin-left:6px">${item.kind === 'session' ? t('trash.kindSession') : t('trash.kindSingle')}</span>
+          ${hasSidecar ? `<span class="chip" style="margin-left:6px">${t('trash.hasScrape')}</span>` : ''}
         </div>
         <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:5px;font-size:11.5px;color:var(--txt-3)">
-          <span>${esc(formatBytes(t.bytes || 0))}</span>
-          <span>${fileCount > 1 ? `${fileCount} 个文件` : '1 个媒体文件'}</span>
-          <span>删除于 ${esc(formatDateTime(t.deletedAt || t.createdAt))}</span>
+          <span>${esc(formatBytes(item.bytes || 0))}</span>
+          <span>${fileCount > 1 ? t('trash.multipleFiles', fileCount) : t('trash.singleFile')}</span>
+          <span>${t('trash.deletedAt', esc(formatDateTime(item.deletedAt || item.createdAt)))}</span>
         </div>
       </div>
       <div class="acts">
-        <button class="btn sm ghost" data-trash-act="restore" data-id="${esc(t.id)}">还原</button>
-        <button class="btn sm danger" data-trash-act="purge" data-id="${esc(t.id)}">清除</button>
+        <button class="btn sm ghost" data-trash-act="restore" data-id="${esc(item.id)}">${t('trash.restore')}</button>
+        <button class="btn sm danger" data-trash-act="purge" data-id="${esc(item.id)}">${t('settings.pfClear')}</button>
       </div>
     </div>`;
 }
@@ -100,43 +101,43 @@ function bind(ctx) {
   const ra = root.querySelector('#trRestoreAll');
   if (ra) ra.onclick = () => {
     const ids = state.items.map((t) => t.id);
-    if (!ids.length) { toast('回收站为空', 'warn'); return; }
+    if (!ids.length) { toast(t('trash.empty'), 'warn'); return; }
     confirmDialog({
-      title: '全部还原', ok: '还原',
-      text: `将把回收站内 <b>${ids.length}</b> 项（含刮削图片/描述）放回原位置。`,
+      title: t('trash.restoreAll'), ok: t('trash.restore'),
+      text: t('trash.restoreAllText', ids.length, t('trash.itemUnit')),
       onOk: async () => {
-        try { const r = await api.trashRestore(ids); toast(`已还原 ${Number(r && r.restored) || ids.length} 项`); state.hash = ''; await tick(ctx, true); }
-        catch (e) { toast(e.message || '还原失败', 'err'); }
+        try { const r = await api.trashRestore(ids); toast(t('trash.restoredN', Number(r && r.restored) || ids.length)); state.hash = ''; await tick(ctx, true); }
+        catch (e) { toast(e.message || t('trash.restoreFail'), 'err'); }
       },
     });
   };
   const em = root.querySelector('#trEmpty');
   if (em) em.onclick = () => {
     confirmDialog({
-      title: '清空回收站', danger: true, ok: '清空',
-      text: `将永久删除回收站内 ${state.items.length} 项（<b>${esc(formatBytes(state.bytes))}</b>），含刮削图片/描述，<b>不可还原</b>。`,
+      title: t('trash.purgeAll'), danger: true, ok: t('trash.purge'),
+      text: t('trash.purgeAllText', state.items.length, t('trash.itemUnit'), esc(formatBytes(state.bytes))),
       onOk: async () => {
-        try { await api.trashEmpty(); toast('回收站已清空'); state.hash = ''; await tick(ctx, true); }
-        catch (e) { toast(e.message || '清空失败', 'err'); }
+        try { await api.trashEmpty(); toast(t('trash.purgedAll')); state.hash = ''; await tick(ctx, true); }
+        catch (e) { toast(e.message || t('trash.purgeFail'), 'err'); }
       },
     });
   };
   root.querySelectorAll('[data-trash-act="restore"]').forEach((btn) => {
     btn.onclick = async () => {
-      try { await api.trashRestore([btn.dataset.id]); toast('已还原'); state.hash = ''; await tick(ctx, true); }
-      catch (e) { toast(e.message || '还原失败', 'err'); }
+      try { await api.trashRestore([btn.dataset.id]); toast(t('trash.restoreDone')); state.hash = ''; await tick(ctx, true); }
+      catch (e) { toast(e.message || t('trash.restoreFail'), 'err'); }
     };
   });
   root.querySelectorAll('[data-trash-act="purge"]').forEach((btn) => {
     btn.onclick = () => {
       const id = btn.dataset.id;
-      const t = state.items.find((x) => x.id === id);
+      const item = state.items.find((x) => x.id === id);
       confirmDialog({
-        title: '永久清除', danger: true, ok: '清除',
-        text: `将从回收站 <b>永久清除</b> 「${esc(t && t.name || '该项')}」（${esc(formatBytes(t && t.bytes || 0))}）及其全部文件（含刮削图片/描述），<b>不可还原</b>。`,
+        title: t('trash.purgeTitle'), danger: true, ok: t('settings.pfClear'),
+        text: t('trash.purgeText', esc(item && item.name || t('trash.thisItem')), esc(formatBytes(item && item.bytes || 0))),
         onOk: async () => {
-          try { const r = await api.trashPurge([id]); toast(`已清除 ${Number(r && r.purged) || 1} 项`); state.hash = ''; await tick(ctx, true); }
-          catch (e) { toast(e.message || '清除失败', 'err'); }
+          try { const r = await api.trashPurge([id]); toast(t('trash.purged', Number(r && r.purged) || 1)); state.hash = ''; await tick(ctx, true); }
+          catch (e) { toast(e.message || t('settings.pfClearFail'), 'err'); }
         },
       });
     };

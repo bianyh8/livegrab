@@ -41,7 +41,7 @@ function tasksOfType(type) {
 
 function open(key) { return !state.collapsed.has(key); }
 function collapseBtn(key, isOpen) {
-  return `<button class="collapse-btn${isOpen ? ' open' : ''}" data-collapse="${key}" title="折叠 / 展开" aria-expanded="${isOpen ? 'true' : 'false'}" style="flex:0 0 auto"></button>`;
+  return `<button class="collapse-btn${isOpen ? ' open' : ''}" data-collapse="${key}" title="${t('dashboard.collapseToggle')}" aria-expanded="${isOpen ? 'true' : 'false'}" style="flex:0 0 auto"></button>`;
 }
 
 function paint(ctx, status) {
@@ -98,11 +98,11 @@ function paint(ctx, status) {
       <div class="card">
         <div class="card-h"><h3>${t('dashboard.taskStats')}</h3></div>
         <div class="card-b ov-col">
-          <div class="ovstat"><div class="k">${t('dashboard.statRecording')}</div><div class="v">${recCount}<small>${t('common.unitRoad')}</small></div></div>
+          <div class="ovstat"><div class="k">${t('dashboard.recording')}</div><div class="v">${recCount}<small>${t('common.unitRoad')}</small></div></div>
           <div class="ovstat"><div class="k">${t('dashboard.statLive')}</div><div class="v">${liveCount}<small>${t('common.unitItem')}</small></div></div>
-          <div class="ovstat"><div class="k">${t('dashboard.statMonitor')}</div><div class="v">${monitorList.length}<small>${t('common.unitItem')}</small></div></div>
-          <div class="ovstat"><div class="k">${t('dashboard.statQueued')}</div><div class="v">${queuedCount}<small>${t('common.unitItem')}</small></div></div>
-          <div class="ovstat"><div class="k">${t('dashboard.statWaiting')}</div><div class="v">${waitNum}<small>${t('common.unitItem')}</small></div></div>
+          <div class="ovstat"><div class="k">${t('common.monitorOnly')}</div><div class="v">${monitorList.length}<small>${t('common.unitItem')}</small></div></div>
+          <div class="ovstat"><div class="k">${t('common.queued')}</div><div class="v">${queuedCount}<small>${t('common.unitItem')}</small></div></div>
+          <div class="ovstat"><div class="k">${t('common.waiting')}</div><div class="v">${waitNum}<small>${t('common.unitItem')}</small></div></div>
           <div class="ovstat"><div class="k">${t('dashboard.statConcur')}</div><div class="v"><span style="color:var(--ok);vertical-align:middle">${recCount}</span> <span style="color:var(--txt-2);vertical-align:middle">/</span> <span style="color:var(--err);vertical-align:middle">${cap}</span></div><div class="minibar"><i style="width:${usePct}%"></i></div></div>
         </div>
       </div>
@@ -173,7 +173,7 @@ function platformStoreBlock(pstore) {
       color: colors[i % colors.length],
       dasharray: `${len} ${C - len}`,
       dashoffset: -offset,
-      name: esc(p.name || p.platform || '未知'),
+      name: esc(p.name || p.platform || t('common.unknown')),
       size: esc(formatBytes(p.bytes)),
     };
     offset += len;
@@ -203,7 +203,7 @@ function diskSection({ usedBytes, totalBytes, freeBytes, trashBytes }) {
   const low = freeBytes > 0 && freeBytes < 5 * 1024 * 1024 * 1024;
   return `
     <div class="pkdisk">
-      <div class="dd"><span>${t('dashboard.diskRemain')} <b class="c-rem${low ? ' down' : ''}">${esc(formatBytes(freeBytes))}</b></span><span>${t('dashboard.diskUsed')} <b class="c-used">${esc(formatBytes(usedBytes))}</b></span><span>${t('dashboard.diskTotal')} <b>${esc(formatBytes(totalBytes))}</b></span>${trashBytes ? `<span>${t('dashboard.diskTrash')} <b class="c-trash">${esc(formatBytes(trashBytes))}</b></span>` : ''}</div>
+      <div class="dd"><span>${t('dashboard.diskRemain')} <b class="c-rem${low ? ' down' : ''}">${esc(formatBytes(freeBytes))}</b></span><span>${t('dashboard.diskUsed')} <b class="c-used">${esc(formatBytes(usedBytes))}</b></span><span>${t('dashboard.diskTotal')} <b>${esc(formatBytes(totalBytes))}</b></span>${trashBytes ? `<span>${t('nav.trash')} <b class="c-trash">${esc(formatBytes(trashBytes))}</b></span>` : ''}</div>
       <div class="bar"><i style="width:${pct}%"></i></div>
     </div>`;
 }
@@ -227,9 +227,9 @@ function recItem(t) {
         <img class="tk-thumb" loading="lazy" src="/api/tasks/${esc(t.id)}/thumb" alt="" onerror="this.style.display='none'" />
       </div>
       <div class="rec-main">
-        <div class="ttl">${esc(t.name || t.anchorName || t('dashboard.unnamed'))}${t.title ? ' · ' + esc(t.title) : ''}</div>
+        <div class="ttl">${esc(t.name || t.anchorName || t('common.unnamed'))}${t.title ? ' · ' + esc(t.title) : ''}</div>
         <div class="meta">
-          ${platBadge(t.platform, t.platformName)}<span>${t('dashboard.room', esc(t.roomId || '—'))}</span>
+          ${platBadge(t.platform, t.platformName)}<span>${t('common.room', esc(t.roomId || '—'))}</span>
           <span class="chip">${esc(quality)}</span>
           <span class="chip">${segOf === 'none' ? t('seg.none') : esc(segOf)}</span>
           <span class="chip on"><i class="dot"></i>${segOf === 'none' ? t('dashboard.writtenSingle', esc(formatBytes(bytes))) : t('dashboard.writtenSeg', segIndex, esc(formatBytes(bytes)))}</span>
@@ -263,7 +263,7 @@ function queueItem(q, ctx) {
       ${platBadge(name.platform)}
       <div class="rec-main">
         <div class="ttl" style="font-size:13px">${esc(name.text)}</div>
-        <div class="meta"><span class="chip wait"><i class="dot"></i>${t('common.queued')}</span><span>${esc(q.reason || t('dashboard.waitSlot'))}</span></div>
+        <div class="meta"><span class="chip wait"><i class="dot"></i>${t('common.queued')}</span><span>${esc(q.reason || t('common.waitSlot'))}</span></div>
       </div>
       <div class="acts">
         <button class="btn sm" data-act="detail" data-id="${esc(q.id)}">${t('common.detail')}</button>
@@ -289,12 +289,12 @@ function waitItem(t) {
       ${dashThumb(t, t('dashboard.toPlay'))}
       ${platBadge(t.platform, t.platformName)}
       <div class="rec-main">
-        <div class="ttl" style="font-size:13px">${esc(t.name || t.anchorName || t('dashboard.unnamed'))}</div>
-        <div class="meta"><span>${t('dashboard.pollSec', Number(poll))}</span><span>${esc(quality)}</span>${t.statusMessage ? `<span>${esc(t.statusMessage)}</span>` : ''}</div>
+        <div class="ttl" style="font-size:13px">${esc(t.name || t.anchorName || t('common.unnamed'))}</div>
+        <div class="meta"><span>${t('common.pollSec', Number(poll))}</span><span>${esc(quality)}</span>${t.statusMessage ? `<span>${esc(t.statusMessage)}</span>` : ''}</div>
       </div>
       <span class="chip wait"><i class="dot"></i>${t('dashboard.notLive')}</span>
       <div class="acts">
-        <button class="btn sm" data-act="check" data-id="${esc(t.id)}" title="${t('dashboard.checkLiveTip')}">${t('common.checkLive')}</button>
+        <button class="btn sm" data-act="check" data-id="${esc(t.id)}" title="${t('common.checkLiveTip')}">${t('common.checkLive')}</button>
         <button class="btn sm ghost" data-act="detail" data-id="${esc(t.id)}">${t('common.detail')}</button>
       </div>
     </div>`;
@@ -308,13 +308,13 @@ function monitorItem(t) {
       ${dashThumb(t, '监控')}
       ${platBadge(t.platform, t.platformName)}
       <div class="rec-main">
-        <div class="ttl" style="font-size:13px">${esc(t.anchorName || t.name || '未命名任务')}<span class="chip bili" style="margin-left:6px"><i class="dot"></i>仅监控</span></div>
-        <div class="meta"><span class="chip ${live ? 'on' : 'off'}"><i class="dot"></i>${live ? '直播中' : '未直播'}</span><span>房号 ${esc(t.roomId || '—')}</span>${t.statusMessage ? `<span>${esc(t.statusMessage)}</span>` : ''}</div>
+        <div class="ttl" style="font-size:13px">${esc(t.anchorName || t.name || t('common.unnamed'))}<span class="chip bili" style="margin-left:6px"><i class="dot"></i>${t('common.monitorOnly')}</span></div>
+        <div class="meta"><span class="chip ${live ? 'on' : 'off'}"><i class="dot"></i>${live ? t('dashboard.statLive') : t('tasks.notLive')}</span><span>${t('common.room', esc(t.roomId || '—'))}</span>${t.statusMessage ? `<span>${esc(t.statusMessage)}</span>` : ''}</div>
       </div>
       <div class="acts">
         ${live
-          ? `<button class="btn sm ok" data-act="start" data-id="${esc(t.id)}" title="仅录制本场直播，不改变仅监控设置">开始录制</button>`
-          : `<button class="btn sm" data-act="check" data-id="${esc(t.id)}">立即检测</button>`}
+          ? `<button class="btn sm ok" data-act="start" data-id="${esc(t.id)}" title="${t('tasks.monitorOnlyStartTip')}">${t('tasks.startRecord')}</button>`
+          : `<button class="btn sm" data-act="check" data-id="${esc(t.id)}">${t('common.checkLive')}</button>`}
         <button class="btn sm ghost" data-act="detail" data-id="${esc(t.id)}">详情</button>
       </div>
     </div>`;
@@ -325,12 +325,12 @@ function idleRow(t) {
   const isMonitor = t.kind === 'monitor';
   const live = t.liveStatus === 'live';
   let statusChip;
-  if (t.kind === 'queued') statusChip = '<span class="chip wait"><i class="dot"></i>排队中</span>';
-  else if (isMonitor) statusChip = `<span class="chip ${live ? 'on' : 'off'}"><i class="dot"></i>${live ? '直播中' : '未直播'}</span>`;
-  else statusChip = '<span class="chip wait"><i class="dot"></i>等待开播</span>';
-  const name = t.anchorName || String(t.name || '').replace(/^【.+?】/, '') || '未命名任务';
+  if (t.kind === 'queued') statusChip = `<span class="chip wait"><i class="dot"></i>${t('common.queued')}</span>`;
+  else if (isMonitor) statusChip = `<span class="chip ${live ? 'on' : 'off'}"><i class="dot"></i>${live ? t('dashboard.statLive') : t('tasks.notLive')}</span>`;
+  else statusChip = `<span class="chip wait"><i class="dot"></i>${t('common.waiting')}</span>`;
+  const name = t.anchorName || String(t.name || '').replace(/^【.+?】/, '') || t('common.unnamed');
   const plat = t.platform || parseName(t.name).platform;
-  const platName = PLATMAP[plat] || (t.platformName || '未知');
+  const platName = PLATMAP[plat] || (t.platformName || t('common.unknown'));
   const avLabel = isMonitor ? '监控' : (t.kind === 'queued' ? '排队' : '待播');
   return `
     <div class="idle3" title="${esc(name)}">
@@ -339,7 +339,7 @@ function idleRow(t) {
       <span class="idle-anchor">${esc(name)}</span>
       ${statusChip}
       <div class="idle-acts">
-        <button class="btn sm" data-act="check" data-id="${esc(t.id)}" title="立即检测该直播间是否已开播">立即检测</button>
+        <button class="btn sm" data-act="check" data-id="${esc(t.id)}" title="${t('common.checkLiveTip')}">${t('common.checkLive')}</button>
         <button class="btn sm ghost" data-act="detail" data-id="${esc(t.id)}">详情</button>
       </div>
     </div>`;
@@ -379,22 +379,22 @@ function bind(root, ctx) {
       const id = btn.dataset.id;
       btn.disabled = true;
       try {
-        if (act === 'pause') { await api.taskAction(id, 'pause'); toast('已暂停：本段已结束并入库，拉流已停止，不占用并发'); }
-        else if (act === 'stop') { await api.taskAction(id, 'stop'); toast('已停止并开始转封装'); }
-        else if (act === 'start') { await api.taskAction(id, 'start'); toast('已开始录制本场直播（仅监控房间的一次性录制，设置不变）'); }
-        else if (act === 'check') { await api.taskAction(id, 'check'); toast('已刷新开播状态'); }
+        if (act === 'pause') { await api.taskAction(id, 'pause'); toast(t('tasks.pauseDone')); }
+        else if (act === 'stop') { await api.taskAction(id, 'stop'); toast(t('tasks.stopDone')); }
+        else if (act === 'start') { await api.taskAction(id, 'start'); toast(t('dashboard.startToast')); }
+        else if (act === 'check') { await api.taskAction(id, 'check'); toast(t('dashboard.checkToast')); }
         else if (act === 'pause-all') {
           const ids = tasksOfType('recording').map((t) => t.id);
-          if (!ids.length) { toast('当前没有录制中的任务', 'warn'); return; }
+          if (!ids.length) { toast(t('dashboard.noRecording'), 'warn'); return; }
           const r = await api.batch('pause', ids);
-          toast(`已暂停 ${(r && r.okIds ? r.okIds.length : ids.length)} 条任务（结束当前分段，不占用并发）`);
+          toast(t('dashboard.pausedAll', (r && r.okIds ? r.okIds.length : ids.length)));
         } else if (act === 'detail') {
           ctx.openTaskModal(id);
           return;
         }
         ctx.invalidate('dashboard');
       } catch (e) {
-        toast(e.message || '操作失败', 'err');
+        toast(e.message || t('tasks.actionFail'), 'err');
       } finally {
         btn.disabled = false;
         if (act !== 'pause-all') await tick(ctx);

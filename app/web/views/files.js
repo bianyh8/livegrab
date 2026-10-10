@@ -3,6 +3,7 @@
    回收站已独立为导航页「回收站」。删除走 POST /api/files/delete（默认进回收站，一并带走同名的刮削 .jpg/.nfo）。 */
 
 import { api } from '../api.js';
+import { t } from '../i18n.js';
 import {
   esc, formatBytes, formatDuration, formatDateTime, platBadge, emptyBox,
   toast, confirmDialog, openPlayer, platformInfo,
@@ -25,7 +26,7 @@ let boundRoot = null;
 
 export async function render(root, ctx) {
   boundRoot = root;
-  root.innerHTML = `<div class="card"><div class="empty">正在加载文件库…</div></div>`;
+  root.innerHTML = `<div class="card"><div class="empty">${t('files.loadingLibrary')}</div></div>`;
   if (!state.bound) state.bound = true;
   ctx.onRefresh(() => tick(ctx));
   await tick(ctx, true);
@@ -41,7 +42,7 @@ async function tick(ctx, initial) {
     state.sessions = (r && r.items) || [];
     paint(ctx, initial);
   } catch (e) {
-    if (initial) boundRoot.innerHTML = `<div class="card"><div class="empty">文件库加载失败：${esc(e.message || '未知错误')}</div></div>`;
+    if (initial) boundRoot.innerHTML = `<div class="card"><div class="empty">${t('files.loadFailed', esc(e.message || t('common.unknownError')))}</div></div>`;
   } finally {
     state.pending = false;
   }
@@ -96,29 +97,29 @@ function paint(ctx, force) {
   root.innerHTML = `
     <div class="card">
       <div class="card-h">
-        <h3>录制文件库</h3>
-        <span class="hint">${list.length} 个视频文件 · ${esc(formatBytes(totalBytes))}</span>
+        <h3>${t('files.libraryTitle')}</h3>
+        <span class="hint">${esc(t('files.videoCount', list.length))} · ${esc(formatBytes(totalBytes))}</span>
         <div class="spacer"></div>
-        <button class="btn sm ghost" id="flRefresh">刷新</button>
+        <button class="btn sm ghost" id="flRefresh">${t('common.refresh')}</button>
       </div>
       <div class="toolbar" style="padding:10px 16px 12px;flex-wrap:wrap">
-        <input class="input" id="flQ" style="width:180px" placeholder="搜索 文件名/主播/标题" value="${esc(state.q)}" />
+        <input class="input" id="flQ" style="width:180px" placeholder="${t('files.searchPlaceholder')}" value="${esc(state.q)}" />
         <select class="select" id="flPlat" style="width:120px">
-          <option value="">全部平台</option>
+          <option value="">${t('common.allPlatforms')}</option>
           ${platforms.map((p) => `<option value="${esc(p)}"${state.platform === p ? ' selected' : ''}>${esc(platNameOf(p))}</option>`).join('')}
         </select>
-        <input class="input" id="flAnchor" style="width:150px" placeholder="主播名称" value="${esc(state.anchor)}" />
+        <input class="input" id="flAnchor" style="width:150px" placeholder="${t('files.anchorPlaceholder')}" value="${esc(state.anchor)}" />
         <input type="date" class="input" id="flDate" style="width:150px" value="${esc(state.date)}" />
         <select class="select" id="flExt" style="width:120px">
-          ${[['', '全部类型'], ['ts', '.ts 直播流'], ['mp4', '.mp4 / m4a'], ['m4a', '.m4a 音频']].map(([v, t]) => `<option value="${v}"${state.ext === v ? ' selected' : ''}>${t}</option>`).join('')}
+          ${[['', 'files.allTypes'], ['ts', 'files.extTs'], ['mp4', 'files.extMp4'], ['m4a', 'files.extM4a']].map(([v, k]) => `<option value="${v}"${state.ext === v ? ' selected' : ''}>${t(k)}</option>`).join('')}
         </select>
         <div class="spacer"></div>
-        <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--txt-2);cursor:pointer"><input type="checkbox" class="cb" id="flSelAll"${allSel ? ' checked' : ''} /> 全选</label>
-        <span class="chip ${state.picked.size ? 'on' : ''}" id="flPickChip"><i class="dot"></i>已选中 ${state.picked.size} 项</span>
-        <button class="btn sm danger" id="flDelPicked"${state.picked.size ? '' : ' disabled'}>删除所选</button>
+        <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--txt-2);cursor:pointer"><input type="checkbox" class="cb" id="flSelAll"${allSel ? ' checked' : ''} /> ${t('files.selectAll')}</label>
+        <span class="chip ${state.picked.size ? 'on' : ''}" id="flPickChip"><i class="dot"></i>${t('files.selectedCount', state.picked.size)}</span>
+        <button class="btn sm danger" id="flDelPicked"${state.picked.size ? '' : ' disabled'}>${t('files.deleteSelected')}</button>
       </div>
       <div style="padding:0 16px 16px" id="flBody">
-        ${list.length ? list.map(filenameRow).join('') : emptyBox('没有符合筛选条件的录制文件')}
+        ${list.length ? list.map(filenameRow).join('') : emptyBox(t('files.noFilteredFiles'))}
       </div>
     </div>`;
 
@@ -126,8 +127,8 @@ function paint(ctx, force) {
 }
 
 function platNameOf(id) {
-  const m = { douyin: '抖音', bilibili: '哔哩哔哩', kuaishou: '快手', huya: '虎牙', douyu: '斗鱼', xiaohongshu: '小红书', weibo: '微博', acfun: 'AcFun' };
-  return m[id] || id || '未知';
+  const m = { douyin: 'plat.douyin', bilibili: 'plat.bilibili', kuaishou: 'plat.kuaishou', huya: 'plat.huya', douyu: 'plat.douyu', xiaohongshu: 'plat.xiaohongshu', weibo: 'plat.weibo', acfun: 'plat.acfun' };
+  return (m[id] && t(m[id])) || id || t('common.unknown');
 }
 
 function filenameRow({ f, s, tag }) {
@@ -137,7 +138,7 @@ function filenameRow({ f, s, tag }) {
   const extLabel = tag || (f.ext ? f.ext.toUpperCase() : 'TS');
   return `
     <div class="fl-item" style="align-items:flex-start" data-file="${esc(f.id)}">
-      <input type="checkbox" class="cb" data-pick-file="${esc(f.id)}"${state.picked.has(f.id) ? ' checked' : ''} title="选择该文件" style="margin-top:6px" />
+      <input type="checkbox" class="cb" data-pick-file="${esc(f.id)}"${state.picked.has(f.id) ? ' checked' : ''} title="${t('files.selectThisFile')}" style="margin-top:6px" />
       <div class="fl-ico ${esc(icoCls)}">
         ${missing
           ? `<span class="th-ph">${esc(extLabel)}</span>`
@@ -146,20 +147,20 @@ function filenameRow({ f, s, tag }) {
       <div style="flex:1;min-width:0">
         <div style="font-size:13px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(f.name || f.relPath || '—')}
           ${tag ? `<span class="chip">${esc(tag)}</span>` : ''}
-          ${playing ? '<span class="chip wait" style="margin-left:6px"><i class="dot"></i>录制中</span>' : missing ? '<span class="chip err" style="margin-left:6px">文件缺失</span>' : '<span class="chip on" style="margin-left:6px"><i class="dot"></i>已录完</span>'}
+          ${playing ? `<span class="chip wait" style="margin-left:6px"><i class="dot"></i>${t('common.recording')}</span>` : missing ? `<span class="chip err" style="margin-left:6px">${t('files.missing')}</span>` : `<span class="chip on" style="margin-left:6px"><i class="dot"></i>${t('common.recorded')}</span>`}
         </div>
         <div style="display:flex;gap:10px;align-items:center;margin-top:5px;font-size:11.5px;color:var(--txt-3);flex-wrap:wrap">
           ${platBadge(s.platform, s.platformName)}
-          <span>${esc(s.streamer || '未知主播')}</span>
+          <span>${esc(s.streamer || t('common.unknownAnchor'))}</span>
           <span>${esc(formatDateTime(s.startedAt))}</span>
-          <span>时长 ${esc(formatDuration(f.durationSec || s.durationSec || 0))}</span>
+          <span>${esc(t('files.duration', esc(formatDuration(f.durationSec || s.durationSec || 0))))}</span>
           <span>${esc(formatBytes(f.bytes || 0))}</span>
         </div>
       </div>
       <div class="acts">
-        <button class="btn sm ghost" data-file-act="play" data-id="${esc(f.id)}"${missing ? ' disabled' : ''}>播放</button>
-        <a class="btn sm ghost" href="${esc(api.downloadUrl(f.id))}" download>下载</a>
-        <button class="btn sm danger" data-file-act="delete" data-id="${esc(f.id)}"${playing || missing ? ' disabled' : ''}>删除</button>
+        <button class="btn sm ghost" data-file-act="play" data-id="${esc(f.id)}"${missing ? ' disabled' : ''}>${t('files.play')}</button>
+        <a class="btn sm ghost" href="${esc(api.downloadUrl(f.id))}" download>${t('files.download')}</a>
+        <button class="btn sm danger" data-file-act="delete" data-id="${esc(f.id)}"${playing || missing ? ' disabled' : ''}>${t('common.delete')}</button>
       </div>
     </div>`;
 }
@@ -208,27 +209,27 @@ function bind(ctx) {
     btn.onclick = async () => {
       const id = btn.dataset.id;
       const found = findFile(id);
-      if (!found) { toast('找不到该文件记录', 'warn'); return; }
+      if (!found) { toast(t('files.recordNotFound'), 'warn'); return; }
       const act = btn.dataset.fileAct;
       if (act === 'play') {
         openPlayer(ctx, filePlayer(found.f, found.s, found.tag));
       } else if (act === 'delete') {
-        if (found.f.status === 'recording') { toast('录制中的分段不可删除', 'warn'); return; }
+        if (found.f.status === 'recording') { toast(t('files.recordingCannotDelete'), 'warn'); return; }
         const toTrash = await trashEnabled();
-        const tr = toTrash ? '移入回收站' : '永久删除';
+        const tr = toTrash ? t('files.moveToTrash') : t('files.permanentDelete');
         confirmDialog({
-          title: '删除录制文件', danger: true, ok: tr,
+          title: t('files.deleteFileTitle'), danger: true, ok: tr,
           text: toTrash
-            ? `将删除 <b>${esc(found.f.name || '该文件')}</b>（${esc(formatBytes(found.f.bytes || 0))}）并移入回收站 <span class="mono">/data/.trash</span>（同名的刮削图片/描述 .jpg/.nfo 一并已随行可还原）。<br><span style="color:var(--txt-3)">源 .ts 是否保留由「系统设置」决定，不在本次删除范围。保留 7 天，可去「回收站」页还原。</span>`
-            : `将从磁盘 <b>永久删除</b> <b>${esc(found.f.name || '该文件')}</b>（${esc(formatBytes(found.f.bytes || 0))}）及同名的刮削图片/描述 .jpg/.nfo，<b>不可还原</b>。<br><span style="color:var(--txt-3)">源 .ts 是否保留由「系统设置」决定，不在本次删除范围。若需留底请先到系统设置打开「删除时移入回收站」。</span>`,
+            ? t('files.deleteToTrashText', esc(found.f.name || t('files.thatFile')), esc(formatBytes(found.f.bytes || 0)))
+            : t('files.deletePermanentText', esc(found.f.name || t('files.thatFile')), esc(formatBytes(found.f.bytes || 0))),
           onOk: async () => {
             try {
               const r = await api.filesDelete({ fileIds: [id] });
-              toast((r && r.useTrash === false ? '已永久删除' : '已移入回收站') + `（${Number(r && r.movedToTrash) || 1} 项）`);
+              toast((r && r.useTrash === false ? t('files.toastDeletedPermanent') : t('files.toastDeletedTrash')) + t('files.deletedCount', Number(r && r.movedToTrash) || 1));
               state.picked.delete(id);
               state.hash = '';
               await tick(ctx, true);
-            } catch (e) { toast(e.message || '删除失败', 'err'); }
+            } catch (e) { toast(e.message || t('files.deleteFailed'), 'err'); }
           },
         });
       }
@@ -251,7 +252,7 @@ function findFile(id) {
 function filePlayer(f, s, tag) {
   return {
     fileId: f.id,
-    name: f.name || f.relPath || '回放',
+    name: f.name || f.relPath || t('common.playback'),
     platform: s.platform,
     platformName: s.platformName,
     qualityLabel: s.qualityLabel || '—',
@@ -268,26 +269,26 @@ function deleteFiles(ids, ctx) {
   let bytes = 0;
   rows.forEach(({ f }) => { bytes += Number(f.bytes) || 0; });
   trashEnabled().then((toTrash) => {
-    const tr = toTrash ? '移入回收站' : '永久删除';
+    const tr = toTrash ? t('files.moveToTrash') : t('files.permanentDelete');
     confirmDialog({
-      title: '删除录制文件',
+      title: t('files.deleteFileTitle'),
       danger: true,
       ok: tr,
       text: toTrash
-        ? `将删除选中的 <b>${ids.length}</b> 个文件 / <b>${esc(formatBytes(bytes))}</b>，并移入回收站 <span class="mono">/data/.trash</span>（连同同名的刮削图片/描述，可去「回收站」页还原）。<br><span style="color:var(--txt-3)">录制中的分段不会被删除。</span>`
-        : `将从磁盘 <b>永久删除</b> 选中的 <b>${ids.length}</b> 个文件 / <b>${esc(formatBytes(bytes))}</b> 及其同名的刮削图片/描述，<b>不可还原</b>。<br><span style="color:var(--txt-3)">录制中的分段不会被删除。若需留底请先到系统设置打开「删除时移入回收站」。</span>`,
+        ? t('files.deleteToTrashSelected', ids.length, esc(formatBytes(bytes)))
+        : t('files.deletePermanentSelected', ids.length, esc(formatBytes(bytes))),
       onOk: async () => {
         try {
           const r = await api.filesDelete({ fileIds: ids });
-          toast((r && r.useTrash === false ? '已永久删除' : '已移入回收站') + `（${Number(r && r.movedToTrash) || ids.length} 项 / ${esc(formatBytes(r && r.bytes != null ? r.bytes : bytes))}）`);
+          toast((r && r.useTrash === false ? t('files.toastDeletedPermanent') : t('files.toastDeletedTrash')) + t('files.deletedCountBytes', Number(r && r.movedToTrash) || ids.length, esc(formatBytes(r && r.bytes != null ? r.bytes : bytes))));
           ids.forEach((id) => state.picked.delete(id));
           state.hash = '';
           await tick(ctx, true);
-        } catch (e) { toast(e.message || '删除失败', 'err'); }
+        } catch (e) { toast(e.message || t('files.deleteFailed'), 'err'); }
       },
     });
   }).catch(() => {
-    toast('读取删除设置失败，请重试', 'err');
+    toast(t('files.readTrashSettingFailed'), 'err');
   });
 }
 

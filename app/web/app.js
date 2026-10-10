@@ -6,18 +6,18 @@ import { api, ApiError, setUnauthorizedHandler } from './api.js';
 import {
   toast, confirmDialog, formatBytes, formatDuration, formatDurationCn, formatDateTime,
 } from './ui.js';
-import { loadI18n } from './i18n.js';
+import { loadI18n, t } from './i18n.js';
 
 /* ================= 路由表 ================= */
 
 const ROUTES = [
-  { page: 'dashboard', file: 'dashboard', title: '总览', sub: '实时监控中的直播间与录制状态' },
-  { page: 'tasks', file: 'tasks', title: '录制任务', sub: '管理监控列表、清晰度与分段策略' },
-  { page: 'files', file: 'files', title: '录制文件', sub: '浏览、回放、转封装与清理已录制文件' },
-  { page: 'events', file: 'events', title: '最近事件', sub: '引擎与任务的关键动作（最新在前）' },
-  { page: 'settings', file: 'settings/index', title: '系统设置', sub: '录制与存储、命名规则、平台账号、通知、安全与登录' },
-  { page: 'logs', file: 'logs', title: '运行日志', sub: '引擎与每个任务的详细运行记录' },
-  { page: 'trash', file: 'trash', title: '回收站', sub: '已删除录制文件与刮削图片/描述，可还原或清空' },
+  { page: 'dashboard', file: 'dashboard', title: t('nav.overview'), sub: t('nav.overviewSub') },
+  { page: 'tasks', file: 'tasks', title: t('nav.tasks'), sub: t('nav.tasksSub') },
+  { page: 'files', file: 'files', title: t('nav.files'), sub: t('nav.filesSub') },
+  { page: 'events', file: 'events', title: t('events.title'), sub: t('nav.eventsSub') },
+  { page: 'settings', file: 'settings/index', title: t('nav.settings'), sub: t('nav.settingsSub') },
+  { page: 'logs', file: 'logs', title: t('nav.logs'), sub: t('nav.logsSub') },
+  { page: 'trash', file: 'trash', title: t('nav.trash'), sub: t('nav.trashSub') },
 ];
 const DEFAULT_PAGE = 'dashboard';
 
@@ -100,12 +100,12 @@ function showLoginErr(msg) {
 function hideLoginErr() { const b = el('loginErr'); if (b) b.classList.remove('show'); }
 
 function describeError(e) {
-  if (!e) return '未知错误';
+  if (!e) return t('common.unknownError');
   if (e instanceof ApiError) {
-    if (e.code === 'INVALID_CREDENTIALS' || e.code === 'BAD_CREDENTIALS') return '用户名或密码错误';
-    if (e.code === 'LOCKED') return e.message || '失败次数过多，已临时锁定，请稍后再试';
-    if (e.code === 'WEAK_PASSWORD') return e.message || '密码强度不足（至少 8 位）';
-    if (e.code === 'ALREADY_INIT') return '账号已初始化，请直接登录';
+    if (e.code === 'INVALID_CREDENTIALS' || e.code === 'BAD_CREDENTIALS') return t('login.errWrong');
+    if (e.code === 'LOCKED') return e.message || t('login.errLocked');
+    if (e.code === 'WEAK_PASSWORD') return e.message || t('login.errWeak');
+    if (e.code === 'ALREADY_INIT') return t('login.errInit');
     if (e.code === 'NETWORK') return e.message;
     return e.message || e.code;
   }
@@ -119,10 +119,10 @@ let loginMode = 'login';
 function applyLoginMode(mode) {
   loginMode = mode;
   const init = mode === 'init';
-  setText('loginTitle', init ? '初始化管理员账号' : '登录管理台');
+  setText('loginTitle', init ? t('login.initTitle') : t('login.title'));
   setText('loginSub', init
-    ? '首次部署，请设置管理员账号与密码（密码至少 8 位）'
-    : '请输入管理员账号与密码以访问录制管理台');
+    ? t('login.initHint')
+    : t('login.hint'));
   const p2 = el('loginPass2Row');
   if (p2) p2.style.display = init ? '' : 'none';
   const row = el('loginRememberRow');
@@ -134,9 +134,9 @@ function applyLoginMode(mode) {
   }
   const pass2 = el('loginPass2');
   if (pass2) pass2.value = '';
-  setText('loginSwitchHint', init ? '已经初始化过？' : '首次部署？');
-  setText('loginSwitchLink', init ? '返回登录' : '初始化管理员账号');
-  setText('loginBtn', init ? '创建并登录' : '登 录');
+  setText('loginSwitchHint', init ? t('login.switchHintInit') : t('login.switchHintLogin'));
+  setText('loginSwitchLink', init ? t('login.switchToLogin') : t('login.initTitle'));
+  setText('loginBtn', init ? t('login.btnCreate') : t('login.btnLogin'));
   hideLoginErr();
 }
 
@@ -166,7 +166,7 @@ async function enterApp(user) {
     setText('userName', runtime.user.username || 'admin');
     setText('userAva', String(runtime.user.username || 'A').charAt(0).toUpperCase());
   }
-  setText('userMeta', '管理员 · 本次登录 ' + new Date().toTimeString().slice(0, 5));
+  setText('userMeta', t('app.userMeta', new Date().toTimeString().slice(0, 5)));
   startLoop();
   await handleRoute(true);
 }
@@ -181,7 +181,7 @@ async function checkAuth() {
     if (e instanceof ApiError && e.code === 'NETWORK') {
       applyLoginMode('login');
       showLoginPage();
-      showLoginErr('无法连接后端服务（' + e.message + '）');
+      showLoginErr(t('common.errConn', e.message));
       return;
     }
   }
@@ -198,7 +198,7 @@ function bindLogin() {
   if (link) link.onclick = () => applyLoginMode(loginMode === 'login' ? 'init' : 'login');
 
   const forgot = el('loginForgot');
-  if (forgot) forgot.onclick = () => toast('请联系部署管理员：删除容器内 /config/users.json 后重启即可重新初始化密码');
+  if (forgot) forgot.onclick = () => toast(t('login.forgot'));
 
   const t1 = el('pwToggle1');
   if (t1) t1.onclick = () => togglePw(t1, 'loginPass');
@@ -212,15 +212,15 @@ function bindLogin() {
     const u = (el('loginUser').value || '').trim();
     const p = el('loginPass').value;
     const p2 = el('loginPass2').value;
-    if (!u) { showLoginErr('请输入用户名'); return; }
-    if (!p) { showLoginErr('请输入密码'); return; }
+    if (!u) { showLoginErr(t('login.errUsername')); return; }
+    if (!p) { showLoginErr(t('login.errPassword')); return; }
     const init = loginMode === 'init';
-    if (init && p.length < 8) { showLoginErr('密码至少 8 位'); return; }
-    if (init && p !== p2) { showLoginErr('两次输入的密码不一致'); return; }
+    if (init && p.length < 8) { showLoginErr(t('login.errPassLen')); return; }
+    if (init && p !== p2) { showLoginErr(t('login.errPassMismatch')); return; }
     hideLoginErr();
     const label = btn.textContent;
     btn.disabled = true;
-    btn.textContent = init ? '正在创建…' : '正在登录…';
+    btn.textContent = init ? t('login.loadingCreate') : t('login.loadingLogin');
     try {
       const remember = !!(el('loginRemember') && el('loginRemember').checked);
       if (init) await api.init(u, p);
@@ -228,7 +228,7 @@ function bindLogin() {
       let me = { username: u };
       try { me = await api.authMe() || me; } catch { /* 忽略 */ }
       runtime.loggedInAt = Date.now();
-      toast(init ? '管理员账号已创建，已自动登录' : '登录成功，欢迎回来');
+      toast(init ? t('login.created') : t('login.greeting'));
       await enterApp(me);
     } catch (e) {
       showLoginErr(describeError(e));
@@ -244,7 +244,7 @@ function togglePw(btn, id) {
   if (!input) return;
   const show = input.type === 'password';
   input.type = show ? 'text' : 'password';
-  btn.textContent = show ? '隐藏' : '显示';
+  btn.textContent = show ? t('login.hidePwd') : t('login.showPwd');
 }
 
 async function doLogout() {
@@ -257,7 +257,7 @@ async function doLogout() {
   closeSse();
   applyLoginMode('login');
   showLoginPage();
-  toast('已退出登录');
+  toast(t('login.loggedOut'));
 }
 
 /* ================= 路由 ================= */
@@ -314,7 +314,7 @@ async function handleRoute(first) {
   } catch (e) {
     console.error('[LiveGrab] 视图模块加载失败', page, e);
     stopView();
-    root.innerHTML = `<div class="card"><div class="empty">页面加载失败：${escText(e && e.message || e)}</div></div>`;
+    root.innerHTML = `<div class="card"><div class="empty">${t('pageLoad.failed', escText(e && e.message || e))}</div></div>`;
     return;
   }
 
@@ -333,7 +333,7 @@ async function handleRoute(first) {
   } catch (e) {
     console.error('[LiveGrab] 视图渲染失败', page, e);
     if (runtime.view === myToken) {
-      root.innerHTML = `<div class="card"><div class="empty">页面渲染失败：${escText(e && e.message || e)}</div></div>`;
+      root.innerHTML = `<div class="card"><div class="empty">${t('pageRender.failed', escText(e && e.message || e))}</div></div>`;
     }
   }
 }
@@ -391,14 +391,14 @@ function applyStatus(st) {
 
   const chip = el('engineChip');
   if (chip) {
-    if (engine.ffmpegAvailable) { chip.className = 'chip on'; chip.innerHTML = '<i class="dot"></i>引擎正常'; }
-    else { chip.className = 'chip err'; chip.innerHTML = '<i class="dot"></i>ffmpeg 不可用'; }
+    if (engine.ffmpegAvailable) { chip.className = 'chip on'; chip.innerHTML = '<i class="dot"></i>' + t('common.engineOk'); }
+    else { chip.className = 'chip err'; chip.innerHTML = '<i class="dot"></i>' + t('common.ffmpegUnavailable'); }
   }
 
   const nDash = el('navDashBadge');
   if (nDash) {
     const rec = Number(stats.recordingCount) || 0;
-    nDash.textContent = rec + ' 录制中';
+    nDash.textContent = t('topbar.recording', rec);
     nDash.style.display = rec > 0 ? '' : 'none';
   }
 
@@ -457,7 +457,7 @@ function bindChrome() {
     runtime.emit('refresh-all');
     pullStatus();
     refreshOnce();
-    toast('已重新拉取所有直播间状态');
+    toast(t('topbar.refreshStatus'));
   };
   const nb = el('newTaskBtn');
   if (nb) nb.onclick = () => ctx.openTaskModal(null);
@@ -473,7 +473,7 @@ async function boot() {
     runtime.authed = false;
     applyLoginMode('login');
     showLoginPage();
-    showLoginErr('登录已失效，请重新登录');
+    showLoginErr(t('common.errInvalid'));
   });
   bindChrome();
   bindLogin();

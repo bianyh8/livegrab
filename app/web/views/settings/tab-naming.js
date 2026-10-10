@@ -5,27 +5,28 @@
 
 import { api } from '../../api.js';
 import { esc, toast, num } from '../../ui.js';
+import { t } from '../../i18n.js';
 
 const FALLBACK_TOKENS = [
-  ['{主播}', '主播昵称', '某某小主播'],
-  ['{平台}', '平台名称', '抖音 / 哔哩哔哩'],
-  ['{房间号}', '直播间房间号', '23456789'],
-  ['{标题}', '当次直播标题', '今天打排位 冲王者'],
-  ['{日期}', '录制开始日期（格式见上）', '2025-06-01'],
-  ['{时间}', '录制开始时间', '20-13-05'],
-  ['{清晰度}', '实际使用的清晰度', '原画 / 蓝光 / 仅音频'],
-  ['{序号}', '分段序号，按位数补零', '001'],
-  ['{任务}', '任务 ID', 'task_07'],
-  ['{分辨率}', '实际分辨率', '1920x1080'],
-  ['{时长}', '分段时长（录制完成后才可知，仅合并命名用）', '01-00-00'],
-  ['{自定义}', '任务级自定义文本，可在任务中单独覆盖', '—'],
+  ['{主播}', t('settings.nmVarAnchorDesc'), t('settings.nmVarAnchorEx')],
+  ['{平台}', t('settings.nmVarPlatformDesc'), t('settings.nmVarPlatformEx')],
+  ['{房间号}', t('settings.nmVarRoomDesc'), '23456789'],
+  ['{标题}', t('settings.nmVarTitleDesc'), t('settings.nmVarTitleEx')],
+  ['{日期}', t('settings.nmVarDateDesc'), '2025-06-01'],
+  ['{时间}', t('settings.nmVarTimeDesc'), '20-13-05'],
+  ['{清晰度}', t('settings.nmVarQualityDesc'), t('settings.nmVarQualityEx')],
+  ['{序号}', t('settings.nmVarSeqDesc'), '001'],
+  ['{任务}', t('settings.nmVarTaskDesc'), 'task_07'],
+  ['{分辨率}', t('settings.nmVarResolutionDesc'), '1920x1080'],
+  ['{时长}', t('settings.nmVarDurationDesc'), '01-00-00'],
+  ['{自定义}', t('settings.nmVarCustomDesc'), '—'],
 ];
 
 const DATE_FORMATS = [
   ['YYYY-MM-DD', 'YYYY-MM-DD（2025-06-01）'],
   ['YYYYMMDD', 'YYYYMMDD（20250601）'],
   ['YYYY.MM.DD', 'YYYY.MM.DD（2025.06.01）'],
-  ['YYYY年MM月DD日', 'YYYY年MM月DD日（2025年06月01日）'],
+  ['YYYY年MM月DD日', t('settings.dateFormatCn')],
 ];
 const TIME_FORMATS = [
   ['HH-mm-ss', 'HH-mm-ss（20-13-05）'],
@@ -43,7 +44,7 @@ const state = {
 };
 
 export async function render(root, ctx, kit) {
-  root.innerHTML = `<div class="card"><div class="empty">正在加载命名配置…</div></div>`;
+  root.innerHTML = `<div class="card"><div class="empty">${t('settings.nmLoading')}</div></div>`;
   try {
     const n = await api.naming();
     state.naming = n || { profiles: [], activeId: 'default', variables: [] };
@@ -51,7 +52,7 @@ export async function render(root, ctx, kit) {
     const profiles = state.naming.profiles || [];
     if (!profiles.length) {
       state.naming.profiles = [{
-        id: 'default', name: '通用（默认）',
+        id: 'default', name: t('settings.nmDefaultProfile'),
         fnTemplate: '{日期}_{主播}_{清晰度}_{序号}',
         dirTemplate: '{平台}/{主播}/{日期}',
         options: {}, binding: { type: 'none', value: '' },
@@ -59,7 +60,7 @@ export async function render(root, ctx, kit) {
     }
     state.activeId = state.naming.activeId || state.naming.profiles[0].id;
   } catch (e) {
-    root.innerHTML = `<div class="card"><div class="empty">命名配置加载失败：${esc(e.message || e)}</div></div>`;
+    root.innerHTML = `<div class="card"><div class="empty">${t('settings.nmLoadFailed', esc(e.message || e))}</div></div>`;
     return;
   }
   paint(ctx, kit);
@@ -97,114 +98,114 @@ function paint(ctx, kit, keepPreview) {
     <div class="grid2b">
       <div class="stack">
         <div class="card">
-          <div class="card-h"><h3>命名配置</h3><span class="hint">一个配置 = 一套「文件名模板 + 目录模板 + 日期格式 + 冲突策略」，可绑定到平台或任务</span>
+          <div class="card-h"><h3>${t('settings.nmConfigTitle')}</h3><span class="hint">${t('settings.nmConfigHint')}</span>
             <div class="spacer"></div>
-            <button class="btn sm ghost" id="nmCopy">复制</button>
-            <button class="btn sm ghost" id="nmNew">新建</button>
-            <button class="btn sm danger" id="nmDel">删除</button>
+            <button class="btn sm ghost" id="nmCopy">${t('common.copy')}</button>
+            <button class="btn sm ghost" id="nmNew">${t('settings.nmNew')}</button>
+            <button class="btn sm danger" id="nmDel">${t('common.delete')}</button>
           </div>
           <div class="card-b">
             <div class="row wrap">
-              <div class="f1" style="min-width:240px"><label class="fl">当前配置</label>
+              <div class="f1" style="min-width:240px"><label class="fl">${t('settings.nmCurrentProfile')}</label>
                 <select class="select" id="nmProfile">
                   ${(state.naming.profiles || []).map((x) => {
                     const b = x.binding || {};
-                    const tag = b.type === 'platform' ? `（绑定：${esc(platName(kit, b.value))}）` : b.type === 'task' ? `（绑定：任务 ${esc(b.value)}）` : '（未绑定）';
+                    const tag = b.type === 'platform' ? t('settings.nmBoundPlatform', esc(platName(kit, b.value))) : b.type === 'task' ? t('settings.nmBoundTask', esc(b.value)) : t('settings.nmUnbound');
                     return `<option value="${esc(x.id)}"${x.id === state.activeId ? ' selected' : ''}>${esc(x.name || x.id)} ${tag}</option>`;
                   }).join('')}
                 </select></div>
-              <div class="f1" style="min-width:240px"><label class="fl">绑定范围</label>
+              <div class="f1" style="min-width:240px"><label class="fl">${t('settings.nmBindingLabel')}</label>
                 <select class="select" id="nmBinding">
-                  <option value="none"${bindingValue === 'none' ? ' selected' : ''}>不绑定（作为新任务默认）</option>
-                  ${kit.state.platforms.map((pl) => `<option value="p:${esc(pl.id)}"${bindingValue === 'p:' + pl.id ? ' selected' : ''}>按平台：${esc(pl.name)}</option>`).join('')}
-                  ${taskOptions.map((t) => `<option value="t:${esc(t.id)}"${bindingValue === 't:' + t.id ? ' selected' : ''}>按任务：${esc(t.anchorName || t.name || t.id)}</option>`).join('')}
+                  <option value="none"${bindingValue === 'none' ? ' selected' : ''}>${t('settings.nmBindingNone')}</option>
+                  ${kit.state.platforms.map((pl) => `<option value="p:${esc(pl.id)}"${bindingValue === 'p:' + pl.id ? ' selected' : ''}>${t('settings.nmBindingPlatform', esc(pl.name))}</option>`).join('')}
+                  ${taskOptions.map((tk) => `<option value="t:${esc(tk.id)}"${bindingValue === 't:' + tk.id ? ' selected' : ''}>${t('settings.nmBindingTask', esc(tk.anchorName || tk.name || tk.id))}</option>`).join('')}
                 </select></div>
-              <div class="f1" style="min-width:200px"><label class="fl">配置名称</label>
-                <input class="input" id="nmName" maxlength="40" value="${esc(p.name || p.id || '')}" placeholder="命名配置名称，便于区分多套模板" />
+              <div class="f1" style="min-width:200px"><label class="fl">${t('settings.nmNameLabel')}</label>
+                <input class="input" id="nmName" maxlength="40" value="${esc(p.name || p.id || '')}" placeholder="${t('settings.nmNamePlaceholder')}" />
               </div>
             </div>
-            <div class="hintline">任务里"跟随全局"时使用其平台对应的配置；任务里自定义过则优先用任务自己的。渲染顺序永远是：变量替换 → 非法字符处理 → 去首尾空格与点 → 截断 → 重名去重 → 拼接扩展名。</div>
+            <div class="hintline">${t('settings.nmFollowGlobalHint')}</div>
           </div>
         </div>
 
         <div class="card">
-          <div class="card-h"><h3>文件名模板</h3><span class="hint">点击下方变量即可插入到光标处</span>
+          <div class="card-h"><h3>${t('settings.nmFnTitle')}</h3><span class="hint">${t('settings.nmFnHint')}</span>
             <div class="spacer"></div>
-            <button class="btn sm ghost" data-preset="dy">抖音预设</button>
-            <button class="btn sm ghost" data-preset="bili">B站预设</button>
+            <button class="btn sm ghost" data-preset="dy">${t('settings.nmPresetDy')}</button>
+            <button class="btn sm ghost" data-preset="bili">${t('settings.nmPresetBili')}</button>
           </div>
           <div class="card-b">
             <div class="form-row">
-              <label class="fl">文件名格式</label>
+              <label class="fl">${t('settings.nmFnFormatLabel')}</label>
               <input class="input mono" id="nmFn" value="${esc(p.fnTemplate || '')}" />
-              <div class="hintline">不含扩展名；扩展名由「封装格式」自动决定（.ts / .mp4 / .m4a / .flv）</div>
+              <div class="hintline">${t('settings.nmFnHint1')}</div>
             </div>
             <div class="form-row">
-              <label class="fl">插入变量</label>
+              <label class="fl">${t('settings.nmInsertVarLabel')}</label>
               <div class="tokens" id="nmTokens">
                 ${variables.map((v) => `<span class="token" data-token="${esc(v.token)}" title="${esc(v.desc || '')}">${esc(v.token)}</span>`).join('')}
               </div>
             </div>
             <div class="form-row">
-              <label class="fl">目录结构模板</label>
+              <label class="fl">${t('settings.nmDirLabel')}</label>
               <input class="input mono" id="nmDir" value="${esc(p.dirTemplate || '')}" />
-              <div class="hintline">相对「存储根目录」，留空表示全部平铺到根目录；支持 / 创建多级子目录（<span class="mono">\\</span> 会自动归一化为 <span class="mono">/</span>）</div>
+              <div class="hintline">${t('settings.nmDirHint')}</div>
             </div>
             <div class="divider"></div>
             <div class="row wrap">
               <div class="f1" style="min-width:170px">
-                <label class="fl">日期格式</label>
+                <label class="fl">${t('settings.nmDateLabel')}</label>
                 <select class="select" id="nmDate">
-                  ${DATE_FORMATS.map(([v, t]) => `<option value="${esc(v)}"${(o.dateFormat || 'YYYY-MM-DD') === v ? ' selected' : ''}>${esc(t)}</option>`).join('')}
+                  ${DATE_FORMATS.map(([v, lbl]) => `<option value="${esc(v)}"${(o.dateFormat || 'YYYY-MM-DD') === v ? ' selected' : ''}>${esc(lbl)}</option>`).join('')}
                 </select>
               </div>
               <div class="f1" style="min-width:150px">
-                <label class="fl">分段序号位数</label>
+                <label class="fl">${t('settings.nmPadLabel')}</label>
                 <select class="select" id="nmPad">
-                  ${[3, 2, 4].map((v) => `<option value="${v}"${Number(o.seqPad || 3) === v ? ' selected' : ''}>${v} 位（${'0'.repeat(v - 1)}1）</option>`).join('')}
+                  ${[3, 2, 4].map((v) => `<option value="${v}"${Number(o.seqPad || 3) === v ? ' selected' : ''}>${t('settings.nmPadOption', v, '0'.repeat(v - 1) + '1')}</option>`).join('')}
                 </select>
               </div>
               <div class="f1" style="min-width:150px">
-                <label class="fl">时间格式</label>
+                <label class="fl">${t('settings.nmTimeLabel')}</label>
                 <select class="select" id="nmTime">
-                  ${TIME_FORMATS.map(([v, t]) => `<option value="${esc(v)}"${(o.timeFormat || 'HH-mm-ss') === v ? ' selected' : ''}>${esc(t)}</option>`).join('')}
+                  ${TIME_FORMATS.map(([v, lbl]) => `<option value="${esc(v)}"${(o.timeFormat || 'HH-mm-ss') === v ? ' selected' : ''}>${esc(lbl)}</option>`).join('')}
                 </select>
               </div>
             </div>
             <div class="row wrap" style="margin-top:16px">
               <div class="f1" style="min-width:240px">
-                <label class="fl">非法字符处理</label>
+                <label class="fl">${t('settings.nmIllegalLabel')}</label>
                 <select class="select" id="nmIllegal">
-                  <option value="replace"${(o.illegal || 'replace') === 'replace' ? ' selected' : ''}>替换为下划线 _（推荐）</option>
-                  <option value="remove"${o.illegal === 'remove' ? ' selected' : ''}>直接删除</option>
-                  <option value="keep"${o.illegal === 'keep' ? ' selected' : ''}>保留（可能失败）</option>
+                  <option value="replace"${(o.illegal || 'replace') === 'replace' ? ' selected' : ''}>${t('settings.nmIllegalReplace')}</option>
+                  <option value="remove"${o.illegal === 'remove' ? ' selected' : ''}>${t('settings.nmIllegalRemove')}</option>
+                  <option value="keep"${o.illegal === 'keep' ? ' selected' : ''}>${t('settings.nmIllegalKeep')}</option>
                 </select>
-                <div class="hintline">跨平台并集过滤 <span class="mono">\\ / : * ? " &lt; &gt; |</span> 与首尾空格、点</div>
+                <div class="hintline">${t('settings.nmIllegalHint')}</div>
               </div>
               <div class="f1" style="min-width:240px">
-                <label class="fl">重名策略</label>
+                <label class="fl">${t('settings.nmDupLabel')}</label>
                 <select class="select" id="nmDup">
-                  <option value="suffix"${(o.duplicate || 'suffix') === 'suffix' ? ' selected' : ''}>追加 _2 _3 序号（推荐）</option>
-                  <option value="timestamp"${o.duplicate === 'timestamp' ? ' selected' : ''}>追加录制时间戳</option>
-                  <option value="overwrite"${o.duplicate === 'overwrite' ? ' selected' : ''}>覆盖同名文件</option>
+                  <option value="suffix"${(o.duplicate || 'suffix') === 'suffix' ? ' selected' : ''}>${t('settings.nmDupSuffix')}</option>
+                  <option value="timestamp"${o.duplicate === 'timestamp' ? ' selected' : ''}>${t('settings.nmDupTimestamp')}</option>
+                  <option value="overwrite"${o.duplicate === 'overwrite' ? ' selected' : ''}>${t('settings.nmDupOverwrite')}</option>
                 </select>
               </div>
             </div>
             <div class="form-row" style="margin-top:16px">
-              <label class="fl">超长名称处理</label>
+              <label class="fl">${t('settings.nmMaxLabel')}</label>
               <div class="row" style="align-items:center;gap:12px">
                 <input class="input" id="nmMax" style="width:130px" value="${esc(String(num(o.maxLength || 120, 0)))}" />
-                <span style="color:var(--txt-3);font-size:12.5px">字符，超出时截断并在结尾保留序号（Linux 单层目录名上限 255 <b>字节</b>，中文按 UTF-8 约 3 字节/字，故 120 字符更保险）</span>
+                <span style="color:var(--txt-3);font-size:12.5px">${t('settings.nmMaxHint')}</span>
               </div>
             </div>
           </div>
         </div>
 
         <div class="card">
-          <div class="card-h"><h3>变量说明</h3><span class="hint">共 ${variables.length} 个可用变量</span></div>
+          <div class="card-h"><h3>${t('settings.nmVarsTitle')}</h3><span class="hint">${t('settings.nmVarsHint', variables.length)}</span></div>
           <div class="card-b" style="padding:0">
             <table>
-              <thead><tr><th style="width:130px">变量</th><th>说明</th><th style="width:220px">示例值</th></tr></thead>
+              <thead><tr><th style="width:130px">${t('settings.nmColVar')}</th><th>${t('settings.nmColDesc')}</th><th style="width:220px">${t('settings.nmColExample')}</th></tr></thead>
               <tbody>${variables.map((v) => `<tr>
                 <td class="mono" style="color:#a9c0ff">${esc(v.token)}</td>
                 <td>${esc(v.desc || '')}</td>
@@ -217,8 +218,8 @@ function paint(ctx, kit, keepPreview) {
 
       <div class="stack">
         <div class="card">
-          <div class="card-h"><h3>实时预览</h3><span class="hint">示例数据</span>
-            <div class="spacer"></div><button class="btn sm primary" id="nmSave">保存命名配置</button></div>
+          <div class="card-h"><h3>${t('settings.nmPreviewTitle')}</h3><span class="hint">${t('settings.nmPreviewHint')}</span>
+            <div class="spacer"></div><button class="btn sm primary" id="nmSave">${t('settings.nmSaveTitle')}</button></div>
           <div class="card-b">
             <div class="preview">
               <div class="pth" id="nmPrevDir">/data/</div>
@@ -226,17 +227,17 @@ function paint(ctx, kit, keepPreview) {
             </div>
             <div class="divider"></div>
             <div class="kv">
-              <div class="k">完整路径长度</div><div id="nmPathLen" class="mono">—</div>
-              <div class="k">扩展名</div><div class="mono">.ts（录制中）→ .mp4（转封装后）</div>
-              <div class="k">排序效果</div><div>同一直播间分段按名称自然排序连续</div>
+              <div class="k">${t('settings.nmPathLenLabel')}</div><div id="nmPathLen" class="mono">—</div>
+              <div class="k">${t('settings.nmExtLabel')}</div><div class="mono">${t('settings.nmExtValue')}</div>
+              <div class="k">${t('settings.nmSortLabel')}</div><div>${t('settings.nmSortValue')}</div>
             </div>
             <div class="divider"></div>
-            <div class="note">同一模板需同时满足：① 同一场直播的多分段可连续排序；② 不同直播间不互相覆盖；③ 文件名中可直接看出日期与清晰度。未识别变量会原样保留并提示。</div>
+            <div class="note">${t('settings.nmNote')}</div>
           </div>
         </div>
 
         <div class="card">
-          <div class="card-h"><h3>目录树预览</h3></div>
+          <div class="card-h"><h3>${t('settings.nmTreeTitle')}</h3></div>
           <div class="card-b"><div class="tree" id="nmTree">—</div></div>
         </div>
       </div>
@@ -278,7 +279,7 @@ function bind(ctx, kit) {
       pane.querySelector('#nmFn').value = p.fnTemplate;
       pane.querySelector('#nmDir').value = p.dirTemplate;
       markDirty(ctx, kit, true);
-      toast(btn.dataset.preset === 'dy' ? '已应用抖音预设模板' : '已应用 B 站预设模板');
+      toast(btn.dataset.preset === 'dy' ? t('settings.nmPresetDyUsed') : t('settings.nmPresetBiliUsed'));
     };
   });
 
@@ -320,7 +321,7 @@ function bind(ctx, kit) {
   pane.querySelector('#nmNew').onclick = () => {
     const id = 'p_' + Date.now().toString(36);
     state.naming.profiles.push({
-      id, name: '新配置 ' + (state.naming.profiles.length + 1),
+      id, name: t('settings.nmNewName', state.naming.profiles.length + 1),
       fnTemplate: '{日期}_{主播}_{清晰度}_{序号}', dirTemplate: '{平台}/{主播}/{日期}',
       options: {}, binding: { type: 'none', value: '' },
     });
@@ -328,14 +329,14 @@ function bind(ctx, kit) {
     state.naming.activeId = id;
     persist(ctx, true);
     paint(ctx, kit);
-    toast('已新建空白命名配置');
+    toast(t('settings.nmCreated'));
   };
 
   pane.querySelector('#nmCopy').onclick = () => {
     const src = profile();
     const id = 'p_' + Date.now().toString(36);
     state.naming.profiles.push({
-      id, name: (src.name || src.id) + '_副本',
+      id, name: (src.name || src.id) + t('settings.nmSuffixCopy'),
       fnTemplate: src.fnTemplate, dirTemplate: src.dirTemplate,
       options: Object.assign({}, src.options), binding: { type: 'none', value: '' },
     });
@@ -343,19 +344,19 @@ function bind(ctx, kit) {
     state.naming.activeId = id;
     persist(ctx, true);
     paint(ctx, kit);
-    toast(`已复制为新配置「${(src.name || src.id)}_副本」`);
+    toast(t('settings.nmCopiedAs', (src.name || src.id) + t('settings.nmSuffixCopy')));
   };
 
   pane.querySelector('#nmDel').onclick = () => {
     const src = profile();
-    if ((state.naming.profiles || []).length <= 1) { toast('至少保留一套命名配置', 'warn'); return; }
-    if (src.id === 'default') { toast('默认配置不可删除；请先改绑使用它的任务', 'warn'); return; }
+    if ((state.naming.profiles || []).length <= 1) { toast(t('settings.nmKeepAtLeast'), 'warn'); return; }
+    if (src.id === 'default') { toast(t('settings.nmDefaultNotDel'), 'warn'); return; }
     state.naming.profiles = state.naming.profiles.filter((x) => x.id !== src.id);
     state.activeId = state.naming.profiles[0].id;
     state.naming.activeId = state.activeId;
     persist(ctx, true);
     paint(ctx, kit);
-    toast('已删除该命名配置（使用它的任务将回落到平台配置）');
+    toast(t('settings.nmDeleted'));
   };
 }
 
@@ -370,9 +371,9 @@ async function persist(ctx, notify) {
   try {
     await api.saveNaming(state.naming);
     state.dirty = false;
-    if (notify) toast('命名配置已保存');
+    if (notify) toast(t('settings.namingSaved'));
   } catch (e) {
-    toast(e.message || '命名配置保存失败', 'err');
+    toast(e.message || t('settings.namingSaveFailed'), 'err');
   }
 }
 
@@ -410,11 +411,11 @@ async function runPreview() {
     const warnings = (r && r.warnings) || [];
     dirEl.textContent = '/data/' + (lines[0] && lines[0].dir ? lines[0].dir + '/' : '');
     bodyEl.innerHTML = lines.map((l) => `<div class="fn">${esc(l.file)}</div>`).join('')
-      + `<div class="pth" style="opacity:.55">… 录制结束后转封装为同名 .mp4</div>`
+      + `<div class="pth" style="opacity:.55">${t('settings.nmPreviewRemuxNote')}</div>`
       + (warnings.length ? `<div class="pth" style="color:var(--warn)">${esc(warnings.join('；'))}</div>` : '');
     const last = lines[lines.length - 1] || {};
     lenEl.textContent = last.fullPath
-      ? `${last.chars || String(last.fullPath).length} 字符 / ${last.bytes || '?'} 字节 · 文件名 ${last.fileNameBytes || '?'} 字节（单层名上限 255 字节）`
+      ? t('settings.nmPathLenValue', last.chars || String(last.fullPath).length, last.bytes || '?', last.fileNameBytes || '?')
       : '—';
     if (treeEl) {
       const dir = (lines[0] && lines[0].dir) || '';
@@ -435,7 +436,7 @@ async function runPreview() {
     const dir = fill(p.dirTemplate || '').split('/').filter(Boolean).join('/');
     dirEl.textContent = '/data/' + (dir ? dir + '/' : '');
     bodyEl.innerHTML = [1, 2, 3].map((i) => `<div class="fn">${esc(fill(p.fnTemplate, i))}.ts</div>`).join('')
-      + `<div class="pth" style="opacity:.55">（后端预览接口不可用，以上为本地兜底渲染）</div>`;
+      + `<div class="pth" style="opacity:.55">${t('settings.nmPreviewFallback')}</div>`;
     lenEl.textContent = '—';
     if (treeEl) treeEl.textContent = '—';
   }

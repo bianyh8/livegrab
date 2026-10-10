@@ -3,6 +3,7 @@
    完整记录见「运行日志」页。 */
 
 import { api } from '../api.js';
+import { t } from '../i18n.js';
 import { esc, formatLogTime, emptyBox } from '../ui.js';
 
 const MAX_EVENTS = 20;
@@ -19,7 +20,7 @@ export function destroy() {
 
 export async function render(root, ctx) {
   boundRoot = root;
-  root.innerHTML = `<div class="card"><div class="empty">正在加载事件…</div></div>`;
+  root.innerHTML = `<div class="card"><div class="empty">${t('events.loading')}</div></div>`;
 
   if (offStatus) { offStatus(); offStatus = null; }
   offStatus = ctx.on('status', () => refreshEvents());
@@ -42,7 +43,7 @@ async function refreshEvents(initial) {
       if (box) box.innerHTML = eventsHtml();
     }
   } catch (e) {
-    if (initial) root.innerHTML = `<div class="card"><div class="empty">事件加载失败：${esc(e.message || e)}</div></div>`;
+    if (initial) root.innerHTML = `<div class="card"><div class="empty">${t('events.loadFailed', esc(e.message || e))}</div></div>`;
   } finally {
     state.pending = false;
   }
@@ -53,14 +54,14 @@ function paint() {
   if (!root) return;
   root.innerHTML = `
     <div class="card">
-      <div class="card-h"><h3>最近事件</h3><span class="hint">引擎与任务的关键动作 · 最新在前 · 最多 ${MAX_EVENTS} 条</span></div>
+      <div class="card-h"><h3>${t('events.title')}</h3><span class="hint">${t('events.hint', MAX_EVENTS)}</span></div>
       <div class="card-b" id="evList">${eventsHtml()}</div>
     </div>
-    <div class="hintline" style="margin:2px 2px 0">完整记录（含过滤、导出）请到左侧「运行日志」页查看。</div>`;
+    <div class="hintline" style="margin:2px 2px 0">${t('events.fullLog')}</div>`;
 }
 
 function eventsHtml() {
-  if (!state.events.length) return emptyBox('暂无事件');
+  if (!state.events.length) return emptyBox(t('events.empty'));
   return `<div class="tl">${state.events.slice(0, MAX_EVENTS).map((l) => {
     const level = String(l.level || 'INFO').toUpperCase();
     const cls = level === 'ERROR' ? 'e' : level === 'WARN' ? '' : 'i';
