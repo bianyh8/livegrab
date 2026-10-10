@@ -110,7 +110,7 @@ async function enterRoom(roomId, settings, logger) {
     if (j?.status_code === 0 && room) {
       mobileRoom = room;
       shortId = room.owner?.short_id || room.owner?.display_id || shortId;
-      logger?.debug(`抖音移动端接口取到房间元数据 ${room.id_str || roomId} 状态 ${room.status}（开播以 web 判定）`);
+      logger?.debug(`抖音移动端接口取到房间元数据：主播「${stripEmoji(room.owner?.nickname || room.nickname || '未知主播')}」，状态：${room.status === 2 ? '开播' : '未开播'}（开播以 web 判定）`);
     } else {
       mobileNote = `移动端接口 status_code=${j?.status_code}${j?.data?.message ? ` ${j.data.message}` : ''}`;
       if (j?.status_code === 10011 && isFullId) {
