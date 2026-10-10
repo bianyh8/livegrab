@@ -332,14 +332,16 @@ label.fl{display:block;font-size:12.5px;color:var(--txt-2);margin:0 0 7px}
 .toolbar.tq{flex-wrap:nowrap}
 .toolbar.tq .input,.toolbar.tq .select{flex:0 1 auto;min-width:52px;padding:6px 7px}
 .toolbar.tq .input{flex:1 1 auto}
-/* 存储分布：小环形 + 图例，与其他统计卡等高 */
-.stat.s .v{font-size:20px;margin:4px 0 0}
-.stat.s .pkbody{display:flex;gap:10px;align-items:center;margin-top:8px}
+/* 存储分布：左侧小环 + 右侧明细 + 底部汇总 */
+.stat.s .pkbody{display:flex;gap:12px;align-items:center;margin-top:10px}
 .stat.s .pkdonut{flex:0 0 auto}
-.stat.s .pkleg{display:flex;flex-direction:column;gap:3px;min-width:0}
+.stat.s .pkleg{display:flex;flex-direction:column;gap:3px;min-width:0;flex:1}
 .stat.s .pkleg span{display:flex;align-items:center;gap:6px;font-size:11.5px;color:var(--txt-2);white-space:nowrap}
 .stat.s .pkleg span i{width:8px;height:8px;border-radius:3px;flex:0 0 auto}
 .stat.s .pkleg span b{margin-left:auto;color:var(--txt-1);font-weight:600}
+.stat.s .pkfoot{display:flex;align-items:baseline;gap:5px;margin-top:8px;padding-top:7px;border-top:1px dashed var(--line);font-size:11.5px;color:var(--txt-3)}
+.stat.s .pkfoot b{color:var(--txt-1);font-weight:600;font-size:14px}
+.stat.s .pkfoot .pkmore{margin-left:auto}
 .stat.s .pk-empty{font-size:11.5px;color:var(--txt-3);margin-top:10px}
 table{width:100%;border-collapse:collapse}
 th{

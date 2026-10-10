@@ -95,7 +95,6 @@ function paint(ctx, status) {
       </div>
       <div class="stat s">
         <div class="k">存储分布</div>
-        <div class="v"><b>${esc(formatBytes(pstore.reduce((a, p) => a + (p.bytes || 0), 0)))}</b><small> 共 ${(pstore || []).filter((p) => p.bytes > 0).length} 平台</small></div>
         ${platformStoreBlock(pstore)}
       </div>
     </div>
@@ -177,8 +176,10 @@ function platformStoreBlock(pstore) {
     <circle cx="30" cy="30" r="${R}" fill="none" stroke="rgba(255,255,255,.08)" stroke-width="7"/>
     ${arcs.map((a) => `<circle cx="30" cy="30" r="${R}" fill="none" stroke="${a.color}" stroke-width="7" stroke-dasharray="${a.dasharray}" stroke-dashoffset="${a.dashoffset}" transform="rotate(-90 30 30)"/>`).join('')}
   </svg>`;
-  const leg = `<div class="pkleg">${arcs.map((a) => `<span><i style="background:${a.color}"></i>${a.name} <b>${a.size}</b></span>`).join('')}</div>`;
-  return `<div class="pkbody"><div class="pkdonut">${svg}</div>${leg}</div>`;
+  const leg = `<div class="pkleg">${arcs.slice(0, 10).map((a) => `<span><i style="background:${a.color}"></i>${a.name} <b>${a.size}</b></span>`).join('')}</div>`;
+  const extra = list.length > 10 ? `<span class="pkmore">另有 ${list.length - 10} 个平台</span>` : '';
+  const foot = `<div class="pkfoot">合计 <b>${esc(formatBytes(total))}</b><span>· 共 ${list.length} 平台</span>${extra}</div>`;
+  return `<div class="pkbody"><div class="pkdonut">${svg}</div>${leg}</div>${foot}`;
 }
 
 function diskAlert(free) {
