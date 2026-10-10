@@ -16,7 +16,9 @@ const state = {
   q: '',
   platform: '',
   status: '',
+  liveStatus: '',
   sort: 'created',
+  sortDir: 'desc',
   selected: new Set(),
   hash: '',
   pending: false,
@@ -82,6 +84,7 @@ function filtered() {
   const q = state.q.trim().toLowerCase();
   let list = state.tasks.filter((t) => {
     if (state.platform && t.platform !== state.platform) return false;
+    if (state.liveStatus && t.liveStatus !== state.liveStatus) return false;
     if (state.status && t.status !== state.status) return false;
     if (q) {
       const hay = [t.anchorName, t.name, t.title, t.roomId, t.sourceUrl, t.qualityLabel].join(' ').toLowerCase();
@@ -96,7 +99,12 @@ function filtered() {
     status: (a, b) => String(a.status).localeCompare(String(b.status)),
   };
   if (state.sort === 'custom') { /* 保持用户自定义顺序（store 数组顺序） */ }
-  else list = list.slice().sort(by[state.sort] || by.created);
+  else {
+    // 现有比较器均为"新/大在前"（倒序）；选「顺序」时取反为升序
+    const dir = state.sortDir === 'asc' ? -1 : 1;
+    const cmp = by[state.sort] || by.created;
+    list = list.slice().sort((a, b) => dir * cmp(a, b));
+  }
   return list;
 }
 
@@ -140,7 +148,7 @@ function paint(ctx, force) {
   const hash = JSON.stringify(list.map((t) => [
     t.id, t.status, t.queueReason, t.retryCount, t.statusMessage, t.qualityLabel,
     t.live && t.live.elapsedSec, t.live && t.live.bytes, t.live && t.live.segmentIndex, t.updatedAt,
-  ])) + '|' + state.q + '|' + state.platform + '|' + state.status + '|' + state.sort + '|' + Array.from(state.selected).join(',');
+  ])) + '|' + state.q + '|' + state.platform + '|' + state.liveStatus + '|' + state.status + '|' + state.sort + '|' + state.sortDir + '|' + Array.from(state.selected).join(',');
   if (!force && hash === state.hash) { syncBatchBar(); return; }
   state.hash = hash;
 
@@ -152,13 +160,21 @@ function paint(ctx, force) {
           <option value="">全部平台</option>
           ${state.platforms.filter((p) => state.enabledSet[p.id] !== false || state.platform === p.id).map((p) => `<option value="${esc(p.id)}"${state.platform === p.id ? ' selected' : ''}>${esc(p.name)}</option>`).join('')}
         </select>
+        <select class="select" id="tkLive" style="width:150px">
+          ${[['', '全部直播状态'], ['live', '直播中'], ['offline', '未直播'], ['unknown', '未知']]
+            .map(([v, t]) => `<option value="${v}"${state.liveStatus === v ? ' selected' : ''}>${t}</option>`).join('')}
+        </select>
         <select class="select" id="tkStatus" style="width:150px">
-          ${[['', '全部状态'], ['recording', '录制中'], ['stopped', '已停止'], ['queued', '排队中'], ['waiting', '等待开播'], ['completed', '已完成'], ['error', '错误'], ['idle', '待机']]
+          ${[['', '全部录制状态'], ['recording', '录制中'], ['stopped', '已停止'], ['queued', '排队中'], ['waiting', '等待开播'], ['completed', '已完成'], ['error', '错误'], ['idle', '待机']]
             .map(([v, t]) => `<option value="${v}"${state.status === v ? ' selected' : ''}>${t}</option>`).join('')}
         </select>
-        <select class="select" id="tkSort" style="width:170px">
+        <select class="select" id="tkSort" style="width:158px">
           ${[['custom', '自定义排序'], ['created', '按创建时间排序'], ['duration', '按已录时长排序'], ['size', '按文件大小排序'], ['status', '按状态排序']]
             .map(([v, t]) => `<option value="${v}"${state.sort === v ? ' selected' : ''}>${t}</option>`).join('')}
+        </select>
+        <select class="select" id="tkSortDir" style="width:80px" title="排序方向（自定义排序为手动顺序，不受此控制）">
+          ${[['desc', '倒序'], ['asc', '顺序']]
+            .map(([v, t]) => `<option value="${v}"${state.sortDir === v ? ' selected' : ''}>${t}</option>`).join('')}
         </select>
         <div class="spacer"></div>
         <button class="btn sm ghost" id="tkExport">导出</button>
@@ -288,8 +304,10 @@ function bind(ctx) {
     node.onchange = () => { state[key] = node.value; state.hash = ''; paint(ctx, true); };
   };
   bindSel('#tkPlat', 'platform');
+  bindSel('#tkLive', 'liveStatus');
   bindSel('#tkStatus', 'status');
   bindSel('#tkSort', 'sort');
+  bindSel('#tkSortDir', 'sortDir');
 
   const all = root.querySelector('#tkAll');
   if (all) all.onchange = () => {
