@@ -102,7 +102,7 @@ function paint(ctx, status) {
           <div class="ovstat"><div class="k">仅监控</div><div class="v">${monitorList.length}<small>个</small></div></div>
           <div class="ovstat"><div class="k">排队中</div><div class="v">${queuedCount}<small>个</small></div></div>
           <div class="ovstat"><div class="k">等待开播</div><div class="v">${waitNum}<small>个</small></div></div>
-          <div class="ovstat"><div class="k">并发使用率</div><div class="v" style="display:inline-flex;align-items:baseline"><span style="color:var(--ok)">${recCount}</span><span style="color:var(--txt-2);padding:0 4px">/</span><span style="color:var(--err);font-weight:700">${cap}</span></div><div class="minibar"><i style="width:${usePct}%"></i></div></div>
+          <div class="ovstat"><div class="k">并发使用率</div><div class="v"><span style="color:var(--ok);vertical-align:middle">${recCount}</span> <span style="color:var(--txt-2);vertical-align:middle">/</span> <span style="color:var(--err);font-weight:700;vertical-align:middle">${cap}</span></div><div class="minibar"><i style="width:${usePct}%"></i></div></div>
         </div>
       </div>
 
