@@ -4,7 +4,7 @@
 
 import { api, normalizeLogLine } from '../api.js';
 import { t } from '../i18n.js';
-import { esc, formatLogTime, formatBytes, emptyBox, toast, copyText, downloadText, confirmDialog } from '../ui.js';
+import { esc, formatLogTime, formatBytes, emptyBox, toast, copyText, downloadText, confirmDialog, openDialog, el } from '../ui.js';
 
 const MAX_ROWS = 2000;
 
@@ -157,8 +157,6 @@ function paint(ctx) {
         <input class="input" id="lgQ" style="width:200px" placeholder="${t('logs.qPlaceholder')}" value="${esc(state.q)}" />
         <button class="btn sm ghost" id="lgOrder" title="${t('logs.toggleOrder')}">${state.newestFirst ? t('logs.newestFirst') : t('logs.newestLast')}</button>
         <div class="spacer"></div>
-        <input type="date" class="input" id="lgFrom" style="width:158px" title="${t('logs.clearFrom')}" />
-        <input type="date" class="input" id="lgTo" style="width:158px" title="${t('logs.clearTo')}" />
         <button class="btn sm ghost" id="lgClear">${t('logs.clear')}</button>
         <span class="chip ${state.paused ? 'wait' : 'on'}" id="lgLive" style="cursor:pointer"><i class="dot"></i>${state.paused ? t('logs.livePaused') : t('logs.liveStreaming')}</span>
         <button class="btn sm ghost" id="lgCopy">${t('common.copy')}</button>
@@ -287,29 +285,65 @@ function bind(ctx) {
     toast(t('logs.exportedToast'));
   };
 
-  const fFrom = root.querySelector('#lgFrom');
-  const fTo = root.querySelector('#lgTo');
   const clear = root.querySelector('#lgClear');
-  if (clear) clear.onclick = () => {
-    const from = (fFrom && fFrom.value) || '';
-    const to = (fTo && fTo.value) || '';
-    if (!from && !to) { toast(t('logs.clearNoRange'), 'warn'); return; }
-    confirmDialog({
-      title: t('logs.clear'),
-      text: t('logs.clearConfirm', from || '…', to || '…'),
-      ok: t('logs.clear'),
-      danger: true,
-      onOk: async () => {
-        try {
-          const r = await api.clearLogs(from, to);
-          toast(t('logs.clearDone', String((r && r.removed) || 0)));
-          state.rows = [];
-          state.files = [];
-          await refresh(ctx, true);
-        } catch (e) {
-          toast((e && e.message) || t('logs.clearFail'), 'err');
-        }
-      },
-    });
-  };
+  if (clear) clear.onclick = () => askClearRange(ctx);
+}
+
+/* ---------- 清除日志（预设时间范围） ---------- */
+
+const CLEAR_RANGES = [
+  ['1h', t('logs.clear1h')],
+  ['24h', t('logs.clear24h')],
+  ['7d', t('logs.clear7d')],
+  ['30d', t('logs.clear1m')],
+  ['all', t('logs.clearAll')],
+];
+
+function askClearRange(ctx) {
+  openDialog({
+    title: t('logs.clear'),
+    body: `<div style="display:flex;flex-direction:column;gap:8px;padding:2px 0">${CLEAR_RANGES
+      .map(([v, label]) => `<button class="btn" data-clear="${v}" style="width:100%">${esc(label)}</button>`).join('')}</div>`,
+    footer: (close, bodyEl) => {
+      bodyEl.querySelectorAll('[data-clear]').forEach((btn) => {
+        btn.onclick = () => { close(); doClear(btn.dataset.clear, ctx); };
+      });
+      const cancel = el('button', 'btn ghost', t('common.cancel'));
+      cancel.onclick = close;
+      return [cancel];
+    },
+  });
+}
+
+function dateFmt(d) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+async function doClear(range, ctx) {
+  const now = Date.now();
+  const DAY = 86400000;
+  let from = '';
+  let to = dateFmt(new Date(now));
+  if (range === '1h') from = to;
+  else if (range === '24h') from = dateFmt(new Date(now - DAY));
+  else if (range === '7d') from = dateFmt(new Date(now - 6 * DAY));
+  else if (range === '30d') from = dateFmt(new Date(now - 29 * DAY));
+  else { from = ''; to = ''; }
+  confirmDialog({
+    title: t('logs.clear'),
+    text: range === 'all' ? t('logs.clearAllConfirm') : t('logs.clearConfirm', from, to),
+    ok: t('logs.clear'),
+    danger: true,
+    onOk: async () => {
+      try {
+        const r = await api.clearLogs(from, to);
+        toast(t('logs.clearDone', String((r && r.removed) || 0)));
+        state.rows = [];
+        state.files = [];
+        await refresh(ctx, true);
+      } catch (e) {
+        toast((e && e.message) || t('logs.clearFail'), 'err');
+      }
+    },
+  });
 }

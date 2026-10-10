@@ -224,11 +224,14 @@ const ADD = {
   'tasks.gb': 'GB',
   'tasks.fillRoom19': '· <span class="h">填 19 位房间号</span>', 'tasks.wan': '万',
 
-  // logs（清除日志：按日期范围清理）
+  // logs（清除日志：预设时间范围）
   'logs.clear': '清除日志',
-  'logs.clearFrom': '起始日期',
-  'logs.clearTo': '结束日期',
-  'logs.clearNoRange': '请选择起始或结束日期',
+  'logs.clear1h': '过去一小时',
+  'logs.clear24h': '过去24小时',
+  'logs.clear7d': '过去7天',
+  'logs.clear1m': '过去一个月',
+  'logs.clearAll': '所有时间',
+  'logs.clearAllConfirm': '确定清除所有日志吗？删除后不可恢复。',
   'logs.clearConfirm': '确定清除 {0} 至 {1} 的日志吗？删除后不可恢复。',
   'logs.clearDone': '已清除 {0} 个日志文件',
   'logs.clearFail': '清除日志失败',
@@ -245,6 +248,8 @@ const REMOVE = [
   // 最近事件并入运行日志 + 移除引擎状态提示
   'events.title', 'events.hint', 'events.loading', 'events.loadFailed', 'events.fullLog', 'events.empty',
   'nav.eventsSub', 'common.engineOk', 'common.ffmpegUnavailable',
+  // 清除日志改为预设时间范围弹窗（移除旧的日期输入框键）
+  'logs.clearFrom', 'logs.clearTo', 'logs.clearNoRange',
 ];
 
 /* ---------------- ③ 去重：同文案归一到单一 key ---------------- */

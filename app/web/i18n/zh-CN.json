@@ -732,10 +732,13 @@
   "dashboard.checkToast": "已刷新开播状态",
   "dashboard.pausedAll": "已暂停 {0} 条任务（结束当前分段，不占用并发）",
   "logs.clear": "清除日志",
-  "logs.clearFrom": "起始日期",
-  "logs.clearTo": "结束日期",
-  "logs.clearNoRange": "请选择起始或结束日期",
   "logs.clearConfirm": "确定清除 {0} 至 {1} 的日志吗？删除后不可恢复。",
   "logs.clearDone": "已清除 {0} 个日志文件",
-  "logs.clearFail": "清除日志失败"
+  "logs.clearFail": "清除日志失败",
+  "logs.clear1h": "过去一小时",
+  "logs.clear24h": "过去24小时",
+  "logs.clear7d": "过去7天",
+  "logs.clear1m": "过去一个月",
+  "logs.clearAll": "所有时间",
+  "logs.clearAllConfirm": "确定清除所有日志吗？删除后不可恢复。"
 }
