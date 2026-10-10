@@ -409,21 +409,7 @@ function applyStatus(st) {
   const nFile = el('navFileBadge');
   if (nFile) { const t = fileBytes ? formatBytes(fileBytes) : ''; nFile.textContent = t; nFile.style.display = t ? '' : 'none'; }
 
-  const top = el('topChip');
-  if (top) {
-    // 顶栏只显示下载带宽；未录制(无流量)时固定显示 0
-    const bw = Number(stats.downSpeed) || 0;
-    runtime.topChipText = `下载带宽 ${bw > 0 ? fmtRate(bw) : '0'}`;
-    top.textContent = runtime.topChipText;
-    top.style.display = '';
-  }
-}
-
-function fmtRate(bitsPerSec) {
-  const b = Number(bitsPerSec) || 0;
-  if (b > 8 * 1024 * 1024) return `${(b / (8 * 1024 * 1024)).toFixed(1)} MB/s`;
-  if (b > 0) return `${Math.round(b / (8 * 1024))} KB/s`;
-  return '—';
+  // 顶栏不再显示「下载带宽」：与总览『实时带宽』同源(stats.downSpeed)，已下放总览展示，删去冗余
 }
 
 let sse = null;

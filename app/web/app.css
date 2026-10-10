@@ -184,10 +184,10 @@ label.fl{display:block;font-size:12.5px;color:var(--txt-2);margin:0 0 7px}
 .stat .d b.down{color:var(--warn)}
 
 .grid2{display:grid;grid-template-columns:minmax(0,1.55fr) minmax(0,1fr);gap:16px}
-.grid2b{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,360px);gap:16px;margin-bottom:16px}
+.grid2b{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,470px);gap:16px;margin-bottom:16px}
 .grid2b .rec-item:last-child{border-bottom:0}
 /* 总览概览条 */
-.ops-strip{display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-bottom:16px}
+.ops-strip{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:16px}
 .ops-item{padding:13px 15px;border-radius:var(--r-l);border:1px solid var(--line);background:var(--panel)}
 .ops-item .k{color:var(--txt-3);font-size:11.5px;letter-spacing:.3px}
 .ops-item .v{font-size:20px;font-weight:700;margin-top:4px;color:var(--txt-1);letter-spacing:.3px}
@@ -355,6 +355,11 @@ label.fl{display:block;font-size:12.5px;color:var(--txt-2);margin:0 0 7px}
 .pkfoot b{color:var(--txt-1);font-weight:600;font-size:14px}
 .pkfoot .pkmore{margin-left:auto}
 .pk-empty{font-size:11.5px;color:var(--txt-3);margin-top:10px}
+/* 磁盘信息块(并入存储分布) */
+.pkdisk{margin-top:12px;padding-top:10px;border-top:1px dashed var(--line)}
+.pkdisk .dd{display:flex;flex-wrap:wrap;gap:4px 12px;font-size:11.5px;color:var(--txt-3);margin-bottom:7px}
+.pkdisk .dd b{color:var(--txt-1);font-weight:600}
+.pkdisk .dd b.down{color:var(--warn)}
 table{width:100%;border-collapse:collapse}
 th{
   text-align:left;font-size:11.5px;color:var(--txt-3);font-weight:600;letter-spacing:.4px;

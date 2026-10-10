@@ -91,7 +91,6 @@ function paint(ctx, status) {
     <div class="ops-strip">
       <div class="ops-item"><div class="k">今日录制时长</div><div class="v">${todayDuration(stats.todayDurationSec)}</div></div>
       <div class="ops-item"><div class="k">今日新增文件</div><div class="v">${Number(stats.todayFiles) || 0}<small>个 · ${esc(formatBytes(stats.todayBytes))}</small></div></div>
-      <div class="ops-item"><div class="k">磁盘剩余</div><div class="v ${freeBytes < 20 * 1024 * 1024 * 1024 ? 'down' : ''}">${esc(formatBytes(freeBytes))}<small>/ ${formatBytes(totalBytes)}</small></div></div>
       <div class="ops-item"><div class="k">平台存储合计</div><div class="v">${esc(formatBytes(platformTotal))}<small>· ${pstoreCount} 平台</small></div></div>
       <div class="ops-item"><div class="k">实时带宽</div><div class="v">${bwText}</div></div>
     </div>
@@ -102,8 +101,11 @@ function paint(ctx, status) {
         <div class="card-b" style="padding:12px">${recording.length ? `<div class="task-grid">${recording.map(recItem).join('')}</div>` : emptyBox('当前没有正在录制的任务')}</div>
       </div>
       <div class="card">
-        <div class="card-h"><h3>存储分布</h3></div>
-        <div class="card-b" style="padding:16px 14px">${platformStoreBlock(pstore)}</div>
+        <div class="card-h"><h3>存储分布</h3><span class="hint">含磁盘剩余</span></div>
+        <div class="card-b pkb" style="padding:16px">
+          ${platformStoreBlock(pstore)}
+          ${diskSection({ usedBytes, totalBytes, freeBytes, trashBytes })}
+        </div>
       </div>
     </div>
 
@@ -174,6 +176,17 @@ function diskAlert(free) {
     return `<div class="login-err show" style="margin:0 0 14px;display:flex"><span>⚠ 磁盘剩余 ${esc(formatBytes(free))}，低于保留下限时会自动清理最旧的成品文件；录制中请及时清理空间。</span></div>`;
   }
   return '';
+}
+
+/* 磁盘信息块：并入「存储分布」卡，显示剩余/已用/回收站 + 占用条 */
+function diskSection({ usedBytes, totalBytes, freeBytes, trashBytes }) {
+  const pct = totalBytes > 0 ? Math.min(100, Math.max(2, (usedBytes / totalBytes) * 100)) : 0;
+  const low = freeBytes > 0 && freeBytes < 5 * 1024 * 1024 * 1024;
+  return `
+    <div class="pkdisk">
+      <div class="dd"><span>磁盘剩余 <b class="${low ? 'down' : ''}">${esc(formatBytes(freeBytes))}</b></span><span>已用 ${esc(formatBytes(usedBytes))}</span><span>共 ${esc(formatBytes(totalBytes))}</span>${trashBytes ? `<span>回收站 ${esc(formatBytes(trashBytes))}</span>` : ''}</div>
+      <div class="bar"><i style="width:${pct}%"></i></div>
+    </div>`;
 }
 
 function recItem(t) {
