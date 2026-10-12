@@ -159,6 +159,8 @@ label.fl{display:block;font-size:12.5px;color:var(--txt-2);margin:0 0 7px}
 .f1{flex:1;min-width:0}
 .form-row{margin-bottom:16px}
 .hintline{font-size:11.5px;color:var(--txt-3);margin-top:6px}
+/* 任务弹窗内提示：单行显示，超长省略，跟随主行左右对齐 */
+.modal .hintline{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%}
 
 .switch{width:42px;height:23px;border-radius:20px;background:#28313f;border:1px solid var(--line-2);position:relative;cursor:pointer;flex:0 0 42px;transition:.18s}
 .switch i{position:absolute;top:2px;left:2px;width:17px;height:17px;border-radius:50%;background:#7b8798;transition:.18s}

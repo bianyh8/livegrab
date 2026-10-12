@@ -5,7 +5,7 @@
 import { api } from '../api.js';
 import { t } from '../i18n.js';
 import {
-  esc, formatBytes, formatDuration, formatDateTime, platBadge, platIcon, statusMeta, segmentStrategyText,
+  esc, formatBytes, formatDuration, formatDateTime, platBadge, platIcon, segmentStrategyText,
   qualityLabelOf, emptyBox, toast, confirmDialog, openDialog, downloadText, switchEl, bindSwitches,
 } from '../ui.js';
 
@@ -547,7 +547,7 @@ async function openTaskDialog(ctx, id) {
     segmentGlobal: segGlobal,
     segmentMinutes: task ? (task.segmentMinutes || 60) : ((settings && settings.defaultSegmentMinutes) || 60),
     segmentSizeMB: task ? (task.segmentSizeMB || 2048) : ((settings && settings.defaultSegmentSizeMB) || 2048),
-    autoMerge: task ? !!task.autoMerge : false,
+    autoMerge: false, // 已删除「分段文件处理」选项，固定保留独立分段
     // 命名：不再有"跟随全局"，直接落到当前激活的命名配置
     namingProfileId: effectiveNaming || namingActive,
     namingGlobal: namingActive,
@@ -637,7 +637,6 @@ function taskShell(d) {
   ];
   const segTimeStyle = d.segmentMode === 'time' ? '' : 'display:none';
   const segSizeStyle = d.segmentMode === 'size' ? '' : 'display:none';
-  const segInlineStyle = (d.segmentMode === 'time' || d.segmentMode === 'size') ? '' : 'display:none';
   const roomPh = d.platform === 'douyin' ? t('tasks.douyinRoomPh') : t('tasks.roomPh');
   const segMinOpts = optList([...new Set([30, 60, 120, 180, Number(d.segmentMinutes) || 60])].map((m) => ({ v: String(m), label: `${m} ${t('common.minutes')}` })), String(d.segmentMinutes));
   const segSizeOpts = optList([...new Set([1024, 2048, 4096, 8192, Number(d.segmentSizeMB) || 2048])].map((m) => ({ v: String(m), label: `${Math.round(m / 1024 * 10) / 10} ${t('tasks.gb')}` })), String(d.segmentSizeMB));
@@ -651,9 +650,9 @@ function taskShell(d) {
       `<input class="input mono" id="edUrl" style="flex:1;min-width:0" value="${esc(d.url)}" placeholder="${t('tasks.pasteUrlPh')}" />`,
       `<div class="hintline">${t('tasks.urlEditTip')}</div>`)}
     ${cell('',
-      `${flx(t('settings.pfColPlatform'))}${selHtml('edPlat', platOpts, d.platform, 92)}
+      `${flx(t('settings.pfColPlatform'))}${selHtml('edPlat', platOpts, d.platform, 125)}
       ${flx(t('tasks.csvRoom'))}<input class="input mono" id="edRoom" style="width:140px" value="${esc(d.displayRoom)}" placeholder="${roomPh}" />
-      ${flx(t('tasks.anchorNameLabel'))}<input class="input" id="edAnchor" style="width:140px" value="${esc(d.anchorName)}" placeholder="${t('tasks.anchorPh')}" />`,
+      ${flx(t('tasks.anchorNameLabel'))}<input class="input" id="edAnchor" style="width:110px" value="${esc(d.anchorName)}" placeholder="${t('tasks.anchorPh')}" />`,
       `<div class="hintline" id="edPlatHint">${platHintText(d.platform)}</div>`)}
     ${cell(t('tasks.colQuality'),
       `<div class="mini-row" id="edQGrid" style="justify-content:flex-start">
@@ -661,22 +660,15 @@ function taskShell(d) {
       </div>`,
       `<div class="hintline" id="edQualityHint">${qualityHint(d)}</div>`)}
     ${cell('',
-      `${flx(t('tasks.colLive'))}<div id="edInfo">${infoHtml(d)}</div>
-      ${flx(t('settings.tabNaming'))}${selHtml('edNaming', namingOpts, d.namingProfileId, 170)}`,
+      `${flx(t('settings.tabNaming'))}${selHtml('edNaming', namingOpts, d.namingProfileId, 150)}
+      ${flx(t('tasks.kPoll'))}${selHtml('edPoll', pollOpts, String(d.pollIntervalSec), 104)}
+      ${flx(t('tasks.kReconnect'))}${selHtml('edReconnect', rcOpts, String(d.reconnectMax), 104)}`,
       `<div class="hintline" id="edNamingHint">${namingHint(d)}</div>`)}
-    ${cell('',
-      `${flx(t('tasks.kPoll'))}${selHtml('edPoll', pollOpts, String(d.pollIntervalSec), 118)}
-      ${flx(t('tasks.kReconnect'))}${selHtml('edReconnect', rcOpts, String(d.reconnectMax), 118)}`,
-      `<div class="hintline">${t('tasks.pollDetail', d.pollIntervalSec, d.startDelaySec, d.stopDelaySec)}</div>`)}
     ${cell(t('tasks.csvSegment'),
       `<div class="row" style="align-items:center;gap:8px;flex-wrap:wrap">
         ${selHtml('edSegMode', segOpts, d.segmentMode, 110)}
         ${segTag('edSegMinTag', t('tasks.segMinutesLabel'), segTimeStyle)}<select class="select" id="edSegMin" style="width:auto;min-width:80px;${segTimeStyle}">${segMinOpts}</select>
         ${segTag('edSegSizeTag', t('tasks.segSizeLabel'), segSizeStyle)}<select class="select" id="edSegSize" style="width:auto;min-width:80px;${segSizeStyle}">${segSizeOpts}</select>
-        ${segTag('edSegMergeTag', t('tasks.segProcessingLabel'), segInlineStyle)}<select class="select" id="edAutoMerge" style="width:auto;min-width:80px;${segInlineStyle}">
-          <option value="0"${!d.autoMerge ? ' selected' : ''}>${t('tasks.segKeepIndependent')}</option>
-          <option value="1"${d.autoMerge ? ' selected' : ''}>${t('tasks.segMergeSingle')}</option>
-        </select>
       </div>`,
       `<div class="hintline" id="edSegHint">${segmentHint(d)}</div>`)}
     ${cell('',
@@ -723,22 +715,6 @@ function segTableHtml(task) {
       <td>${esc(formatBytes(s.bytes || 0))}</td>
       <td>${s.status === 'recording' ? '<span class="chip wait"><i class="dot"></i>' + t('common.recording') + '</span>' : esc(s.status || 'done')}</td>
     </tr>`).join('')}</tbody></table>`;
-}
-
-/** 直播状态栏位：只显示状态徽标，不带下方文案（标题/时长/状态消息在列表与详情卡片里看） */
-function infoHtml(d) {
-  if (!d.id) {
-    if (d.resolved && d.resolved.anchorName) {
-      const live = d.resolved.liveStatus === 'live';
-      return `${live ? '<span class="chip on"><i class="dot"></i>' + t('tasks.live') + '</span>' : '<span class="chip wait"><i class="dot"></i>' + t('tasks.notLive') + '</span>'}`;
-    }
-    return `<span class="note">${t('tasks.statusNewHint')}</span>`;
-  }
-  const tsk = d.task || {};
-  const m = statusMeta(tsk.status);
-  return tsk.status === 'recording'
-    ? `<span class="pulse"><b></b>${esc(m.text)}</span>`
-    : `<span class="chip ${esc(m.chip)}"><i class="dot"></i>${esc(m.text)}</span>`;
 }
 
 /* ---------- 新建 / 编辑绑定与提交 ---------- */
@@ -812,7 +788,6 @@ function bindEditor(d, body, ctx) {
   const namingSel = body.querySelector('#edNaming');
   const segMode = body.querySelector('#edSegMode');
 
-  const setInfo = () => { const el = body.querySelector('#edInfo'); if (el) el.innerHTML = infoHtml(d); };
   const setPlatHint = () => {
     const el = body.querySelector('#edPlatHint'); if (el) el.innerHTML = platHintText(d.platform);
     if (roomInput) roomInput.placeholder = d.platform === 'douyin' ? t('tasks.douyinRoomPh') : t('tasks.roomPh');
@@ -823,8 +798,6 @@ function bindEditor(d, body, ctx) {
     const show = (id, on) => { const el = body.querySelector('#' + id); if (el) el.style.display = on ? '' : 'none'; };
     show('edSegMin', d.segmentMode === 'time'); show('edSegMinTag', d.segmentMode === 'time');
     show('edSegSize', d.segmentMode === 'size'); show('edSegSizeTag', d.segmentMode === 'size');
-    show('edAutoMerge', d.segmentMode === 'time' || d.segmentMode === 'size');
-    show('edSegMergeTag', d.segmentMode === 'time' || d.segmentMode === 'size');
     const h = body.querySelector('#edSegHint'); if (h) h.innerHTML = segmentHint(d);
   }
 
@@ -853,7 +826,7 @@ function bindEditor(d, body, ctx) {
         if (anchorInput) anchorInput.value = clean;
       }
       const rc = body.querySelector('#edResolved'); if (rc) rc.innerHTML = resolvedCard(d);
-      setPlatHint(); setInfo();
+      setPlatHint();
       if (!silent) toast(t('tasks.resolvedOk'));
       return r;
     } catch (e) {
@@ -905,8 +878,6 @@ function bindEditor(d, body, ctx) {
   if (segMin) segMin.onchange = () => { d.segmentMinutes = Number(segMin.value); };
   const segSize = body.querySelector('#edSegSize');
   if (segSize) segSize.onchange = () => { d.segmentSizeMB = Number(segSize.value); };
-  const autoMerge = body.querySelector('#edAutoMerge');
-  if (autoMerge) autoMerge.onchange = () => { d.autoMerge = autoMerge.value === '1'; };
 
   bindSwitches(body, (sw) => {
     if (sw.id === 'edAuto') d.autoRecord = sw.classList.contains('on');
@@ -953,7 +924,7 @@ async function submit(d, dialog, btn, ctx) {
   payload.remuxToMp4 = null;
   if (d.segmentMode === 'time') payload.segmentMinutes = d.segmentMinutes;
   if (d.segmentMode === 'size') payload.segmentSizeMB = d.segmentSizeMB;
-  payload.autoMerge = d.autoMerge;
+  payload.autoMerge = false; // 已删除「分段文件处理」选项，默认保留独立分段
   payload.autoRecord = d.autoRecord;
   payload.monitorOnly = d.monitorOnly;
   payload.pollIntervalSec = Number(d.pollIntervalSec) || 60;
