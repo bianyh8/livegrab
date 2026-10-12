@@ -5,8 +5,8 @@
 import { api } from '../api.js';
 import { t } from '../i18n.js';
 import {
-  esc, formatBytes, formatDuration, formatDateTime, platBadge, platIcon, statusCell, segmentStrategyText,
-  qualityLabelOf, emptyBox, toast, confirmDialog, openDialog, downloadText, switchEl, bindSwitches, tierName,
+  esc, formatBytes, formatDuration, formatDateTime, platBadge, platIcon, statusMeta, segmentStrategyText,
+  qualityLabelOf, emptyBox, toast, confirmDialog, openDialog, downloadText, switchEl, bindSwitches,
 } from '../ui.js';
 
 const state = {
@@ -482,16 +482,16 @@ function exportCsv() {
 /* ================= 统一任务弹窗：新建 / 详情 / 编辑共用同一模板，每行一个栏位，详情即编辑 ================= */
 
 /**
- * 栏位行：左侧标签 + 右侧控件（按内容自适应宽度）+ 可选副提示区。
- * lh = 标签行高（像素），与控件高度对齐：输入/下拉 40，卡片 30，开关 23。
+ * 单列栏位：左侧标签（62px，与控件垂直居中）＋ 右侧控件（宽度不超过清晰度卡片行）
+ * ＋ 可选副提示区。label 传 '' 时省略左侧标签（如「平台+房间号+主播名称」合并行）。
  */
-function fld(label, ctl, sub = '', lh = 40) {
-  return `<div class="row" style="align-items:flex-start;gap:12px;margin-top:12px">
-    <span style="flex:0 0 88px;font-size:12.5px;color:var(--txt-2);line-height:${lh}px">${label}</span>
-    <div class="f1" style="min-width:0">
-      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">${ctl}</div>
-      ${sub}
+function cell(label, ctl, sub = '') {
+  return `<div>
+    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+      ${label ? `<span style="flex:0 0 62px;font-size:12.5px;color:var(--txt-2)">${label}</span>` : ''}
+      ${ctl}
     </div>
+    ${sub}
   </div>`;
 }
 
@@ -534,8 +534,8 @@ async function openTaskDialog(ctx, id) {
       online: null, qualityOptions: [],
     } : null,
     avatarDirty: false, // 仅当本弹窗内重新解析过才保存头像（避免每次编辑都重复下载）
-    // 清晰度：'' = 跟随全局
-    quality: effectiveQuality,
+    // 清晰度：不再有"跟随全局"选项，直接落到全局默认值（无任务级覆盖时默认显示全局值）
+    quality: effectiveQuality || ((settings && (settings.defaultQuality || settings.quality)) || 'origin'),
     qualityGlobal: (settings && (settings.defaultQuality || settings.quality)) || 'origin',
     // 分段：'' = 跟随全局
     segmentMode: effectiveSeg,
@@ -561,8 +561,8 @@ async function openTaskDialog(ctx, id) {
   };
 
   const dialog = openDialog({
-    title: d.id ? t('tasks.detailTitle') : t('tasks.newTaskTitle'),
-    wide: true,
+    title: d.id ? `${t('tasks.detailTitle')} · ${d.id}` : t('tasks.newTaskTitle'),
+    width: 'min(620px, 94vw)',
     body: taskShell(d),
     footer: (close, body) => {
       const buttons = [];
@@ -609,7 +609,7 @@ async function openTaskDialog(ctx, id) {
 }
 
 function taskShell(d) {
-  const platOpts = [{ v: '', label: t('tasks.platChoose') }, ...d.platforms.map((p) => ({ v: p.id, label: p.name + (tierName(p.tier) ? `（${tierName(p.tier)}）` : '') }))];
+  const platOpts = [{ v: '', label: t('tasks.platChoose') }, ...d.platforms.map((p) => ({ v: p.id, label: p.name }))];
   const pollOpts = [...new Set([30, 60, 120, 180, 300, Number(d.pollIntervalSec) || 60])].map((v) => ({ v: String(v), label: `${v} ${t('common.seconds')}` }));
   const rcNums = [3, 5, 8, 10];
   if (d.reconnectMax !== '' && !rcNums.includes(Number(d.reconnectMax))) rcNums.push(Number(d.reconnectMax));
@@ -621,69 +621,67 @@ function taskShell(d) {
     { v: 'time', label: t('tasks.segByTimeCard') },
     { v: 'size', label: t('settings.recSegBySize') },
   ];
-  const segPanelStyle = (d.segmentMode === 'time' || d.segmentMode === 'size') ? '' : 'display:none';
   const segTimeStyle = d.segmentMode === 'time' ? '' : 'display:none';
   const segSizeStyle = d.segmentMode === 'size' ? '' : 'display:none';
+  const segInlineStyle = (d.segmentMode === 'time' || d.segmentMode === 'size') ? '' : 'display:none';
   const roomPh = d.platform === 'douyin' ? t('tasks.douyinRoomPh') : t('tasks.roomPh');
+  const segMinOpts = optList([...new Set([30, 60, 120, 180, Number(d.segmentMinutes) || 60])].map((m) => ({ v: String(m), label: `${m} ${t('common.minutes')}` })), String(d.segmentMinutes));
+  const segSizeOpts = optList([...new Set([1024, 2048, 4096, 8192, Number(d.segmentSizeMB) || 2048])].map((m) => ({ v: String(m), label: `${Math.round(m / 1024 * 10) / 10} ${t('tasks.gb')}` })), String(d.segmentSizeMB));
+  const flx = (s) => `<span style="font-size:12.5px;color:var(--txt-2);white-space:nowrap">${s}</span>`;
+  // 子选项小标签（与 .hintline 同风格，随模式显隐）
+  const segTag = (id, text, style) => `<span class="hintline" style="margin:0;${style}" id="${id}">${text}</span>`;
   return `
-    ${fld(t('tasks.kSource'),
-      `<input class="input mono" id="edUrl" style="width:min(100%,420px);min-width:240px" value="${esc(d.url)}" placeholder="${t('tasks.pasteUrlPh')}" />
+  <div style="display:flex;flex-direction:column;gap:13px;max-width:600px">
+    ${cell(t('tasks.kSource'),
+      `<input class="input mono" id="edUrl" style="width:min(100%,300px)" value="${esc(d.url)}" placeholder="${t('tasks.pasteUrlPh')}" />
       <button class="btn" id="edResolve">${t('tasks.resolve')}</button>`,
       `<div class="hintline">${t('tasks.urlEditTip')}</div>`)}
-    ${fld(t('settings.pfColPlatform'), selHtml('edPlat', platOpts, d.platform))}
-    ${fld(t('tasks.csvRoom'),
-      `<input class="input mono" id="edRoom" style="width:210px" value="${esc(d.displayRoom)}" placeholder="${roomPh}" />`,
+    ${cell('',
+      `${flx(t('settings.pfColPlatform'))}${selHtml('edPlat', platOpts, d.platform, 92)}
+      ${flx(t('tasks.csvRoom'))}<input class="input mono" id="edRoom" style="width:140px" value="${esc(d.displayRoom)}" placeholder="${roomPh}" />
+      ${flx(t('tasks.anchorNameLabel'))}<input class="input" id="edAnchor" style="width:140px" value="${esc(d.anchorName)}" placeholder="${t('tasks.anchorPh')}" />`,
       `<div class="hintline" id="edPlatHint">${platHintText(d.platform)}</div>`)}
-    ${fld(t('tasks.anchorNameLabel'), `<input class="input" id="edAnchor" style="width:240px" value="${esc(d.anchorName)}" placeholder="${t('tasks.anchorPh')}" />`)}
-    ${fld(t('tasks.colQuality'),
+    ${cell(t('tasks.colQuality'),
       `<div class="mini-row" id="edQGrid">
-        <span class="mini${d.quality === '' ? ' sel' : ''}" data-q="" title="${t('tasks.followGlobal')}">${t('tasks.followGlobal')}</span>
         ${QUALITY_CARDS.map((q) => `<span class="mini${d.quality === q.id ? ' sel' : ''}" data-q="${q.id}" title="${esc(t(q.resKey))} · ${esc(t(q.kbpsKey))}">${q.crown ? '★ ' : ''}${t(q.labelKey)}</span>`).join('')}
       </div>`,
-      `<div class="hintline" id="edQualityHint">${qualityHint(d)}</div>`, 30)}
-    ${fld(t('tasks.colLive'), `<div id="edInfo">${infoHtml(d)}</div>`)}
-    ${fld(t('tasks.kPoll'),
-      selHtml('edPoll', pollOpts, String(d.pollIntervalSec)),
+      `<div class="hintline" id="edQualityHint">${qualityHint(d)}</div>`)}
+    ${cell(t('tasks.colLive'), `<div id="edInfo">${infoHtml(d)}</div>`)}
+    ${cell('',
+      `${flx(t('tasks.kPoll'))}${selHtml('edPoll', pollOpts, String(d.pollIntervalSec), 118)}
+      ${flx(t('tasks.kReconnect'))}${selHtml('edReconnect', rcOpts, String(d.reconnectMax), 118)}`,
       `<div class="hintline">${t('tasks.pollDetail', d.pollIntervalSec, d.startDelaySec, d.stopDelaySec)}</div>`)}
-    ${fld(t('tasks.kReconnect'), selHtml('edReconnect', rcOpts, String(d.reconnectMax)))}
-    ${fld(t('settings.tabNaming'),
-      selHtml('edNaming', namingOpts, d.namingProfileId),
+    ${cell(t('settings.tabNaming'),
+      selHtml('edNaming', namingOpts, d.namingProfileId, 180),
       `<div class="hintline" id="edNamingHint">${namingHint(d)}</div>`)}
-    ${fld(t('tasks.csvSegment'),
-      selHtml('edSegMode', segOpts, d.segmentMode),
-      `<div class="hintline" id="edSegHint">${segmentHint(d)}</div>
-      <div class="row wrap" id="edSegPanel" style="margin-top:8px;gap:8px;${segPanelStyle}">
-        <div style="min-width:150px;${segTimeStyle}" id="edSegMinWrap">
-          <label class="fl">${t('tasks.segMinutesLabel')}</label>
-          <select class="select" id="edSegMin">${optList([...new Set([30, 60, 120, 180, Number(d.segmentMinutes) || 60])].map((m) => ({ v: String(m), label: `${m} ${t('common.minutes')}` })), String(d.segmentMinutes))}</select>
-        </div>
-        <div style="min-width:150px;${segSizeStyle}" id="edSegSizeWrap">
-          <label class="fl">${t('tasks.segSizeLabel')}</label>
-          <select class="select" id="edSegSize">${optList([...new Set([1024, 2048, 4096, 8192, Number(d.segmentSizeMB) || 2048])].map((m) => ({ v: String(m), label: `${Math.round(m / 1024 * 10) / 10} ${t('tasks.gb')}` })), String(d.segmentSizeMB))}</select>
-        </div>
-        <div style="min-width:150px">
-          <label class="fl">${t('tasks.segProcessingLabel')}</label>
-          <select class="select" id="edAutoMerge">
-            <option value="0"${!d.autoMerge ? ' selected' : ''}>${t('tasks.segKeepIndependent')}</option>
-            <option value="1"${d.autoMerge ? ' selected' : ''}>${t('tasks.segMergeSingle')}</option>
-          </select>
-        </div>
-      </div>`)}
-    ${fld(t('tasks.autoRecordLabel'), switchEl(d.autoRecord, 'id="edAuto"'), '', 23)}
-    ${fld(t('tasks.monitorOnlyLabel'), switchEl(d.monitorOnly, 'id="edMonitor"'),
-      `<div class="hintline" id="edMonitorHint">${d.monitorOnly ? t('tasks.monitorOn') : t('tasks.monitorOff')}</div>`, 23)}
-    ${d.id ? `<div class="sect"><span class="n">≡</span>${t('tasks.segHeader', (d.task && (d.task.segments || []).length) || 0)}</div>
-      ${segTableHtml(d.task)}` : ''}
-    <div id="edResolved"></div>`;
+    ${cell(t('tasks.csvSegment'),
+      `<div class="row" style="align-items:center;gap:8px;flex-wrap:wrap">
+        ${selHtml('edSegMode', segOpts, d.segmentMode, 120)}
+        ${segTag('edSegMinTag', t('tasks.segMinutesLabel'), segTimeStyle)}<select class="select" id="edSegMin" style="width:auto;min-width:88px;${segTimeStyle}">${segMinOpts}</select>
+        ${segTag('edSegSizeTag', t('tasks.segSizeLabel'), segSizeStyle)}<select class="select" id="edSegSize" style="width:auto;min-width:88px;${segSizeStyle}">${segSizeOpts}</select>
+        ${segTag('edSegMergeTag', t('tasks.segProcessingLabel'), segInlineStyle)}<select class="select" id="edAutoMerge" style="width:auto;min-width:88px;${segInlineStyle}">
+          <option value="0"${!d.autoMerge ? ' selected' : ''}>${t('tasks.segKeepIndependent')}</option>
+          <option value="1"${d.autoMerge ? ' selected' : ''}>${t('tasks.segMergeSingle')}</option>
+        </select>
+      </div>`,
+      `<div class="hintline" id="edSegHint">${segmentHint(d)}</div>`)}
+    ${cell('',
+      `${flx(t('tasks.autoRecordLabel'))}${switchEl(d.autoRecord, 'id="edAuto"')}
+      ${flx(t('tasks.monitorOnlyLabel'))}${switchEl(d.monitorOnly, 'id="edMonitor"')}`,
+      `<div class="hintline" id="edMonitorHint">${d.monitorOnly ? t('tasks.monitorOn') : t('tasks.monitorOff')}</div>`)}
+  </div>
+  ${d.id ? `<div class="sect"><span class="n">≡</span>${t('tasks.segHeader', (d.task && (d.task.segments || []).length) || 0)}</div>
+    ${segTableHtml(d.task)}` : ''}
+  <div id="edResolved"></div>`;
 }
 
-function selHtml(id, options, value) {
-  return `<select class="select" id="${id}" style="width:auto;min-width:150px">${optList(options, value)}</select>`;
+function selHtml(id, options, value, minW = 150) {
+  return `<select class="select" id="${id}" style="width:auto;min-width:${minW}px">${optList(options, value)}</select>`;
 }
 
 function qualityHint(d) {
   if (d.recording) return t('tasks.qualityFallback') + t('tasks.currentSessionNote');
-  return `${t('tasks.currentSel')}<b style="color:var(--txt)">${esc(t(QNAME[d.quality]) || d.quality || t('tasks.followGlobal'))}</b>${t('tasks.qualityHint')}`;
+  return `${t('tasks.currentSel')}<b style="color:var(--txt)">${esc(t(QNAME[d.quality]) || d.quality || 'origin')}</b>${t('tasks.qualityHint')}`;
 }
 
 function segmentHint(d) {
@@ -714,19 +712,20 @@ function segTableHtml(task) {
     </tr>`).join('')}</tbody></table>`;
 }
 
-/** 直播状态栏位：新建时显示解析结果提示；已有任务显示实时状态 + 标题 + 累计 */
+/** 直播状态栏位：只显示状态徽标，不带下方文案（标题/时长/状态消息在列表与详情卡片里看） */
 function infoHtml(d) {
   if (!d.id) {
     if (d.resolved && d.resolved.anchorName) {
       const live = d.resolved.liveStatus === 'live';
-      return `${live ? '<span class="chip on"><i class="dot"></i>' + t('tasks.live') + '</span>' : '<span class="chip wait"><i class="dot"></i>' + t('tasks.notLive') + '</span>'} · ${esc(d.resolved.anchorName)}`;
+      return `${live ? '<span class="chip on"><i class="dot"></i>' + t('tasks.live') + '</span>' : '<span class="chip wait"><i class="dot"></i>' + t('tasks.notLive') + '</span>'}`;
     }
     return `<span class="note">${t('tasks.statusNewHint')}</span>`;
   }
   const tsk = d.task || {};
-  const total = (Number(tsk.totalDurationSec) || 0) ? `${formatDuration(Number(tsk.totalDurationSec) || 0)} · ${formatBytes(Number(tsk.totalBytes) || 0)}` : '';
-  return `${statusCell(tsk)}
-    <div class="hintline" style="margin:5px 0 0">${esc(tsk.title || t('tasks.noTitle'))}${total ? ' · ' + total : ''}${tsk.statusMessage ? ' · ' + esc(tsk.statusMessage) : ''}</div>`;
+  const m = statusMeta(tsk.status);
+  return tsk.status === 'recording'
+    ? `<span class="pulse"><b></b>${esc(m.text)}</span>`
+    : `<span class="chip ${esc(m.chip)}"><i class="dot"></i>${esc(m.text)}</span>`;
 }
 
 /* ---------- 新建 / 编辑绑定与提交 ---------- */
@@ -807,10 +806,11 @@ function bindEditor(d, body, ctx) {
   const setQHint = () => { const el = body.querySelector('#edQualityHint'); if (el) el.innerHTML = qualityHint(d); };
   const setNamingHint = () => { const el = body.querySelector('#edNamingHint'); if (el) el.innerHTML = namingHint(d); };
   function setSegUI() {
-    const on = d.segmentMode === 'time' || d.segmentMode === 'size';
-    const panel = body.querySelector('#edSegPanel'); if (panel) panel.style.display = on ? '' : 'none';
-    const tw = body.querySelector('#edSegMinWrap'); if (tw) tw.style.display = d.segmentMode === 'time' ? '' : 'none';
-    const sw = body.querySelector('#edSegSizeWrap'); if (sw) sw.style.display = d.segmentMode === 'size' ? '' : 'none';
+    const show = (id, on) => { const el = body.querySelector('#' + id); if (el) el.style.display = on ? '' : 'none'; };
+    show('edSegMin', d.segmentMode === 'time'); show('edSegMinTag', d.segmentMode === 'time');
+    show('edSegSize', d.segmentMode === 'size'); show('edSegSizeTag', d.segmentMode === 'size');
+    show('edAutoMerge', d.segmentMode === 'time' || d.segmentMode === 'size');
+    show('edSegMergeTag', d.segmentMode === 'time' || d.segmentMode === 'size');
     const h = body.querySelector('#edSegHint'); if (h) h.innerHTML = segmentHint(d);
   }
 
@@ -872,7 +872,7 @@ function bindEditor(d, body, ctx) {
   }
   if (urlInput) urlInput.oninput = () => { d.url = urlInput.value.trim(); };
   if (anchorInput) anchorInput.oninput = () => { d.anchorName = anchorInput.value.trim(); d.anchorEdited = true; };
-  // 清晰度：横向卡片，点选即生效（''=跟随全局）
+  // 清晰度：横向卡片，点选即生效（无"跟随全局"选项，默认值即全局默认）
   if (qGrid) qGrid.querySelectorAll('[data-q]').forEach((card) => {
     card.onclick = () => {
       d.quality = card.dataset.q || '';
@@ -924,7 +924,10 @@ async function submit(d, dialog, btn, ctx) {
   if (d.platform === 'douyin' && d.shortId && d.shortId !== (d.task && d.task.shortId)) payload.shortId = d.shortId;
 
   payload.overrides = {};
-  if (d.quality) payload.overrides.quality = d.quality;                      // '' = 跟随全局
+  // 清晰度：无"跟随全局"选项，弹窗内默认值即全局默认；仅当所选与任务当前生效值不同时才显式覆盖
+  // （跟随全局的任务所选=全局值时保持跟随，全局调整后自动生效；录制中任务也不会因"原样保存"误触发锁定提示）
+  const curQ = (d.task && d.task.overrides && d.task.overrides.quality) || '';
+  if (d.quality && d.quality !== curQ && d.quality !== (curQ || d.qualityGlobal)) payload.overrides.quality = d.quality;
   if (d.segmentMode) payload.overrides.segmentMode = d.segmentMode;          // '' = 跟随全局
   payload.overrides.namingProfileId = d.namingProfileId || null;             // '' = 跟随全局
   payload.overrides.customText = null;
