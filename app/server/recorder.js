@@ -290,7 +290,7 @@ export class Recorder extends EventEmitter {
         }
       } catch { /* 探活失败按仍在直播处理，走重连 */ }
     }
-    const max = Number(this.settings.reconnectMax) || 5;
+    const max = Number(this.task.reconnectMax ?? this.settings.reconnectMax) || 5;
     this.reconnectAttempt += 1;
     const tail = this.lastStderrError || this._stderrTail.slice(-2).join(' | ');
     if (this.reconnectAttempt > max) {

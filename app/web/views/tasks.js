@@ -36,7 +36,7 @@ export async function render(root, ctx) {
   root.innerHTML = `<div class="card"><div class="empty">${t('tasks.loading')}</div></div>`;
   if (!state.bound) {
     state.bound = true;
-    offModal = ctx.on('open-task-modal', (id) => { if (id) openEditor(ctx, id); else state.openNew = true; });
+    offModal = ctx.on('open-task-modal', (id) => { if (id) openTaskDialog(ctx, id); else state.openNew = true; });
   }
   ctx.onRefresh(() => tick(ctx));
   await tick(ctx, true);
@@ -68,7 +68,7 @@ async function tick(ctx, initial) {
     }
     const r = await api.tasks();
     state.tasks = (r && r.items) || [];
-    if (state.openNew) { state.openNew = false; openEditor(ctx, null); }
+    if (state.openNew) { state.openNew = false; openTaskDialog(ctx, null); }
     paint(ctx, initial);
   } catch (e) {
     if (initial && boundRoot) {
@@ -329,7 +329,7 @@ function bind(ctx) {
     };
   });
 
-  root.querySelector('#tkNew').onclick = () => openEditor(ctx, null);
+  root.querySelector('#tkNew').onclick = () => openTaskDialog(ctx, null);
   root.querySelector('#tkExport').onclick = () => exportCsv();
 
   root.querySelectorAll('[data-act]').forEach((btn) => {
@@ -337,7 +337,7 @@ function bind(ctx) {
       const act = btn.dataset.act;
       const id = btn.dataset.id;
       const task = state.tasks.find((t) => t.id === id);
-      if (act === 'detail') { detailDialog(task, ctx); return; }
+      if (act === 'detail') { openTaskDialog(ctx, id); return; }
       if (act === 'log') {
         toast(t('tasks.redirectedLogs'));
         window.location.hash = '#/logs?task=' + encodeURIComponent(id);
@@ -479,71 +479,250 @@ function exportCsv() {
 
 /* ---------- 详情 ---------- */
 
-function detailDialog(task, ctx) {
-  if (!task) return;
-  const segs = task.segments || [];
-  openDialog({
-    title: t('tasks.detailTitle'),
+/* ================= 统一任务弹窗：新建 / 详情 / 编辑共用同一模板，每行一个栏位，详情即编辑 ================= */
+
+/** 栏位行：左侧标签 + 右侧控件 */
+function fld(label, ctl, opts = '') {
+  return `<div class="row" style="align-items:center;gap:10px;margin-top:10px${opts}">
+    <span style="flex:0 0 90px;font-size:12.5px;color:var(--txt-2)">${label}</span>
+    <div class="f1" style="min-width:0">${ctl}</div>
+  </div>`;
+}
+
+function optList(options, value) {
+  return options.map((o) => {
+    const v = typeof o === 'object' ? o.v : o;
+    const label = typeof o === 'object' ? o.label : String(o);
+    return `<option value="${esc(String(v))}"${String(v) === String(value) ? ' selected' : ''}>${esc(label)}</option>`;
+  }).join('');
+}
+
+async function openTaskDialog(ctx, id) {
+  let task = null;
+  if (id) {
+    try { task = await api.task(id); } catch (e) { toast(e.message || t('tasks.readTaskFail'), 'err'); return; }
+  }
+  const [n, s] = await Promise.allSettled([api.naming(), api.settings()]);
+  const naming = n.status === 'fulfilled' ? n.value : null;
+  const settings = s.status === 'fulfilled' ? s.value : null;
+
+  const profiles = (naming && naming.profiles) || [];
+  const effectiveQuality = (task && task.overrides && task.overrides.quality) || '';
+  const effectiveSeg = (task && task.overrides && task.overrides.segmentMode) || '';
+  const effectiveNaming = (task && task.overrides && task.overrides.namingProfileId) || '';
+  const d = {
+    id: id || null,
+    task: task || null,
+    url: task ? (task.sourceUrl || '') : '',
+    platform: task ? task.platform : '',
+    roomId: task ? String(task.roomId || '') : '',
+    anchorName: task ? (task.anchorName || '') : '',
+    anchorEdited: false,
+    resolved: task ? {
+      anchorName: task.anchorName, title: task.title, avatar: task.avatar,
+      platform: task.platform, roomId: task.roomId,
+      liveStatus: task.liveStatus === 'offline' ? 'offline' : 'live',
+      online: null, qualityOptions: [],
+    } : null,
+    avatarDirty: false, // 仅当本弹窗内重新解析过才保存头像（避免每次编辑都重复下载）
+    // 清晰度：'' = 跟随全局
+    quality: effectiveQuality,
+    qualityGlobal: (settings && (settings.defaultQuality || settings.quality)) || 'origin',
+    // 分段：'' = 跟随全局
+    segmentMode: effectiveSeg,
+    segmentMinutes: task ? (task.segmentMinutes || 60) : ((settings && settings.defaultSegmentMinutes) || 60),
+    segmentSizeMB: task ? (task.segmentSizeMB || 2048) : ((settings && settings.defaultSegmentSizeMB) || 2048),
+    autoMerge: task ? !!task.autoMerge : false,
+    // 命名：'' = 跟随全局
+    namingProfileId: effectiveNaming,
+    profiles,
+    // 轮询 / 重连（'' = 跟随全局）
+    pollIntervalSec: Number(task ? (task.pollIntervalSec || 60) : ((settings && settings.pollIntervalSec) || 60)),
+    reconnectMax: task && task.reconnectMax ? Number(task.reconnectMax) : '',
+    reconnectGlobal: Number(settings && settings.reconnectMax) || 5,
+    startDelaySec: Number(task ? (task.startDelaySec || 5) : ((settings && settings.startDelaySec) || 5)),
+    stopDelaySec: Number(task ? (task.stopDelaySec || 30) : ((settings && settings.stopDelaySec) || 30)),
+    // 开关
+    autoRecord: task ? task.autoRecord !== false : true,
+    monitorOnly: task ? !!task.monitorOnly : !!((settings && settings.defaultMonitorOnly)),
+    recording: !!(task && (task.status === 'recording' || task.status === 'stopping')),
+    // 平台列表（编辑已有任务时保留其平台；列表未加载时兜底当前平台）
+    platforms: state.platforms.filter((p) => ((settings && settings.platformEnabled) || {})[p.id] !== false || (task && task.platform === p.id))
+      .concat(task && !state.platforms.some((p) => p.id === task.platform) ? [{ id: task.platform, name: task.platformName || task.platform, tier: '' }] : []),
+  };
+
+  const dialog = openDialog({
+    title: d.id ? t('tasks.detailTitle') : t('tasks.newTaskTitle'),
     wide: true,
-    body: `
-      <div class="kv" style="grid-template-columns:110px 1fr">
-        <div class="k">${t('logs.colTask')}</div><div>${esc(task.anchorName || task.name || '—')} · ${esc(task.title || t('tasks.noTitle'))}</div>
-        <div class="k">${t('settings.pfColPlatform')}</div><div>${platBadge(task.platform, platName(task.platform) || task.platformName)}　${t('common.room', esc(task.roomId || '—'))}</div>
-        <div class="k">${t('tasks.kSource')}</div><div class="mono" style="font-size:12px;word-break:break-all">${esc(task.sourceUrl || '—')}</div>
-        <div class="k">${t('tasks.colQuality')}</div><div>${t('tasks.expected', esc(task.quality || '—'))}${task.qualityActual ? t('tasks.actual', esc(task.qualityActual)) : ''}</div>
-        <div class="k">${t('tasks.csvSegment')}</div><div>${esc(segmentStrategyText(task))} ${t('tasks.autoMerge', task.autoMerge ? t('tasks.on') : t('tasks.off'))}</div>
-        <div class="k">${t('settings.nmConfigTitle')}</div><div>${esc((task.overrides && task.overrides.namingProfileId) || task.namingProfileId || t('tasks.followGlobal'))}</div>
-        <div class="k">${t('tasks.csvStatus')}</div><div>${statusCell(task)}</div>
-        <div class="k">${t('tasks.kPoll')}</div><div>${t('tasks.pollDetail', Number(task.pollIntervalSec || 60), Number(task.startDelaySec || 5), Number(task.stopDelaySec || 30))}</div>
-        <div class="k">${t('tasks.kReconnect')}</div><div>${t('tasks.times', Number(task.reconnectCount || 0))}</div>
-        <div class="k">${t('tasks.kTotal')}</div><div>${esc(formatDuration(Number(task.totalDurationSec) || 0))} · ${esc(formatBytes(Number(task.totalBytes) || 0))}</div>
-        <div class="k">${t('logs.colTime')}</div><div>${t('tasks.created', esc(formatDateTime(task.createdAt)))}${task.startedAt ? ' ' + t('tasks.started', esc(formatDateTime(task.startedAt))) : ''}${task.endedAt ? ' ' + t('tasks.ended', esc(formatDateTime(task.endedAt))) : ''}</div>
-      </div>
-      <div class="sect"><span class="n">≡</span>${t('tasks.segHeader', segs.length)}</div>
-      ${segs.length ? `<table>
-        <thead><tr><th style="width:70px">${t('tasks.segIndex')}</th><th>${t('tasks.segName')}</th><th>${t('tasks.segDuration')}</th><th>${t('tasks.segSize')}</th><th>${t('tasks.csvStatus')}</th></tr></thead>
-        <tbody>${segs.map((s) => `<tr>
-          <td class="mono">${String(s.index || 0).padStart(3, '0')}</td>
-          <td class="mono" style="font-size:12px;word-break:break-all">${esc(s.name || s.path || '—')}</td>
-          <td>${esc(formatDuration(s.durationSec || 0))}</td>
-          <td>${esc(formatBytes(s.bytes || 0))}</td>
-          <td>${s.status === 'recording' ? '<span class="chip wait"><i class="dot"></i>' + t('common.recording') + '</span>' : esc(s.status || 'done')}</td>
-        </tr>`).join('')}</tbody></table>` : `<div class="note">${t('tasks.noSegs')}</div>`}`,
-    footer: (close) => {
+    body: taskShell(d),
+    footer: (close, body) => {
       const buttons = [];
       const b1 = document.createElement('button');
       b1.className = 'btn ghost';
-      b1.textContent = t('common.close');
+      b1.textContent = d.id ? t('common.close') : t('common.cancel');
       b1.onclick = close;
       buttons.push(b1);
-      if (task.status === 'recording') {
-        const bp = document.createElement('button');
-        bp.className = 'btn';
-        bp.textContent = t('tasks.pauseSegment');
-        bp.onclick = async () => { try { await api.taskAction(task.id, 'pause'); toast(t('tasks.pauseSegmentDone')); close(); } catch (e) { toast(e.message, 'err'); } };
+      if (d.id && d.task) {
+        if (d.task.status === 'recording') {
+          const bp = document.createElement('button');
+          bp.className = 'btn';
+          bp.textContent = t('tasks.pauseSegment');
+          bp.onclick = async () => { try { await api.taskAction(d.id, 'pause'); toast(t('tasks.pauseSegmentDone')); close(); } catch (e) { toast(e.message, 'err'); } };
+          const bs = document.createElement('button');
+          bs.className = 'btn danger';
+          bs.textContent = t('tasks.stop');
+          bs.onclick = async () => { try { await api.taskAction(d.id, 'stop'); toast(t('tasks.stopDone')); close(); } catch (e) { toast(e.message, 'err'); } };
+          buttons.push(bp, bs);
+        } else if (d.task.status === 'error') {
+          const br = document.createElement('button');
+          br.className = 'btn ok';
+          br.textContent = t('tasks.retry');
+          br.onclick = async () => { try { await api.taskAction(d.id, 'retry'); toast(t('tasks.retryDone')); close(); } catch (e) { toast(e.message, 'err'); } };
+          buttons.push(br);
+        }
+        const bs2 = document.createElement('button');
+        bs2.className = 'btn primary';
+        bs2.textContent = t('tasks.saveChanges');
+        bs2.onclick = () => submit(d, dialog, bs2, ctx);
+        buttons.push(bs2);
+      } else {
         const bs = document.createElement('button');
-        bs.className = 'btn danger';
-        bs.textContent = t('tasks.stop');
-        bs.onclick = async () => { try { await api.taskAction(task.id, 'stop'); toast(t('tasks.stopDone')); close(); } catch (e) { toast(e.message, 'err'); } };
-        buttons.push(bp, bs);
-      } else if (task.status === 'error') {
-        const br = document.createElement('button');
-        br.className = 'btn ok';
-        br.textContent = t('tasks.retry');
-        br.onclick = async () => { try { await api.taskAction(task.id, 'retry'); toast(t('tasks.retryDone')); close(); } catch (e) { toast(e.message, 'err'); } };
-        buttons.push(br);
+        bs.className = 'btn primary';
+        bs.textContent = t('tasks.createTask');
+        bs.onclick = () => submit(d, dialog, bs, ctx);
+        buttons.push(bs);
       }
-      const be = document.createElement('button');
-      be.className = 'btn primary';
-      be.textContent = t('tasks.edit');
-      be.onclick = () => { close(); openEditor(ctx, task.id); };
-      buttons.push(be);
       return buttons;
     },
   });
+
+  bindEditor(d, dialog.body, ctx);
 }
 
-/* ---------- 新建 / 编辑弹窗（4 步纵排） ---------- */
+function taskShell(d) {
+  const platOpts = [{ v: '', label: t('tasks.platChoose') }, ...d.platforms.map((p) => ({ v: p.id, label: p.name + (tierName(p.tier) ? `（${tierName(p.tier)}）` : '') }))];
+  const qualityOpts = [{ v: '', label: t('tasks.followGlobal') + `（${t(QNAME[d.qualityGlobal]) || d.qualityGlobal}）` }]
+    .concat(QUALITY_CARDS.map((q) => ({ v: q.id, label: t(q.labelKey) + (q.crown ? ' ★' : '') })));
+  const pollOpts = [...new Set([30, 60, 120, 180, 300, Number(d.pollIntervalSec) || 60])].map((v) => ({ v: String(v), label: `${v} ${t('common.seconds')}` }));
+  const rcNums = [3, 5, 8, 10];
+  if (d.reconnectMax !== '' && !rcNums.includes(Number(d.reconnectMax))) rcNums.push(Number(d.reconnectMax));
+  const rcOpts = [{ v: '', label: t('tasks.reconnectFollow', String(d.reconnectGlobal)) }].concat(rcNums.map((o) => ({ v: String(o), label: `${o} ${t('settings.recReconnUnit')}` })));
+  const namingOpts = [{ v: '', label: t('tasks.followGlobal') }].concat(d.profiles.length ? d.profiles.map((p) => ({ v: p.id, label: p.name || p.id })) : []);
+  const segOpts = [
+    { v: '', label: t('tasks.followGlobal') },
+    { v: 'none', label: t('seg.none') },
+    { v: 'time', label: t('tasks.segByTimeCard') },
+    { v: 'size', label: t('settings.recSegBySize') },
+  ];
+  const segPanelStyle = (d.segmentMode === 'time' || d.segmentMode === 'size') ? '' : 'display:none';
+  const segTimeStyle = d.segmentMode === 'time' ? '' : 'display:none';
+  const segSizeStyle = d.segmentMode === 'size' ? '' : 'display:none';
+  return `
+    ${fld(t('tasks.kSource'),
+      `<div class="row" style="align-items:center;gap:8px">
+        <input class="input f1 mono" id="edUrl" value="${esc(d.url)}" placeholder="${t('tasks.pasteUrlPh')}" />
+        <button class="btn" id="edResolve">${t('tasks.resolve')}</button>
+      </div>
+      <div class="hintline" style="margin:5px 0 0">${t('tasks.urlEditTip')}</div>`)}
+    ${fld(t('settings.pfColPlatform'), selHtml('edPlat', platOpts, d.platform))}
+    ${fld(t('tasks.csvRoom'),
+      `<div class="row" style="align-items:center;gap:8px;flex-wrap:wrap">
+        <input class="input mono" id="edRoom" style="width:220px;min-width:160px" value="${esc(d.roomId)}" placeholder="${t('tasks.roomPh')}" />
+        <span class="hintline" id="edPlatHint" style="margin:0;flex:0 1 auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${platHintText(d.platform)}</span>
+      </div>`)}
+    ${fld(t('tasks.anchorNameLabel'), `<input class="input f1" id="edAnchor" value="${esc(d.anchorName)}" placeholder="${t('tasks.anchorPh')}" />`)}
+    ${fld(t('tasks.colQuality'),
+      `${selHtml('edQuality', qualityOpts, d.quality)}
+      <div class="hintline" style="margin:5px 0 0" id="edQualityHint">${qualityHint(d)}</div>`)}
+    ${fld(t('tasks.colLive'), `<div id="edInfo">${infoHtml(d)}</div>`)}
+    ${fld(t('tasks.kPoll'),
+      `${selHtml('edPoll', pollOpts, String(d.pollIntervalSec))}
+      <div class="hintline" style="margin:5px 0 0">${t('tasks.pollDetail', d.pollIntervalSec, d.startDelaySec, d.stopDelaySec)}</div>`)}
+    ${fld(t('tasks.kReconnect'), selHtml('edReconnect', rcOpts, String(d.reconnectMax)))}
+    ${fld(t('settings.tabNaming'),
+      `${selHtml('edNaming', namingOpts, d.namingProfileId)}
+      <div class="hintline" style="margin:5px 0 0" id="edNamingHint">${namingHint(d)}</div>`)}
+    ${fld(t('tasks.csvSegment'),
+      `${selHtml('edSegMode', segOpts, d.segmentMode)}
+      <div class="hintline" style="margin:5px 0 0" id="edSegHint">${segmentHint(d)}</div>
+      <div class="row wrap" id="edSegPanel" style="margin-top:8px;gap:8px;${segPanelStyle}">
+        <div class="f1" style="min-width:150px;${segTimeStyle}" id="edSegMinWrap">
+          <label class="fl">${t('tasks.segMinutesLabel')}</label>
+          <select class="select" id="edSegMin">${optList([...new Set([30, 60, 120, 180, Number(d.segmentMinutes) || 60])].map((m) => ({ v: String(m), label: `${m} ${t('common.minutes')}` })), String(d.segmentMinutes))}</select>
+        </div>
+        <div class="f1" style="min-width:150px;${segSizeStyle}" id="edSegSizeWrap">
+          <label class="fl">${t('tasks.segSizeLabel')}</label>
+          <select class="select" id="edSegSize">${optList([...new Set([1024, 2048, 4096, 8192, Number(d.segmentSizeMB) || 2048])].map((m) => ({ v: String(m), label: `${Math.round(m / 1024 * 10) / 10} ${t('tasks.gb')}` })), String(d.segmentSizeMB))}</select>
+        </div>
+        <div class="f1" style="min-width:150px">
+          <label class="fl">${t('tasks.segProcessingLabel')}</label>
+          <select class="select" id="edAutoMerge">
+            <option value="0"${!d.autoMerge ? ' selected' : ''}>${t('tasks.segKeepIndependent')}</option>
+            <option value="1"${d.autoMerge ? ' selected' : ''}>${t('tasks.segMergeSingle')}</option>
+          </select>
+        </div>
+      </div>`)}
+    ${fld(t('tasks.autoRecordLabel'), switchEl(d.autoRecord, 'id="edAuto"'))}
+    ${fld(t('tasks.monitorOnlyLabel'), `${switchEl(d.monitorOnly, 'id="edMonitor"')}
+      <div class="hintline" style="margin:6px 0 0" id="edMonitorHint">${d.monitorOnly ? t('tasks.monitorOn') : t('tasks.monitorOff')}</div>`)}
+    ${d.id ? `<div class="sect"><span class="n">≡</span>${t('tasks.segHeader', (d.task && (d.task.segments || []).length) || 0)}</div>
+      ${segTableHtml(d.task)}` : ''}
+    <div id="edResolved"></div>`;
+}
+
+function selHtml(id, options, value) {
+  return `<select class="select" id="${id}" style="width:100%;max-width:320px">${optList(options, value)}</select>`;
+}
+
+function qualityHint(d) {
+  if (d.recording) return t('tasks.qualityFallback') + t('tasks.currentSessionNote');
+  return `${t('tasks.currentSel')}<b style="color:var(--txt)">${esc(t(QNAME[d.quality]) || d.quality || t('tasks.followGlobal'))}</b>${t('tasks.qualityHint')}`;
+}
+
+function segmentHint(d) {
+  const t0 = { segmentMode: d.segmentMode || (d.task && d.task.segmentMode) || 'time', segmentMinutes: d.segmentMinutes, segmentSizeMB: d.segmentSizeMB };
+  const txt = segmentStrategyText(t0);
+  if (!d.segmentMode) return `${t('tasks.followGlobal')} · ${esc(txt)}`;
+  return `${t('tasks.currentSel')}<b style="color:var(--txt)">${esc(txt)}</b>${d.recording ? t('tasks.currentSessionNote') : ''}`;
+}
+
+function namingHint(d) {
+  const p = d.profiles.find((x) => x.id === d.namingProfileId);
+  if (!p) return t('tasks.followGlobal') + ' · ' + esc((d.profiles[0] && d.profiles[0].dirTemplate) || '{平台}/{主播}/{日期}');
+  return esc((p.dirTemplate || '{平台}/{主播}/{日期}') + ' / ' + (p.fnTemplate || '{日期}_{主播}_{序号}'));
+}
+
+function segTableHtml(task) {
+  if (!task) return '';
+  const segs = task.segments || [];
+  if (!segs.length) return `<div class="note">${t('tasks.noSegs')}</div>`;
+  return `<table>
+    <thead><tr><th style="width:70px">${t('tasks.segIndex')}</th><th>${t('tasks.segName')}</th><th>${t('tasks.segDuration')}</th><th>${t('tasks.segSize')}</th><th>${t('tasks.csvStatus')}</th></tr></thead>
+    <tbody>${segs.map((s) => `<tr>
+      <td class="mono">${String(s.index || 0).padStart(3, '0')}</td>
+      <td class="mono" style="font-size:12px;word-break:break-all">${esc(s.name || s.path || '—')}</td>
+      <td>${esc(formatDuration(s.durationSec || 0))}</td>
+      <td>${esc(formatBytes(s.bytes || 0))}</td>
+      <td>${s.status === 'recording' ? '<span class="chip wait"><i class="dot"></i>' + t('common.recording') + '</span>' : esc(s.status || 'done')}</td>
+    </tr>`).join('')}</tbody></table>`;
+}
+
+/** 直播状态栏位：新建时显示解析结果提示；已有任务显示实时状态 + 标题 + 累计 */
+function infoHtml(d) {
+  if (!d.id) {
+    if (d.resolved && d.resolved.anchorName) {
+      const live = d.resolved.liveStatus === 'live';
+      return `${live ? '<span class="chip on"><i class="dot"></i>' + t('tasks.live') + '</span>' : '<span class="chip wait"><i class="dot"></i>' + t('tasks.notLive') + '</span>'} · ${esc(d.resolved.anchorName)}`;
+    }
+    return `<span class="note">${t('tasks.statusNewHint')}</span>`;
+  }
+  const tsk = d.task || {};
+  const total = (Number(tsk.totalDurationSec) || 0) ? `${formatDuration(Number(tsk.totalDurationSec) || 0)} · ${formatBytes(Number(tsk.totalBytes) || 0)}` : '';
+  return `${statusCell(tsk)}
+    <div class="hintline" style="margin:5px 0 0">${esc(tsk.title || t('tasks.noTitle'))}${total ? ' · ' + total : ''}${tsk.statusMessage ? ' · ' + esc(tsk.statusMessage) : ''}</div>`;
+}
+
+/* ---------- 新建 / 编辑绑定与提交 ---------- */
 
 const QUALITY_CARDS = [
   { id: 'origin', labelKey: 'tasks.qOrigin', resKey: 'tasks.qOriginRes', kbpsKey: 'tasks.qOriginKbps', crown: true },
@@ -568,139 +747,6 @@ const SAMPLE = {
   '{日期}': '2025-06-01', '{时间}': '20-13-05', '{清晰度}': '原画', '{序号}': '001', '{任务}': 'task_07',
   '{分辨率}': '1920x1080', '{时长}': '01-00-00', '{自定义}': '自定义',
 };
-
-async function openEditor(ctx, id) {
-  let task = null;
-  if (id) {
-    try { task = await api.task(id); } catch (e) { toast(e.message || t('tasks.readTaskFail'), 'err'); return; }
-  }
-  let naming = null;
-  let settings = null;
-  const [n, s] = await Promise.allSettled([api.naming(), api.settings()]);
-  if (n.status === 'fulfilled') naming = n.value;
-  if (s.status === 'fulfilled') settings = s.value;
-
-  const d = {
-    id: id || null,
-    url: task ? (task.sourceUrl || '') : '',
-    platform: task ? task.platform : '',
-    roomId: task ? String(task.roomId || '') : '',
-    resolved: task ? {
-      anchorName: task.anchorName, title: task.title, avatar: task.avatar,
-      platform: task.platform, roomId: task.roomId,
-      liveStatus: task.liveStatus === 'offline' ? 'offline' : 'live',
-      online: null, qualityOptions: [],
-    } : null,
-    autoRecord: task ? task.autoRecord !== false : true,
-    monitorOnly: task ? !!task.monitorOnly : !!((settings && settings.defaultMonitorOnly)),
-    anchorName: task ? (task.anchorName || '') : '',
-    anchorEdited: false, // 主播名是否被手动编辑（手改则锁定，避免被解析结果刷新覆盖）
-    followQuality: !(task && task.overrides && task.overrides.quality),
-    quality: (task && task.overrides && task.overrides.quality) || (settings && settings.defaultQuality) || 'origin',
-    customText: (task && task.overrides && task.overrides.customText) || '',
-    recordRoot: (settings && settings.recordRoot) || '/data',
-    followSeg: !(task && task.overrides && task.overrides.segmentMode),
-    segmentMode: (task && task.overrides && task.overrides.segmentMode) || (settings && settings.defaultSegmentMode) || 'time',
-    segmentMinutes: task ? (task.segmentMinutes || 60) : ((settings && settings.defaultSegmentMinutes) || 60),
-    segmentSizeMB: task ? (task.segmentSizeMB || 2048) : ((settings && settings.defaultSegmentSizeMB) || 2048),
-    followNaming: !(task && task.overrides && task.overrides.namingProfileId),
-    namingProfileId: (task && task.overrides && task.overrides.namingProfileId) || (naming && naming.activeId) || 'default',
-    container: (task && task.container) || (settings && (settings.recordContainer || settings.container)) || 'ts',
-    remuxToMp4: task ? task.remuxToMp4 !== false : true,
-    autoMerge: task ? !!task.autoMerge : false,
-    recording: !!(task && (task.status === 'recording' || task.status === 'stopping')),
-    profiles: (naming && naming.profiles) || [],
-    // 平台账号里「停用」的平台不出现在新建表单（编辑已有任务时仍保留其平台以便继续编辑）
-    platforms: state.platforms.filter((p) => ((settings && settings.platformEnabled) || {} )[p.id] !== false || (task && task.platform === p.id)),
-    preview: '',
-  };
-
-  const dialog = openDialog({
-    title: d.id ? t('tasks.editTaskTitle') : t('tasks.newTaskTitle'),
-    wide: true,
-    body: shell(d),
-    footer: (close, body) => {
-      const cancel = document.createElement('button');
-      cancel.className = 'btn ghost';
-      cancel.textContent = t('common.cancel');
-      cancel.onclick = close;
-      const save = document.createElement('button');
-      save.className = 'btn primary';
-      save.textContent = d.id ? t('tasks.saveChanges') : t('tasks.createTask');
-      save.onclick = () => submit(d, dialog, save, ctx);
-      return [cancel, save];
-    },
-  });
-
-  bindEditor(d, dialog.body, ctx);
-  updatePreview(d, dialog.body);
-}
-
-function shell(d) {
-  return `
-    <div class="sect"><span class="n">1</span>${t('tasks.sectRoomUrl')}</div>
-    <div class="row">
-      <input class="input f1 mono" id="edUrl" value="${esc(d.url)}" placeholder="${t('tasks.pasteUrlPh')}" />
-      <button class="btn" id="edResolve">${t('tasks.resolve')}</button>
-    </div>
-    <div class="row wrap" style="margin-top:8px;align-items:center;gap:8px">
-      <span style="font-size:12px;color:var(--txt-3);flex:0 0 auto">${t('tasks.manualPlatform')}</span>
-      ${d.platforms.map((p) => `<span class="chip" data-plat="${esc(p.id)}" style="cursor:pointer"><i class="dot" style="background:var(--${p.id === 'douyin' ? 'dy' : p.id === 'bilibili' ? 'bili-2' : 'accent'})"></i>${esc(p.name)}${tierName(p.tier) ? ` <span class="tag">${esc(tierName(p.tier))}</span>` : ''}</span>`).join('')}
-    </div>
-    <div class="row wrap" style="margin-top:8px;align-items:center;gap:8px">
-      <span style="font-size:12px;color:var(--txt-3);flex:0 0 auto;white-space:nowrap">${t('tasks.csvRoom')}</span>
-      <input class="input mono" id="edRoom" style="width:200px;min-width:140px" value="${esc(d.roomId)}" placeholder="${t('tasks.roomPh')}" />
-      <span class="hintline" id="edPlatHint" style="margin:0;white-space:nowrap;flex:0 1 auto;overflow:hidden;text-overflow:ellipsis">${platHintText(d.platform)}</span>
-      <span style="flex:0 0 auto;color:var(--line-2);font-size:13px">│</span>
-      <span style="font-size:12px;color:var(--txt-3);flex:0 0 auto;white-space:nowrap">${t('files.anchorPlaceholder')}</span>
-      <input class="input f1" id="edAnchor" style="min-width:180px" value="${esc(d.anchorName)}" placeholder="${t('tasks.anchorPh')}" />
-    </div>
-    <div class="hintline">${t('tasks.platHint1')}${t('tasks.platHint2')}${t('tasks.platHint3')}${t('tasks.platHint4')}${t('tasks.platHint5')}</div>
-    <div id="edResolved">${d.resolved ? resolvedCard(d) : ''}</div>
-
-    <div class="sect"><span class="n">2</span>${t('tasks.colQuality')} ${followChip(d.followQuality, 'q')}</div>
-    <div class="mini-row" id="edQGrid">
-      ${QUALITY_CARDS.map((q) => `<span class="mini${d.quality === q.id ? ' sel' : ''}" data-q="${q.id}" title="${esc(t(q.resKey))} · ${esc(t(q.kbpsKey))}${q.crown ? ' · ' + t('tasks.recommend') : ''}">${q.crown ? '★ ' : ''}${t(q.labelKey)}</span>`).join('')}
-    </div>
-    <div class="hintline" id="edQualityHint">${t('tasks.currentSel')}<b style="color:var(--txt)">${esc(t(QNAME[d.quality]) || d.quality)}</b> · ${esc(t((QUALITY_CARDS.find((x) => x.id === d.quality) || {}).resKey) || '')}${t('tasks.qualityHint')}${d.recording ? t('tasks.currentSessionNote') : ''}</div>
-    <div class="note" style="margin-top:10px">${t('tasks.platformDiff')}</div>
-
-    <div class="sect"><span class="n">3</span>${t('tasks.csvSegment')} ${followChip(d.followSeg, 'seg')}</div>
-    <div class="mini-row" id="edSegGrid">
-      <span class="mini${d.segmentMode === 'time' ? ' sel' : ''}" data-seg="time" title="${t('tasks.segByTimeTip')}">${t('tasks.segByTimeCard')}</span>
-      <span class="mini${d.segmentMode === 'size' ? ' sel' : ''}" data-seg="size" title="${t('tasks.segBySizeTip')}">${t('settings.recSegBySize')}</span>
-      <span class="mini${d.segmentMode === 'none' ? ' sel' : ''}" data-seg="none" title="${t('tasks.segNoneTip')}">${t('seg.none')}</span>
-      <span class="mini i">${t('tasks.segHintBelow')}</span>
-    </div>
-    <div class="row wrap" id="edSegPanel" style="margin-top:12px;${d.segmentMode === 'none' ? 'display:none' : ''}">
-      <div class="f1" style="min-width:170px"><label class="fl">${t('tasks.segMinutesLabel')}</label>
-        <select class="select" id="edSegMin">
-          ${[30, 60, 120, 180].map((m) => `<option value="${m}"${d.segmentMinutes === m ? ' selected' : ''}>${m} ${t('common.minutes')}</option>`).join('')}
-        </select></div>
-      <div class="f1" style="min-width:170px"><label class="fl">${t('tasks.segSizeLabel')}</label>
-        <select class="select" id="edSegSize">
-          ${[1024, 2048, 4096, 8192].map((m) => `<option value="${m}"${d.segmentSizeMB === m ? ' selected' : ''}>${Math.round(m / 1024 * 10) / 10} ${t('tasks.gb')}</option>`).join('')}
-        </select></div>
-      <div class="f1" style="min-width:170px"><label class="fl">${t('tasks.segProcessingLabel')}</label>
-        <select class="select" id="edAutoMerge">
-          <option value="0"${!d.autoMerge ? ' selected' : ''}>${t('tasks.segKeepIndependent')}</option>
-          <option value="1"${d.autoMerge ? ' selected' : ''}>${t('tasks.segMergeSingle')}</option>
-        </select></div>
-    </div>
-
-    <div class="row" style="margin-top:14px;align-items:center;gap:10px;flex-wrap:wrap">
-      <label style="display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--txt-2)">${t('tasks.autoRecordLabel')} ${switchEl(d.autoRecord, 'id="edAuto"')}</label>
-      <label style="display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--txt-2)">${t('tasks.monitorOnlyLabel')} ${switchEl(d.monitorOnly, 'id="edMonitor"')}</label>
-      <div class="hintline" style="margin-top:6px" id="edMonitorHint">${d.monitorOnly ? t('tasks.monitorOn') : t('tasks.monitorOff')}</div>
-    </div>`;
-}
-
-let settings0 = null;
-
-function followChip(on, kind) {
-  return `<span class="chip ${on ? 'on' : ''}" data-follow="${kind}" style="margin-left:8px;font-weight:400;cursor:pointer">
-    <i class="dot"></i>${on ? t('tasks.followGlobal') : t('tasks.customOnly')}</span>`;
-}
 
 function resolvedCard(d) {
   const r = d.resolved || {};
@@ -729,10 +775,28 @@ function fmtOnline(n) {
 }
 
 function bindEditor(d, body, ctx) {
-  let resolveBtn = body.querySelector('#edResolve');
+  const resolveBtn = body.querySelector('#edResolve');
   const urlInput = body.querySelector('#edUrl');
   const roomInput = body.querySelector('#edRoom');
   const anchorInput = body.querySelector('#edAnchor');
+  const platSel = body.querySelector('#edPlat');
+  const qSel = body.querySelector('#edQuality');
+  const pollSel = body.querySelector('#edPoll');
+  const rcSel = body.querySelector('#edReconnect');
+  const namingSel = body.querySelector('#edNaming');
+  const segMode = body.querySelector('#edSegMode');
+
+  const setInfo = () => { const el = body.querySelector('#edInfo'); if (el) el.innerHTML = infoHtml(d); };
+  const setPlatHint = () => { const el = body.querySelector('#edPlatHint'); if (el) el.innerHTML = platHintText(d.platform); };
+  const setQHint = () => { const el = body.querySelector('#edQualityHint'); if (el) el.innerHTML = qualityHint(d); };
+  const setNamingHint = () => { const el = body.querySelector('#edNamingHint'); if (el) el.innerHTML = namingHint(d); };
+  function setSegUI() {
+    const on = d.segmentMode === 'time' || d.segmentMode === 'size';
+    const panel = body.querySelector('#edSegPanel'); if (panel) panel.style.display = on ? '' : 'none';
+    const tw = body.querySelector('#edSegMinWrap'); if (tw) tw.style.display = d.segmentMode === 'time' ? '' : 'none';
+    const sw = body.querySelector('#edSegSizeWrap'); if (sw) sw.style.display = d.segmentMode === 'size' ? '' : 'none';
+    const h = body.querySelector('#edSegHint'); if (h) h.innerHTML = segmentHint(d);
+  }
 
   async function doResolve({ silent } = {}) {
     const url = urlInput ? urlInput.value.trim() : (d.url || '');
@@ -745,16 +809,18 @@ function bindEditor(d, body, ctx) {
     try {
       const r = await api.resolve(url || rid, url ? undefined : d.platform);
       d.resolved = r;
+      d.avatarDirty = true;
       d.platform = r.platform || d.platform;
       d.roomId = String(r.roomId || rid || '');
-      if (roomInput) roomInput.value = d.roomId; // 解析出的房间号直接回填房间号输入框
+      if (roomInput) roomInput.value = d.roomId; // 解析出的房间号直接回填
+      if (platSel && [...platSel.options].some((o) => o.value === d.platform)) platSel.value = d.platform;
       if (r.anchorName) {
         const clean = stripEmoji(r.anchorName);
         d.anchorName = clean;
         if (anchorInput) anchorInput.value = clean;
       }
       const rc = body.querySelector('#edResolved'); if (rc) rc.innerHTML = resolvedCard(d);
-      const ph = body.querySelector('#edPlatHint'); if (ph) ph.innerHTML = platHintText(d.platform);
+      setPlatHint(); setInfo();
       if (!silent) toast(t('tasks.resolvedOk'));
       return r;
     } catch (e) {
@@ -774,17 +840,12 @@ function bindEditor(d, body, ctx) {
   }
 
   if (resolveBtn) resolveBtn.onclick = () => doResolve({ silent: false });
-
-  body.querySelectorAll('[data-plat]').forEach((chip) => {
-    chip.onclick = () => {
-      d.platform = chip.dataset.plat;
-      body.querySelectorAll('[data-plat]').forEach((c) => c.classList.toggle('on', c === chip));
-      const ph = body.querySelector('#edPlatHint'); if (ph) ph.innerHTML = platHintText(d.platform);
-      const rid = roomInput ? roomInput.value.trim() : '';
-      if (rid) autoFromRoom();
-    };
-    if (d.platform === chip.dataset.plat) chip.classList.add('on');
-  });
+  if (platSel) platSel.onchange = () => {
+    d.platform = platSel.value;
+    setPlatHint();
+    const rid = roomInput ? roomInput.value.trim() : '';
+    if (rid) autoFromRoom();
+  };
   if (roomInput) {
     roomInput.oninput = () => { d.roomId = roomInput.value.trim(); };
     roomInput.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); autoFromRoom(); } };
@@ -792,34 +853,16 @@ function bindEditor(d, body, ctx) {
   }
   if (urlInput) urlInput.oninput = () => { d.url = urlInput.value.trim(); };
   if (anchorInput) anchorInput.oninput = () => { d.anchorName = anchorInput.value.trim(); d.anchorEdited = true; };
-
-  body.querySelectorAll('[data-q]').forEach((card) => {
-    card.onclick = () => {
-      d.quality = card.dataset.q;
-      d.followQuality = false;
-      body.querySelectorAll('[data-q]').forEach((c) => c.classList.toggle('sel', c === card));
-      refreshFollow(body, d);
-      const hint = body.querySelector('#edQualityHint');
-      if (hint) hint.innerHTML = `${t('tasks.currentSel')}<b style="color:var(--txt)">${esc(t(QNAME[d.quality]) || d.quality)}</b>${t('tasks.qualityFallback')}${d.recording ? t('tasks.currentSessionNote') : ''}`;
-      updatePreview(d, body);
-    };
-  });
-
-  body.querySelectorAll('[data-seg]').forEach((card) => {
-    card.onclick = () => {
-      d.segmentMode = card.dataset.seg;
-      d.followSeg = false;
-      body.querySelectorAll('[data-seg]').forEach((c) => c.classList.toggle('sel', c === card));
-      body.querySelector('#edSegPanel').style.display = d.segmentMode === 'none' ? 'none' : 'flex';
-      refreshFollow(body, d);
-      updatePreview(d, body);
-    };
-  });
+  if (qSel) qSel.onchange = () => { d.quality = qSel.value; setQHint(); };
+  if (pollSel) pollSel.onchange = () => { d.pollIntervalSec = Number(pollSel.value) || 60; };
+  if (rcSel) rcSel.onchange = () => { d.reconnectMax = rcSel.value === '' ? '' : Number(rcSel.value); };
+  if (namingSel) namingSel.onchange = () => { d.namingProfileId = namingSel.value; setNamingHint(); };
+  if (segMode) segMode.onchange = () => { d.segmentMode = segMode.value; setSegUI(); };
 
   const segMin = body.querySelector('#edSegMin');
-  if (segMin) segMin.onchange = () => { d.segmentMinutes = Number(segMin.value); d.followSeg = false; refreshFollow(body, d); };
+  if (segMin) segMin.onchange = () => { d.segmentMinutes = Number(segMin.value); };
   const segSize = body.querySelector('#edSegSize');
-  if (segSize) segSize.onchange = () => { d.segmentSizeMB = Number(segSize.value); d.followSeg = false; refreshFollow(body, d); };
+  if (segSize) segSize.onchange = () => { d.segmentSizeMB = Number(segSize.value); };
   const autoMerge = body.querySelector('#edAutoMerge');
   if (autoMerge) autoMerge.onchange = () => { d.autoMerge = autoMerge.value === '1'; };
 
@@ -839,57 +882,23 @@ function bindEditor(d, body, ctx) {
         : t('tasks.monitorOff');
     }
   });
-
-  body.querySelectorAll('[data-follow]').forEach((chip) => {
-    chip.onclick = () => {
-      const kind = chip.dataset.follow;
-      if (kind === 'q') d.followQuality = !d.followQuality;
-      if (kind === 'seg') d.followSeg = !d.followSeg;
-      refreshFollow(body, d);
-    };
-  });
-}
-
-function refreshFollow(body, d) {
-  body.querySelectorAll('[data-follow]').forEach((chip) => {
-    const kind = chip.dataset.follow;
-    const on = kind === 'q' ? d.followQuality : kind === 'seg' ? d.followSeg : d.followNaming;
-    chip.className = 'chip' + (on ? ' on' : '');
-    chip.innerHTML = `<i class="dot"></i>${on ? t('tasks.followGlobal') : t('tasks.customOnly')}`;
-  });
-}
-
-async function updatePreview(d, body) {
-  const dirEl = body.querySelector('#edPrevDir');
-  const fileEl = body.querySelector('#edPrevFile');
-  if (!dirEl || !fileEl) return;
-  const profile = d.profiles.find((p) => p.id === d.namingProfileId) || d.profiles[0];
-  const fnTemplate = (profile && profile.fnTemplate) || '{日期}_{主播}_{清晰度}_{序号}';
-  const dirTemplate = (profile && profile.dirTemplate) || '{平台}/{主播}/{日期}';
-  try {
-    const r = await api.namingPreview({ fnTemplate, dirTemplate, options: (profile && profile.options) || {} });
-    const lines = (r && r.lines) || [];
-    if (!lines.length) { dirEl.textContent = '/data/'; fileEl.textContent = '—'; return; }
-    dirEl.textContent = '/data/' + (lines[0].dir ? lines[0].dir + '/' : '');
-    fileEl.innerHTML = lines.map((l) => esc(l.file)).join('<br>') + ((r.warnings && r.warnings.length) ? `<div class="pth" style="color:var(--warn)">${esc(r.warnings.join('；'))}</div>` : '');
-  } catch {
-    dirEl.textContent = '/data/';
-    fileEl.textContent = t('tasks.previewUnavailable');
-  }
 }
 
 async function submit(d, dialog, btn, ctx) {
   const url = (d.url || '').trim();
+  // 编辑已有任务且直播地址未改 → 不触发后台重解析，改用 平台 + 房间号 直接回填；
+  // 改了地址（或新建）→ 提交 url 由后台解析回填
+  const urlChanged = !!(url && (!d.task || url !== (d.task.sourceUrl || '')));
   const payload = {};
-  if (url) payload.url = url;
+  if (urlChanged) payload.url = url;
   else if (d.platform && d.roomId) { payload.platform = d.platform; payload.roomId = d.roomId; }
+  else if (url) payload.url = url;
   else { toast(t('tasks.fillLinkWarn'), 'warn'); return; }
 
   payload.overrides = {};
-  if (!d.followQuality) payload.overrides.quality = d.quality;
-  if (!d.followSeg) payload.overrides.segmentMode = d.segmentMode;
-  // 命名与存储全部跟随全局设置（刷新已保存的任务级命名/自定义文本/封装/转封装）
-  payload.overrides.namingProfileId = null;
+  if (d.quality) payload.overrides.quality = d.quality;                      // '' = 跟随全局
+  if (d.segmentMode) payload.overrides.segmentMode = d.segmentMode;          // '' = 跟随全局
+  payload.overrides.namingProfileId = d.namingProfileId || null;             // '' = 跟随全局
   payload.overrides.customText = null;
   payload.container = null;
   payload.remuxToMp4 = null;
@@ -898,7 +907,9 @@ async function submit(d, dialog, btn, ctx) {
   payload.autoMerge = d.autoMerge;
   payload.autoRecord = d.autoRecord;
   payload.monitorOnly = d.monitorOnly;
-  if (d.resolved && d.resolved.avatar) payload.avatar = d.resolved.avatar; // 点击解析后保存：头像落盘到本地目录
+  payload.pollIntervalSec = Number(d.pollIntervalSec) || 60;
+  payload.reconnectMax = (d.reconnectMax === '' || d.reconnectMax == null) ? null : Number(d.reconnectMax);
+  if (d.resolved && d.resolved.avatar && d.avatarDirty) payload.avatar = d.resolved.avatar; // 重新解析后保存：头像落盘到本地目录
   if (d.anchorName && d.anchorName.trim()) { payload.anchorName = d.anchorName.trim(); payload.anchorNameLocked = true; } // 保存过非空主播名即锁定，解析刷新不再覆盖
 
   const old = btn.textContent;

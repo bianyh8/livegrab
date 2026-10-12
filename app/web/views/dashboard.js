@@ -311,7 +311,7 @@ function monitorItem(t) {
       </div>
       <div class="acts">
         ${live
-          ? `<button class="btn sm ok" data-act="start" data-id="${esc(t.id)}" title="${_t('tasks.monitorOnlyStartTip')}">${_t('tasks.startRecord')}</button>`
+          ? `<button class="btn sm ok" data-act="start" data-id="${esc(t.id)}" title="${_t('tasks.monitorOnlyStartTip')}">${_t('tasks.batchStart')}</button>`
           : `<button class="btn sm" data-act="check" data-id="${esc(t.id)}">${_t('common.checkLive')}</button>`}
         <button class="btn sm ghost" data-act="detail" data-id="${esc(t.id)}">详情</button>
       </div>

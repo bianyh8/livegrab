@@ -191,6 +191,8 @@ export class Scheduler {
     if (input.keepSource !== undefined) task.keepSource = !!input.keepSource;
     if (input.autoMerge !== undefined) task.autoMerge = !!input.autoMerge;
     if (input.anchorNameLocked !== undefined) task.nameLocked = !!input.anchorNameLocked;
+    // 任务级重连上限：null/空 = 跟随全局（settings.reconnectMax）
+    if (input.reconnectMax !== undefined) task.reconnectMax = Number(input.reconnectMax) || null;
     this.applyEffective(task);
     await this.store.addTask(task);
     if (task.avatar) { // 头像落盘缓存（点击解析/创建时更新）
@@ -231,12 +233,30 @@ export class Scheduler {
     }
     if (overrideChanged) task.overrides = overrides;
 
+    // 前端新建/编辑统一用 url 字段表示直播地址
+    if (patch.url !== undefined) { patch.sourceUrl = patch.url; delete patch.url; }
     const allowed = [
-      'anchorName', 'title', 'avatar', 'qualityFallback', 'segmentMinutes', 'segmentSizeMB',
+      'anchorName', 'title', 'avatar', 'platform', 'sourceUrl', 'reconnectMax', 'qualityFallback', 'segmentMinutes', 'segmentSizeMB',
       'container', 'remuxToMp4', 'keepSource', 'autoMerge', 'autoRecord', 'monitorOnly',
       'pollIntervalSec', 'startDelaySec', 'stopDelaySec', 'roomId', 'nameLocked',
     ];
+    const oldSourceUrl = task.sourceUrl;
     for (const k of allowed) if (patch[k] !== undefined) task[k] = patch[k];
+    // 改了直播地址 → 后台重新解析，回填平台/房间号/主播名/标题/头像（解析失败保留原信息，下轮轮询再校正）
+    if (patch.sourceUrl && patch.sourceUrl !== oldSourceUrl) {
+      try {
+        const info = await resolveRoom(patch.sourceUrl, { platform: task.platform, settings: this.store.settings, logger: this.logger });
+        task.platform = info.platform || task.platform;
+        task.roomId = String(info.roomId || task.roomId);
+        if (!task.nameLocked) task.anchorName = info.anchorName || task.anchorName;
+        task.title = info.title || task.title;
+        task.avatar = info.avatar || task.avatar;
+        if (info.avatar) await this.storage.saveAvatar(task, info.avatar);
+        this.logger.info(`修改直播地址后已重新解析：${task.anchorName || task.roomId}`, { taskId: id });
+      } catch (e) {
+        this.logger.warn(`修改直播地址后重解析失败（保留原信息）：${e.message}`, { taskId: id });
+      }
+    }
     if (patch.avatar) { // 编辑器点击解析→保存时更新头像落盘；下载失败则保留旧缓存，接口仍回退本地文件
       await this.storage.saveAvatar(task, patch.avatar);
     }
@@ -345,7 +365,7 @@ export class Scheduler {
     recorder.on('segment-close', (seg) => { this._onSegmentClose(task, session, seg).catch(() => {}); });
     recorder.on('reconnect', async (info) => {
       task.reconnectCount = (task.reconnectCount || 0) + 1;
-      task.statusMessage = `断流重连 ${info.attempt}/${settings.reconnectMax}`;
+      task.statusMessage = `断流重连 ${info.attempt}/${Number(task.reconnectMax ?? settings.reconnectMax) || 5}`;
       this.logger.warn(`第 ${info.attempt} 次重连（等待 ${Math.round(info.delayMs / 1000)}s）：${info.error || ''}`, { taskId: task.id, taskName: task.anchorName });
       this.onEvent({ type: 'task', task });
     });
