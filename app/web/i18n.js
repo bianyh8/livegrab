@@ -598,7 +598,7 @@ const DEFAULT_DICT = {
   "tasks.pauseDone": "已暂停：本段已结束并入库，拉流已停止，不占用并发",
   "tasks.pauseSegment": "暂停本段",
   "tasks.pauseSegmentDone": "已暂停：本段已结束并入库",
-  "tasks.platChoose": "选择平台",
+  "tasks.platChoose": "指定平台",
   "tasks.platHint1": "粘贴链接自动识别；识别失败或被风控拦截时：手动指定平台 → 输入房间号，",
   "tasks.platHint2": "<b>松开即自动带入主播名称</b>。",
   "tasks.platHint3": "部分平台需先在「系统设置 › 平台账号」填 Cookie。",

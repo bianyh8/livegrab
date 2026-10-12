@@ -411,7 +411,7 @@
   "tasks.recommend": "推荐",
   "tasks.editTaskTitle": "编辑录制任务",
   "tasks.newTaskTitle": "新建录制任务",
-  "tasks.platChoose": "选择平台",
+  "tasks.platChoose": "指定平台",
   "tasks.saveChanges": "保存修改",
   "tasks.createTask": "创建任务",
   "tasks.sectRoomUrl": "直播间地址",
