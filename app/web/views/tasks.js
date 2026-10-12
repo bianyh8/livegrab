@@ -201,7 +201,7 @@ function table(list) {
   if (!list.length) {
     return emptyBox(state.tasks.length ? t('tasks.noFiltered') : t('tasks.noTasks'));
   }
-  return `<table>
+  return `<table class="tk-tbl">
     <thead><tr>
       <th style="width:34px"><input type="checkbox" class="cb" id="tkAll"${list.every((t) => state.selected.has(t.id)) ? ' checked' : ''} /></th>
       <th>${t('tasks.colTask')}</th><th style="width:60px">${t('settings.pfColPlatform')}</th><th>${t('tasks.colLive')}</th><th>${t('tasks.colRecord')}</th><th>${t('tasks.colQuality')}</th>${state.sort === 'custom' ? '<th style="width:46px">' + t('tasks.colSort') + '</th>' : ''}<th style="text-align:right">${t('tasks.colOps')}</th>
@@ -235,11 +235,11 @@ function row(item) {
         </div>
       </div>
     </td>
-    <td>${platIcon(item.platform, (name && name.name) || platName(item.platform) || item.platformName)}</td>
-    <td>${liveStatusCell(item)}</td>
-    <td>${recStatusCell(item)}</td>
-    <td><span class="chip">${esc(qualityLabelOf(item))}</span></td>
-    ${state.sort === 'custom' ? `<td>
+    <td data-label="${t('settings.pfColPlatform')}">${platIcon(item.platform, (name && name.name) || platName(item.platform) || item.platformName)}</td>
+    <td data-label="${t('tasks.colLive')}">${liveStatusCell(item)}</td>
+    <td data-label="${t('tasks.colRecord')}">${recStatusCell(item)}</td>
+    <td data-label="${t('tasks.colQuality')}"><span class="chip">${esc(qualityLabelOf(item))}</span></td>
+    ${state.sort === 'custom' ? `<td data-label="${t('tasks.colSort')}">
       <div class="mvrow">
         <span class="rnk">${esc(String(state.tasks.indexOf(item) + 1))}</span>
         <button class="mvbtn" data-mv="up" data-id="${esc(item.id)}" title="${t('tasks.moveUp')}">↑</button>
@@ -642,7 +642,7 @@ function taskShell(d) {
   const selF = (id, opts, val, cls = '') => `<select class="select${cls}" id="${id}">${optList(opts, val)}</select>`;
   // 三列等宽网格（平台/房间号/主播名称 与 命名/轮询/重连 两行列对齐）＋ 两列网格（分段策略、开关）
   return `
-  <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px 16px">
+  <div class="tk-grid3" style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px 16px">
     ${field(t('tasks.kSource'),
       `<input class="input mono" id="edUrl" value="${esc(d.url)}" placeholder="${t('tasks.pasteUrlPh')}" />`,
       `<div class="hintline">${t('tasks.urlEditTip')}</div>`, true)}
@@ -661,7 +661,7 @@ function taskShell(d) {
     ${field(t('tasks.kPoll'), selF('edPoll', pollOpts, String(d.pollIntervalSec)))}
     ${field(t('tasks.kReconnect'), selF('edReconnect', rcOpts, String(d.reconnectMax)))}
   </div>
-  <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px 16px;margin-top:14px">
+  <div class="tk-grid2" style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px 16px;margin-top:14px">
     ${field(t('tasks.csvSegment'), selF('edSegMode', segOpts, d.segmentMode))}
     <div id="edSegParamCol">
       <div id="edSegMinCell" style="${segTimeStyle}">${field(t('tasks.segMinutesLabel'),
@@ -696,11 +696,11 @@ function segTableHtml(task) {
   return `<table>
     <thead><tr><th style="width:70px">${t('tasks.segIndex')}</th><th>${t('tasks.segName')}</th><th>${t('tasks.segDuration')}</th><th>${t('tasks.segSize')}</th><th>${t('tasks.csvStatus')}</th></tr></thead>
     <tbody>${segs.map((s) => `<tr>
-      <td class="mono">${String(s.index || 0).padStart(3, '0')}</td>
-      <td class="mono" style="font-size:12px;word-break:break-all">${esc(s.name || s.path || '—')}</td>
-      <td>${esc(formatDuration(s.durationSec || 0))}</td>
-      <td>${esc(formatBytes(s.bytes || 0))}</td>
-      <td>${s.status === 'recording' ? '<span class="chip wait"><i class="dot"></i>' + t('common.recording') + '</span>' : esc(s.status || 'done')}</td>
+      <td class="mono" data-label="${t('tasks.segIndex')}">${String(s.index || 0).padStart(3, '0')}</td>
+      <td class="mono" style="font-size:12px;word-break:break-all" data-label="${t('tasks.segName')}">${esc(s.name || s.path || '—')}</td>
+      <td data-label="${t('tasks.segDuration')}">${esc(formatDuration(s.durationSec || 0))}</td>
+      <td data-label="${t('tasks.segSize')}">${esc(formatBytes(s.bytes || 0))}</td>
+      <td data-label="${t('tasks.csvStatus')}">${s.status === 'recording' ? '<span class="chip wait"><i class="dot"></i>' + t('common.recording') + '</span>' : esc(s.status || 'done')}</td>
     </tr>`).join('')}</tbody></table>`;
 }
 

@@ -142,6 +142,52 @@
       <div id="view"></div>
     </div>
   </main>
+
+  <!-- ============ 手机端底部 Tab 导航（<768px 显示，桌面隐藏） ============ -->
+  <nav class="tabbar" id="tabBar">
+    <button class="tb-item" data-page="dashboard">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/></svg>
+      总览 <span class="badge" id="tbDashBadge" style="display:none"></span>
+    </button>
+    <button class="tb-item" data-page="tasks">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="2" y="5" width="14" height="14" rx="2"/><path d="M16 10l6-3v10l-6-3z"/></svg>
+      任务 <span class="badge gray" id="tbTaskBadge" style="display:none"></span>
+    </button>
+    <button class="tb-item" data-page="files">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+      文件 <span class="badge gray" id="tbFileBadge" style="display:none"></span>
+    </button>
+    <button class="tb-item" data-page="settings">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M4 6h16M4 12h16M4 18h16"/><circle cx="9" cy="6" r="2" fill="#0a0d13"/><circle cx="15" cy="12" r="2" fill="#0a0d13"/><circle cx="8" cy="18" r="2" fill="#0a0d13"/></svg>
+      设置
+    </button>
+    <button class="tb-item" id="tbMore">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/></svg>
+      更多
+    </button>
+  </nav>
+  <!-- 更多弹出面板 -->
+  <div class="tb-more" id="tbMorePanel">
+    <div class="tb-u">
+      <span class="ava" id="tbUserAva">A</span>
+      <div>
+        <div class="un" id="tbUserName">admin</div>
+        <div class="ur" id="tbUserMeta">管理员</div>
+      </div>
+    </div>
+    <button class="mi" data-page="logs">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M5 3h14v18H5z"/><path d="M9 8h6M9 12h6M9 16h3"/></svg>
+      运行日志
+    </button>
+    <button class="mi" data-page="trash">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M4 7h16M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2M6 7l1 13h10l1-13M10 11v6M14 11v6"/></svg>
+      回收站 <span class="badge gray" id="tbTrashBadge" style="display:none"></span>
+    </button>
+    <button class="mi danger" id="tbLogout">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5M21 12H9"/></svg>
+      退出登录
+    </button>
+  </div>
 </div>
 
 <!-- ================= 通用弹窗容器（confirm / prompt / 任务弹窗 / 回收站等） ================= -->

@@ -585,3 +585,133 @@ table.tight th{padding:8px 12px}
 .mvbtn:hover{background:var(--line);color:var(--txt-1)}
 .mvbtn:disabled{opacity:.35;cursor:default}
 
+/* ================= 手机端适配（<768px：底部 Tab + 卡片化；桌面端不受影响） ================= */
+.tabbar{display:none} /* 桌面隐藏，手机显示 */
+@media (max-width:768px){
+  body{overflow-x:hidden}
+  .app{display:block}
+  .sidebar{display:none}
+  .main{width:100%;min-width:0}
+  .topbar{height:52px;flex:0 0 52px;padding:0 14px;position:sticky;top:0}
+  .topbar .sub{display:none}
+  .content{padding:12px 12px calc(84px + env(safe-area-inset-bottom))} /* 底部留白给 tabbar */
+  .card-h{padding:12px 13px}
+  .card-b{padding:12px 13px}
+
+  /* ---- 底部 Tab 导航 ---- */
+  .tabbar{
+    position:fixed;left:0;right:0;bottom:0;z-index:120;display:flex;
+    background:rgba(14,19,27,.96);backdrop-filter:blur(10px);border-top:1px solid var(--line);
+    padding-bottom:env(safe-area-inset-bottom);
+  }
+  .tb-item{
+    flex:1;display:flex;flex-direction:column;align-items:center;gap:3px;padding:9px 0 7px;
+    color:var(--txt-3);font-size:10.5px;cursor:pointer;user-select:none;position:relative;
+    border:0;background:none;font-family:inherit;min-height:52px;justify-content:center;
+  }
+  .tb-item svg{width:21px;height:21px;stroke-width:1.9}
+  .tb-item.on{color:#fff}
+  .tb-item.on::before{
+    content:"";position:absolute;top:0;left:50%;transform:translateX(-50%);
+    width:34px;height:3px;border-radius:0 0 3px 3px;background:linear-gradient(90deg,var(--dy),var(--dy-2));
+  }
+  .tb-item .badge{position:absolute;top:4px;right:calc(50% - 19px);font-size:9.5px;padding:0 5px;border-radius:8px;line-height:1.5;margin:0}
+  /* 更多弹出面板 */
+  .tb-more{
+    position:fixed;right:10px;bottom:calc(66px + env(safe-area-inset-bottom));z-index:121;
+    background:var(--panel);border:1px solid var(--line-2);border-radius:14px;box-shadow:var(--sd);
+    min-width:196px;padding:6px;display:none;
+  }
+  .tb-more.show{display:block;animation:pop .18s ease}
+  .tb-more .tb-u{display:flex;align-items:center;gap:9px;padding:10px 12px;border-bottom:1px solid var(--line);margin-bottom:6px}
+  .tb-more .tb-u .ava{width:30px;height:30px;flex:0 0 30px;border-radius:50%;display:grid;place-items:center;font-weight:800;color:#0a0d13;background:linear-gradient(135deg,var(--dy),var(--dy-2));font-size:12px}
+  .tb-more .tb-u .un{font-size:12.5px;font-weight:600}
+  .tb-more .tb-u .ur{font-size:11px;color:var(--txt-3)}
+  .tb-more .mi{
+    display:flex;align-items:center;gap:10px;padding:11px 12px;border-radius:9px;color:var(--txt-2);
+    cursor:pointer;font-size:13px;width:100%;border:0;background:none;text-align:left;font-family:inherit;
+  }
+  .tb-more .mi:hover{background:var(--panel-2);color:var(--txt)}
+  .tb-more .mi svg{width:16px;height:16px;stroke-width:1.9}
+  .tb-more .mi .badge{margin-left:auto}
+  .tb-more .mi.danger{color:#ffa3a8}
+  .tb-more .mi.danger:hover{background:rgba(242,84,91,.12)}
+
+  /* ---- 统计与网格 ---- */
+  .stats{grid-template-columns:repeat(2,1fr);gap:10px}
+  .ov-grid3{grid-template-columns:1fr}
+  .ops-strip{grid-template-columns:repeat(2,1fr);gap:10px}
+  .grid2,.grid2b{grid-template-columns:1fr;gap:12px}
+  .idle-grid{grid-template-columns:1fr}
+  .stat{padding:12px 14px}
+  .stat .v{font-size:22px}
+
+  /* ---- 工具栏 ---- */
+  .toolbar{padding:10px 12px;gap:8px}
+  .toolbar.tq{flex-wrap:wrap}
+  .toolbar.tq .input{flex:1 1 100%;min-width:0}
+  .toolbar.tq .select{flex:1 1 42%}
+  .btn{padding:8px 11px}
+
+  /* ---- 列表项压缩 ---- */
+  .rec-item{gap:10px;padding:11px 12px}
+  .thumb{width:58px;height:36px;flex:0 0 58px}
+  .tk-avatar{width:46px;height:30px;flex:0 0 46px}
+  .fl-item{gap:10px;padding:11px 12px;flex-wrap:wrap}
+  .fl-ico{width:56px;height:34px;flex:0 0 56px}
+  /* 文件/回收站：操作按钮整行下移，避免挤压信息区 */
+  .fl-item .acts{flex:1 1 100%;justify-content:flex-end;margin-top:4px;padding-top:8px;border-top:1px dashed var(--line)}
+  .fl-item .acts .btn{padding:7px 11px}
+  .rec-right .tm{font-size:14px}
+  .rec-main .meta{gap:6px;font-size:11px}
+
+  /* ---- 表格卡片化（td 需带 data-label 属性） ---- */
+  table{display:block}
+  thead{display:none}
+  tbody{display:block}
+  tr{
+    display:block;margin:10px 0 0;border:1px solid var(--line);border-radius:var(--r-l);
+    background:linear-gradient(180deg,var(--panel),var(--bg-2));padding:2px 13px;
+  }
+  tr:first-of-type{margin-top:0}
+  td{
+    display:flex;justify-content:space-between;align-items:center;gap:12px;
+    padding:9px 0;border-bottom:1px dashed var(--line-2);font-size:12.5px;
+  }
+  tr td:last-child{border-bottom:0}
+  td[data-label]::before{content:attr(data-label);color:var(--txt-3);font-size:11px;flex:0 0 auto;white-space:nowrap}
+  td .acts{justify-content:flex-end}
+  td .sub{margin-top:0}
+  /* 任务卡片：多选框浮卡片右上角，主播行不被挤 */
+  table.tk-tbl tr{position:relative}
+  table.tk-tbl td:first-child{position:absolute;top:10px;right:12px;border:0;padding:0;z-index:2}
+
+  /* ---- 弹窗全屏 ---- */
+  .mask{padding:0}
+  .modal{width:100% !important;height:100%;max-height:100%;border-radius:0;border-left:0;border-right:0;border-top:0}
+  .modal-h{padding:14px 16px}
+  .modal-b{padding:16px 14px}
+  .modal-f{padding:12px 14px;padding-bottom:calc(12px + env(safe-area-inset-bottom))}
+  /* 任务弹窗网格：3 列 / 2 列 → 1 列（!important 覆盖 inline style） */
+  .tk-grid3,.tk-grid2{grid-template-columns:1fr !important}
+
+  /* ---- 登录页 ---- */
+  .login-panel{padding:28px 18px}
+  .login-card{padding:22px 18px}
+  .login-visual{display:none}
+
+  /* ---- 触控目标 ---- */
+  .nav-item,.tab{min-height:40px}
+  .mini{padding:7px 13px}
+  .switch{width:46px;height:26px;flex:0 0 46px}
+  .switch i{width:19px;height:19px}
+  .switch.on i{left:24px}
+  .cb{width:18px;height:18px}
+  .idle-acts .btn{padding:6px 10px}
+  .kv{grid-template-columns:1fr;gap:4px 12px}
+
+  /* ---- 日志页 ---- */
+  .logline{font-size:11.5px;word-break:break-all}
+}
+@media (min-width:769px){.tabbar,.tb-more{display:none !important}}
+

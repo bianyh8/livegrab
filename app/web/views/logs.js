@@ -183,9 +183,9 @@ function table() {
 
 function row(l) {
   const level = String(l.level || 'INFO').toUpperCase();
-  return `<tr><td class="mono" style="color:var(--txt-3)">${esc(formatLogTime(l.ts))}</td>
-    <td><span class="lv ${esc(level)}">${esc(level)}</span></td>
-    <td>${esc(l.taskName || '—')}</td>
+  return `<tr><td class="mono" style="color:var(--txt-3)" data-label="${t('logs.colTime')}">${esc(formatLogTime(l.ts))}</td>
+    <td data-label="${t('logs.colLevel')}"><span class="lv ${esc(level)}">${esc(level)}</span></td>
+    <td data-label="${t('logs.colTask')}">${esc(l.taskName || '—')}</td>
     <td class="logline">${esc(l.msg || '')}</td></tr>`;
 }
 

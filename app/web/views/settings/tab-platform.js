@@ -162,12 +162,12 @@ function row(p, kit) {
     : (p.cap != null ? p.cap : 2);
 
   return `<tr>
-    <td><span class="plat ${esc(platformInfo(p.id).cls)}"><i>${esc(platformInfo(p.id).letter)}</i>${esc(p.name)}</span>${tierName(p.tier) ? ` <span class="tag">${esc(tierName(p.tier))}</span>` : ''}</td>
-    <td>${cookieCell(p, has, valid)}</td>
-    <td title="${esc(qualitiesFull(p.qualities))}">${qualitiesCell(p.qualities)}</td>
-    <td><input class="input" style="width:80px" data-pcap="${esc(p.id)}" value="${esc(String(cap))}" /></td>
-    <td>${stabilityChip(p)}</td>
-    <td>${switchEl(enabled, `data-pen="${esc(p.id)}"`)}</td>
+    <td data-label="${t('settings.pfColPlatform')}"><span class="plat ${esc(platformInfo(p.id).cls)}"><i>${esc(platformInfo(p.id).letter)}</i>${esc(p.name)}</span>${tierName(p.tier) ? ` <span class="tag">${esc(tierName(p.tier))}</span>` : ''}</td>
+    <td data-label="${t('settings.pfColCookie')}">${cookieCell(p, has, valid)}</td>
+    <td data-label="${t('settings.pfColQuality')}" title="${esc(qualitiesFull(p.qualities))}">${qualitiesCell(p.qualities)}</td>
+    <td data-label="${t('settings.pfColCap')}"><input class="input" style="width:80px" data-pcap="${esc(p.id)}" value="${esc(String(cap))}" /></td>
+    <td data-label="${t('settings.pfColStability')}">${stabilityChip(p)}</td>
+    <td data-label="${t('settings.pfColEnabled')}">${switchEl(enabled, `data-pen="${esc(p.id)}"`)}</td>
     <td><div class="acts">${actions(p, has)}</div></td>
   </tr>`;
 }

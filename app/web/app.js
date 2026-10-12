@@ -164,8 +164,11 @@ async function enterApp(user) {
   if (runtime.user) {
     setText('userName', runtime.user.username || 'admin');
     setText('userAva', String(runtime.user.username || 'A').charAt(0).toUpperCase());
+    setText('tbUserName', runtime.user.username || 'admin');
+    setText('tbUserAva', String(runtime.user.username || 'A').charAt(0).toUpperCase());
   }
   setText('userMeta', t('app.userMeta', new Date().toTimeString().slice(0, 5)));
+  setText('tbUserMeta', t('app.userMeta', new Date().toTimeString().slice(0, 5)));
   startLoop();
   await handleRoute(true);
 }
@@ -298,6 +301,12 @@ async function handleRoute(first) {
   const route = ROUTES.find((r) => r.page === page) || ROUTES[0];
 
   document.querySelectorAll('#nav .nav-item').forEach((n) => n.classList.toggle('active', n.dataset.page === page));
+  // 底部 Tab 高亮：日志/回收站归入「更多」
+  const MORE_PAGES = ['logs', 'trash'];
+  document.querySelectorAll('#tabBar .tb-item').forEach((n) => {
+    n.classList.toggle('on', n.dataset.page === page || (n.id === 'tbMore' && MORE_PAGES.includes(page)));
+  });
+  closeMorePanel();
   setText('pageTitle', route.title);
   setText('pageSub', route.sub);
 
@@ -395,14 +404,25 @@ function applyStatus(st) {
     nDash.textContent = t('topbar.recording', rec);
     nDash.style.display = rec > 0 ? '' : 'none';
   }
+  // 底部 Tab 录制角标（仅手机显示）
+  const tbDash = el('tbDashBadge');
+  if (tbDash) {
+    const rec = Number(stats.recordingCount) || 0;
+    tbDash.textContent = rec ? String(rec) : '';
+    tbDash.style.display = rec > 0 ? '' : 'none';
+  }
 
   // 导航徽标：任务管理 = 任务总数；文件管理 = 录制文件总大小
   const taskCnt = Array.isArray(st.tasks) ? st.tasks.length : 0;
   const nTask = el('navTaskBadge');
   if (nTask) { nTask.textContent = taskCnt || ''; nTask.style.display = taskCnt ? '' : 'none'; }
+  const tbTask = el('tbTaskBadge');
+  if (tbTask) { tbTask.textContent = taskCnt || ''; tbTask.style.display = taskCnt ? '' : 'none'; }
   const fileBytes = (st.platformStore || []).reduce((a, p) => a + (p.bytes || 0), 0);
   const nFile = el('navFileBadge');
   if (nFile) { const txt = fileBytes ? formatBytes(fileBytes) : ''; nFile.textContent = txt; nFile.style.display = txt ? '' : 'none'; }
+  const tbFile = el('tbFileBadge');
+  if (tbFile) { const txt = fileBytes ? formatBytes(fileBytes) : ''; tbFile.textContent = txt; tbFile.style.display = txt ? '' : 'none'; }
 
   // 顶栏不再显示「下载带宽」：与总览『实时带宽』同源(stats.downSpeed)，已下放总览展示，删去冗余
 }
@@ -447,6 +467,30 @@ function bindChrome() {
   });
   const out = el('logoutBtn');
   if (out) out.onclick = () => doLogout();
+
+  // 手机底部 Tab
+  document.querySelectorAll('#tabBar .tb-item[data-page]').forEach((item) => {
+    item.addEventListener('click', () => { closeMorePanel(); navigate(item.dataset.page); });
+  });
+  const tbMore = el('tbMore');
+  const panel = el('tbMorePanel');
+  if (tbMore && panel) tbMore.onclick = (ev) => {
+    ev.stopPropagation();
+    panel.classList.toggle('show');
+  };
+  panel?.querySelectorAll('.mi[data-page]').forEach((m) => {
+    m.addEventListener('click', () => { closeMorePanel(); navigate(m.dataset.page); });
+  });
+  const tbLogout = el('tbLogout');
+  if (tbLogout) tbLogout.onclick = () => { closeMorePanel(); doLogout(); };
+  document.addEventListener('click', (ev) => {
+    if (panel && panel.classList.contains('show') && !panel.contains(ev.target) && ev.target !== tbMore) closeMorePanel();
+  });
+}
+
+function closeMorePanel() {
+  const panel = el('tbMorePanel');
+  if (panel) panel.classList.remove('show');
 }
 
 /* ================= 启动 ================= */

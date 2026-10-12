@@ -207,9 +207,9 @@ function paint(ctx, kit, keepPreview) {
             <table>
               <thead><tr><th style="width:130px">${t('settings.nmColVar')}</th><th>${t('settings.nmColDesc')}</th><th style="width:220px">${t('settings.nmColExample')}</th></tr></thead>
               <tbody>${variables.map((v) => `<tr>
-                <td class="mono" style="color:#a9c0ff">${esc(v.token)}</td>
-                <td>${esc(v.desc || '')}</td>
-                <td class="mono" style="color:var(--txt-2)">${esc(v.example || '—')}</td>
+                <td class="mono" style="color:#a9c0ff" data-label="${t('settings.nmColVar')}">${esc(v.token)}</td>
+                <td data-label="${t('settings.nmColDesc')}">${esc(v.desc || '')}</td>
+                <td class="mono" style="color:var(--txt-2)" data-label="${t('settings.nmColExample')}">${esc(v.example || '—')}</td>
               </tr>`).join('')}</tbody>
             </table>
           </div>
