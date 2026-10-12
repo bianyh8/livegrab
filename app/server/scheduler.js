@@ -772,6 +772,7 @@ export class Scheduler {
   async tick() {
     const now = Date.now();
     const settings = this.store.settings;
+    this.logger.info('轮询直播间状态开始：');
     for (const task of this.store.tasks) {
       try {
         if (['recording', 'stopping'].includes(task.status)) continue;
@@ -793,7 +794,6 @@ export class Scheduler {
         const p = this.platformOf(task.platform);
         if (settings.platformEnabled?.[task.platform] === false) continue;
         const pollLabel = `${task.anchorName || task.roomId || task.id}（${p?.name || task.platform}）`;
-        this.logger.info(`开始轮询直播间状态：${pollLabel}`, { taskId: task.id, taskName: task.anchorName });
 
         let info;
         try {
@@ -894,6 +894,7 @@ export class Scheduler {
         this.logger.error(`任务轮询异常(${task.id})：${e.message}`);
       }
     }
+    this.logger.info('轮询直播间状态结束');
   }
 
   // ---------- 对外视图 ----------
