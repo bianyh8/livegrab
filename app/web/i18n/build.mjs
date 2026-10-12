@@ -258,6 +258,8 @@ const REMOVE = [
   'logs.clearFrom', 'logs.clearTo', 'logs.clearNoRange',
   // 顶栏移除「刷新 / 新建录制任务」按钮
   'topbar.refreshStatus',
+  // 批量条移除「批量暂停」：暂停功能保留在录制详情弹窗与总览「全部暂停」
+  'tasks.batchPause', 'tasks.verbPause',
 ];
 
 /* ---------------- ③ 去重：同文案归一到单一 key ---------------- */
