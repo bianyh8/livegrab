@@ -230,8 +230,8 @@ function row(item) {
           ${isLive ? '<span class="tk-live"><i></i>' + t('tasks.live') + '</span>' : ''}
         </div>
         <div class="tk-bio">
-          <div style="font-weight:600">${esc(item.anchorName || item.name || t('common.unnamed'))}${item.monitorOnly ? ' <span class="tag">' + t('common.monitorOnly') + '</span>' : ''}</div>
-          <div class="sub">${esc(item.title || t('tasks.noTitle'))} · ${t('tasks.roomNoShort', esc(item.roomId || '—'))}</div>
+          <div style="font-weight:600">${esc(item.anchorName || item.name || t('common.unnamed'))}</div>
+          <div class="sub">${esc(item.title || t('tasks.noTitle'))}</div>
         </div>
       </div>
     </td>
