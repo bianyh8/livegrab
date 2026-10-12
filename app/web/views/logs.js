@@ -74,7 +74,7 @@ async function refresh(ctx, initial) {
           logRetentionDays: Number(st && st.logRetentionDays) || 14,
           logLevel: (st && st.logLevel) || 'INFO',
         };
-        if (!state.level && state.limits.logLevel && state.limits.logLevel !== 'INFO') state.level = state.limits.logLevel;
+        // 页面默认显示全部级别：不随后端"默认日志级别"预设过滤，用户可在下拉手动切换
       } catch { /* 用默认值 */ }
     }
     if (initial || !state.rows.length || root.querySelector('#lgTable') === null) {
