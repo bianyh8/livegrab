@@ -270,13 +270,12 @@ function queueItem(q, ctx) {
     </div>`;
 }
 
-/* 总览行缩略图：显示主播头像；无头像时回退到占位文案 */
+/* 总览行缩略图：显示主播头像（经服务端代理，规避平台热链 403）；无头像时回退到占位文案 */
 function dashThumb(t, label) {
-  const avatar = (t && t.avatar) || '';
   return `
     <div class="thumb">
       <span class="th-ph">${esc(label)}</span>
-      <img class="tk-thumb" loading="lazy" src="${esc(avatar)}" alt="" onerror="this.style.display='none'" />
+      <img class="tk-thumb" loading="lazy" src="/api/tasks/${esc(t.id)}/avatar" alt="" onerror="this.style.display='none'" />
     </div>`;
 }
 

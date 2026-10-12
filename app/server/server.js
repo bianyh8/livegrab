@@ -462,10 +462,33 @@ async function main() {
     return null;
   });
 
+  // ---------- 主播头像代理：平台 CDN 常做热链保护（浏览器带页面 Referer 会被 403，如 B 站 hdslb.com），
+  // 由服务端拉取（无 Referer）再转给浏览器；内存缓存 1 小时，避免每次请求都外发。 ----------
+  const avatarCache = new Map(); // url -> { buf, at }
+  async function fetchAvatarBuf(url) {
+    const hit = avatarCache.get(url);
+    if (hit && Date.now() - hit.at < 60 * 60 * 1000) return hit.buf;
+    try {
+      const r = await fetch(url, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          'Accept': 'image/*',
+        },
+        redirect: 'follow',
+        signal: AbortSignal.timeout(8000),
+      });
+      if (!r.ok) return null;
+      const buf = Buffer.from(await r.arrayBuffer());
+      if (!buf.length || buf.length > 2 * 1024 * 1024) return null;
+      avatarCache.set(url, { buf, at: Date.now() });
+      if (avatarCache.size > 200) { const first = avatarCache.keys().next().value; avatarCache.delete(first); }
+      return buf;
+    } catch { return null; }
+  }
+
   // ---------- 首帧图（缩略图）：优先读落盘海报 `<同名>.jpg`，没有才临时抽帧并缓存为文件。
   // 配合 Storage.writeArt：录制收尾会一次生成 `<同名>.jpg`，此后接口/Jellyfin 都只读文件、不再跑 ffmpeg。 ----------
-  async function serveThumb(res, filePath) {
-    const st = await fsp.stat(filePath).catch(() => null);
+  async function serveThumb(res, filePath) {    const st = await fsp.stat(filePath).catch(() => null);
     if (!st || st.size <= 0) throw new HttpError('NOT_FOUND', '文件在磁盘上不存在', 404);
     const sidecar = filePath.replace(/\.[^./\\]+$/, '') + '.jpg';
     const stS = await fsp.stat(sidecar).catch(() => null);
@@ -521,6 +544,16 @@ async function main() {
     const hit = store.findFile(req.params.id);
     if (!hit || !hit.file) throw new HttpError('NOT_FOUND', '文件不存在', 404);
     return serveThumb(res, hit.file.path);
+  });
+
+  route('GET', '/api/tasks/:id/avatar', async (req, res) => {
+    const task = store.getTask(req.params.id);
+    if (!task || !task.avatar) throw new HttpError('NOT_FOUND', '任务无头像', 404);
+    const buf = await fetchAvatarBuf(task.avatar);
+    if (!buf) throw new HttpError('AVATAR_FAIL', '头像获取失败', 502);
+    res.writeHead(200, { 'Content-Type': 'image/jpeg', 'Cache-Control': 'private, max-age=3600', 'Content-Length': buf.length });
+    res.end(buf);
+    return null;
   });
 
   // ---------- 序列化辅助 ----------

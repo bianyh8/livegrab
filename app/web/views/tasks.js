@@ -219,7 +219,7 @@ function row(item) {
   const recording = item.status === 'recording' || item.status === 'stopping';
   const avatarImg = recording
     ? `<img class="tk-thumb" loading="lazy" src="/api/tasks/${esc(item.id)}/thumb" alt="" onerror="this.style.display='none'" />`
-    : (item.avatar ? `<img class="tk-thumb" loading="lazy" src="${esc(item.avatar)}" alt="" onerror="this.style.display='none'" />` : '');
+    : (item.avatar ? `<img class="tk-thumb" loading="lazy" src="/api/tasks/${esc(item.id)}/avatar" alt="" onerror="this.style.display='none'" />` : '');
   return `<tr data-id="${esc(item.id)}">
     <td><input type="checkbox" class="cb" data-pick="${esc(item.id)}"${checked} /></td>
     <td>
