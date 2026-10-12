@@ -772,7 +772,7 @@ export class Scheduler {
   async tick() {
     const now = Date.now();
     const settings = this.store.settings;
-    this.logger.info('轮询直播间状态开始：');
+    let polledAny = false; // 本轮是否有直播间实际进入轮询，避免无任务可轮询时空打「开始/结束」
     for (const task of this.store.tasks) {
       try {
         if (['recording', 'stopping'].includes(task.status)) continue;
@@ -793,6 +793,8 @@ export class Scheduler {
         if (task.nextPollAt && now < task.nextPollAt) continue;
         const p = this.platformOf(task.platform);
         if (settings.platformEnabled?.[task.platform] === false) continue;
+        // 只有真正要轮询直播间时才打印「开始」，整轮结束（且至少轮询过）再打印「结束」
+        if (!polledAny) { this.logger.info('轮询直播间状态开始：'); polledAny = true; }
         const pollLabel = `${task.anchorName || task.roomId || task.id}（${p?.name || task.platform}）`;
 
         let info;
@@ -894,7 +896,7 @@ export class Scheduler {
         this.logger.error(`任务轮询异常(${task.id})：${e.message}`);
       }
     }
-    this.logger.info('轮询直播间状态结束');
+    if (polledAny) this.logger.info('轮询直播间状态结束');
   }
 
   // ---------- 对外视图 ----------
