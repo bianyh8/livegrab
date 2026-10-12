@@ -27,6 +27,9 @@ export class Storage {
   get root() { return this.store.settings.recordRoot; }
   get trashDir() { return path.join(this.root, '.trash'); }
 
+  /** 统一元数据目录：config/meta/<任务id>/ 内存头像、seg 列表等每个主播的附属信息（不进录制目录） */
+  get metaRoot() { return path.join(this.store.configDir, 'meta'); }
+
   rel(p) { return path.relative(this.root, p).split(path.sep).join('/'); }
 
   disk() {
@@ -549,7 +552,7 @@ export class Storage {
   }
 
   // ---------- 主播头像落盘缓存 ----------
-  // 点击解析 / 创建任务 / 检查直播 / 开播时调用：把平台头像下载到 <configDir>/avatars/<taskId>.<ext>。
+  // 点击解析 / 创建任务 / 检查直播 / 开播时调用：把平台头像下载到 <configDir>/meta/<任务id>/avatar.<ext>。
   // 平时头像接口直接读本地文件——只有再次解析才会更新，否则一直保持第一次缓存的（平台 CDN 热链/失效/断网都不影响显示）。
   async saveAvatar(task, avatarUrl) {
     const raw = avatarUrl || (task && task.avatar);
@@ -569,10 +572,10 @@ export class Storage {
       if (!buf.length || buf.length > 2 * 1024 * 1024) return null;
       const ct = r.headers.get('content-type') || '';
       const ext = ct.includes('webp') ? 'webp' : ct.includes('png') ? 'png' : 'jpg';
-      const file = `${task.id}.${ext}`;
-      const dir = path.join(this.store.configDir, 'avatars');
+      const file = `${task.id}/avatar.${ext}`;
+      const dir = path.join(this.metaRoot, task.id);
       await ensureDir(dir);
-      await fsp.writeFile(path.join(dir, file), buf);
+      await fsp.writeFile(path.join(dir, `avatar.${ext}`), buf);
       task.avatarFile = file;
       return file;
     } catch {
@@ -580,9 +583,73 @@ export class Storage {
     }
   }
 
+  /** 删除某任务在元数据目录下的所有附属文件（删除任务时调用） */
+  async removeMeta(taskId) {
+    await fsp.rm(path.join(this.metaRoot, String(taskId)), { recursive: true, force: true }).catch(() => {});
+  }
+
+  // ---------- 元数据目录统一清扫 ----------
+  // seg 列表是临时产物：正常收尾时 recorder 会删；这里兜底清掉异常退出残留（超过 maxAge 的），并清掉空目录。
+  async cleanupMeta({ maxAgeMs = 24 * 3600 * 1000 } = {}) {
+    const root = this.metaRoot;
+    let segs = 0;
+    let dirs = 0;
+    const ents = await fsp.readdir(root).catch(() => []);
+    for (const name of ents) {
+      const p = path.join(root, name);
+      const st = await fsp.stat(p).catch(() => null);
+      if (!st) continue;
+      if (st.isFile()) {
+        if (/^\.segs_.*\.csv$/i.test(name)) {
+          if (Date.now() - st.mtimeMs > maxAgeMs) { await fsp.rm(p, { force: true }).catch(() => {}); segs++; }
+        }
+        continue;
+      }
+      if (!st.isDirectory()) continue;
+      let removedInDir = 0;
+      const files = await fsp.readdir(p).catch(() => []);
+      for (const f of files) {
+        const fp = path.join(p, f);
+        const fs = await fsp.stat(fp).catch(() => null);
+        if (!fs || !fs.isFile() || !/^\.segs_.*\.csv$/i.test(f)) continue;
+        if (Date.now() - fs.mtimeMs > maxAgeMs) { await fsp.rm(fp, { force: true }).catch(() => {}); removedInDir++; }
+      }
+      segs += removedInDir;
+      const rest = await fsp.readdir(p).catch(() => []);
+      if (!rest.length) { await fsp.rm(p, { recursive: true, force: true }).catch(() => {}); dirs++; }
+    }
+    if (segs || dirs) this.logger.info(`元数据清扫：删除 seg 残留 ${segs} 个、空目录 ${dirs} 个`);
+    return { segs, dirs };
+  }
+
+  /** 启动时的一次性迁移/清扫：录制目录里的旧 .segs_*.csv 残留、旧 config/avatars 头像缓存（已迁到 meta 目录） */
+  async sweepLegacyArtifacts() {
+    // 1) 录制目录里历史遗留的 .segs_*.csv（早期版本写在录制目录）
+    const found = [];
+    const walk = async (dir) => {
+      const ents = await fsp.readdir(dir, { withFileTypes: true }).catch(() => []);
+      for (const e of ents) {
+        const p = path.join(dir, e.name);
+        if (e.isDirectory()) {
+          if (e.name === '.trash') continue;
+          await walk(p);
+        } else if (e.isFile() && /^\.segs_.*\.csv$/i.test(e.name)) {
+          found.push(p);
+        }
+      }
+    };
+    await walk(this.root);
+    for (const p of found) await fsp.rm(p, { force: true }).catch(() => {});
+    if (found.length) this.logger.info(`已清理录制目录里的 seg 列表残留 ${found.length} 个`);
+    // 2) 旧版头像缓存目录 config/avatars（已统一迁入 config/meta/<任务id>/avatar.*）
+    await fsp.rm(path.join(this.store.configDir, 'avatars'), { recursive: true, force: true }).catch(() => {});
+    await this.cleanupMeta();
+  }
+
   // ---------- 保留策略 ----------
   async cleanup({ force = false } = {}) {
     const settings = this.store.settings;
+    await this.cleanupMeta(); // 元数据目录统一清扫（seg 残留、空目录）
     await this.purgeTrash();
     const days = Number(settings.retentionDays) || 0;
     let removedBytes = 0;

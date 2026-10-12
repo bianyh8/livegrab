@@ -16,7 +16,7 @@ import { resolveRoom, platformList, PLATFORMS } from './resolvers/index.js';
 import { previewNaming, VARIABLES, DEFAULT_OPTIONS, qualityLabel, NAMING_OPTION_CHOICES } from './naming.js';
 import {
   ok, fail, HttpError, readBody, mimeByExt, parseRange, extOf, VERSION,
-  ensureDir, formatBytes, tzName, uid,
+  ensureDir, formatBytes, tzName, uid, safeJoin,
 } from './util.js';
 
 // 时区：默认 Asia/Shanghai；Docker 里由 compose 的 environment: TZ 注入（前台不再显示/修改，D15）。
@@ -552,7 +552,8 @@ async function main() {
     if (!task) throw new HttpError('NOT_FOUND', '任务不存在', 404);
     // 本地缓存优先：点击解析/检查/开播才更新，平时一直用第一次缓存的（平台 CDN 热链、失效、断网都不影响）
     if (task.avatarFile) {
-      const p = path.join(CONFIG_DIR, 'avatars', path.basename(String(task.avatarFile)));
+      const rel = String(task.avatarFile).replace(/^\.\.?[\\/]/, '').replace(/[\\/]+/g, '/'); // 防路径穿越
+      const p = safeJoin(path.join(CONFIG_DIR, 'meta'), rel);
       const st = await fsp.stat(p).catch(() => null);
       if (st && st.size > 0) {
         const buf = await fsp.readFile(p);
@@ -683,6 +684,8 @@ async function main() {
     console.log(`[livegrab] v${version} listening on http://${HOST}:${PORT}`);
     console.log(`[livegrab] 录制目录 ${RECORD_ROOT} · 配置目录 ${CONFIG_DIR} · 时区 ${tzName()}`);
     console.log(`[livegrab] 管理员账号：${auth.mode === 'init' ? '未初始化（首次打开页面设置密码）' : '已初始化'}`);
+    // 一次性清理：录制目录里的旧 seg csv 残留、旧版 config/avatars 头像缓存（已统一迁入 config/meta）
+    void storage.sweepLegacyArtifacts().catch(() => {});
   });
 
   const shutdown = async (sig) => {

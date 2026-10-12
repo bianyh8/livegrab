@@ -257,6 +257,7 @@ export class Scheduler {
     this.recorders.delete(id);
     this.detached.delete(id);
     await this.store.removeTask(id);
+    await this.storage.removeMeta(id); // 一并清掉该主播的元数据目录（头像缓存等）
     this.logger.info(`已删除任务：${task.anchorName || task.roomId}（录制文件保留，可在文件库删除）`, { taskId: id });
     this.onEvent({ type: 'task', task: null, taskId: id });
     return { deleted: true, filesKept: true };
@@ -328,6 +329,7 @@ export class Scheduler {
     const recorder = new Recorder({
       task, settings, naming: this.store.naming, logger: this.logger, resolveStream,
       mediaMod: this.mediaMod || undefined,
+      metaDir: path.join(this.store.configDir, 'meta', task.id), // seg 列表等临时文件放元数据目录，不进录制目录
       // 下播检测：ffmpeg 意外退出时先探一次直播状态，主播已下播就直接正常收尾，不进入断流重连
       probeOffline: async () => {
         try {
