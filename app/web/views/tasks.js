@@ -482,11 +482,12 @@ function exportCsv() {
 /* ================= 统一任务弹窗：新建 / 详情 / 编辑共用同一模板，每行一个栏位，详情即编辑 ================= */
 
 /**
- * 单列栏位：左侧标签（62px，与控件垂直居中）＋ 右侧控件（宽度不超过清晰度卡片行）
- * ＋ 可选副提示区。label 传 '' 时省略左侧标签（如「平台+房间号+主播名称」合并行）。
+ * 网格栏位：左侧标签（62px，与控件垂直居中）＋ 右侧控件 ＋ 可选副提示区。
+ * span=true 时横跨两列（长内容一行：直播地址/清晰度/分段策略/平台房间主播行）。
+ * label 传 '' 时省略左侧标签（多字段合并行）。
  */
-function cell(label, ctl, sub = '') {
-  return `<div>
+function cell(label, ctl, sub = '', span = false) {
+  return `<div${span ? ' style="grid-column:1/-1"' : ''}>
     <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
       ${label ? `<span style="flex:0 0 62px;font-size:12.5px;color:var(--txt-2)">${label}</span>` : ''}
       ${ctl}
@@ -516,6 +517,10 @@ async function openTaskDialog(ctx, id) {
   const effectiveQuality = (task && task.overrides && task.overrides.quality) || '';
   const effectiveSeg = (task && task.overrides && task.overrides.segmentMode) || '';
   const effectiveNaming = (task && task.overrides && task.overrides.namingProfileId) || '';
+  // 命名"全局默认" = 当前激活的命名配置（activeId），与后端 pickProfile 兜底一致
+  const namingActive = (naming && naming.activeId) || (profiles.find((p) => p.binding && p.binding.type === 'none') || {}).id || (profiles[0] || {}).id || '';
+  const segGlobal = (settings && settings.defaultSegmentMode) || 'time';
+  const reconnectGlobal = Number(settings && settings.reconnectMax) || 5;
   const d = {
     id: id || null,
     task: task || null,
@@ -537,18 +542,20 @@ async function openTaskDialog(ctx, id) {
     // 清晰度：不再有"跟随全局"选项，直接落到全局默认值（无任务级覆盖时默认显示全局值）
     quality: effectiveQuality || ((settings && (settings.defaultQuality || settings.quality)) || 'origin'),
     qualityGlobal: (settings && (settings.defaultQuality || settings.quality)) || 'origin',
-    // 分段：'' = 跟随全局
-    segmentMode: effectiveSeg,
+    // 分段：不再有"跟随全局"，直接落到全局默认
+    segmentMode: effectiveSeg || segGlobal,
+    segmentGlobal: segGlobal,
     segmentMinutes: task ? (task.segmentMinutes || 60) : ((settings && settings.defaultSegmentMinutes) || 60),
     segmentSizeMB: task ? (task.segmentSizeMB || 2048) : ((settings && settings.defaultSegmentSizeMB) || 2048),
     autoMerge: task ? !!task.autoMerge : false,
-    // 命名：'' = 跟随全局
-    namingProfileId: effectiveNaming,
+    // 命名：不再有"跟随全局"，直接落到当前激活的命名配置
+    namingProfileId: effectiveNaming || namingActive,
+    namingGlobal: namingActive,
     profiles,
-    // 轮询 / 重连（'' = 跟随全局）
+    // 轮询 / 重连（重连不再有"跟随全局"，默认带全局值）
     pollIntervalSec: Number(task ? (task.pollIntervalSec || 60) : ((settings && settings.pollIntervalSec) || 60)),
-    reconnectMax: task && task.reconnectMax ? Number(task.reconnectMax) : '',
-    reconnectGlobal: Number(settings && settings.reconnectMax) || 5,
+    reconnectMax: Number(task && task.reconnectMax != null ? task.reconnectMax : reconnectGlobal),
+    reconnectGlobal,
     startDelaySec: Number(task ? (task.startDelaySec || 5) : ((settings && settings.startDelaySec) || 5)),
     stopDelaySec: Number(task ? (task.stopDelaySec || 30) : ((settings && settings.stopDelaySec) || 30)),
     // 开关
@@ -612,11 +619,11 @@ function taskShell(d) {
   const platOpts = [{ v: '', label: t('tasks.platChoose') }, ...d.platforms.map((p) => ({ v: p.id, label: p.name }))];
   const pollOpts = [...new Set([30, 60, 120, 180, 300, Number(d.pollIntervalSec) || 60])].map((v) => ({ v: String(v), label: `${v} ${t('common.seconds')}` }));
   const rcNums = [3, 5, 8, 10];
-  if (d.reconnectMax !== '' && !rcNums.includes(Number(d.reconnectMax))) rcNums.push(Number(d.reconnectMax));
-  const rcOpts = [{ v: '', label: t('tasks.reconnectFollow', String(d.reconnectGlobal)) }].concat(rcNums.map((o) => ({ v: String(o), label: `${o} ${t('settings.recReconnUnit')}` })));
-  const namingOpts = [{ v: '', label: t('tasks.followGlobal') }].concat(d.profiles.length ? d.profiles.map((p) => ({ v: p.id, label: p.name || p.id })) : []);
+  if (!rcNums.includes(Number(d.reconnectMax))) rcNums.push(Number(d.reconnectMax));
+  if (!rcNums.includes(Number(d.reconnectGlobal))) rcNums.push(Number(d.reconnectGlobal));
+  const rcOpts = rcNums.map((o) => ({ v: String(o), label: `${o} ${t('settings.recReconnUnit')}` }));
+  const namingOpts = d.profiles.length ? d.profiles.map((p) => ({ v: p.id, label: p.name || p.id })) : [];
   const segOpts = [
-    { v: '', label: t('tasks.followGlobal') },
     { v: 'none', label: t('seg.none') },
     { v: 'time', label: t('tasks.segByTimeCard') },
     { v: 'size', label: t('settings.recSegBySize') },
@@ -630,30 +637,31 @@ function taskShell(d) {
   const flx = (s) => `<span style="font-size:12.5px;color:var(--txt-2);white-space:nowrap">${s}</span>`;
   // 子选项小标签（与 .hintline 同风格，随模式显隐）
   const segTag = (id, text, style) => `<span class="hintline" style="margin:0;${style}" id="${id}">${text}</span>`;
+  // 两列网格：长内容（直播地址/清晰度/分段策略/平台房间主播行）跨整行，短字段左右两两对齐
   return `
-  <div style="display:flex;flex-direction:column;gap:13px;max-width:600px">
+  <div style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:13px 20px">
     ${cell(t('tasks.kSource'),
       `<input class="input mono" id="edUrl" style="width:min(100%,300px)" value="${esc(d.url)}" placeholder="${t('tasks.pasteUrlPh')}" />
       <button class="btn" id="edResolve">${t('tasks.resolve')}</button>`,
-      `<div class="hintline">${t('tasks.urlEditTip')}</div>`)}
+      `<div class="hintline">${t('tasks.urlEditTip')}</div>`, true)}
     ${cell('',
       `${flx(t('settings.pfColPlatform'))}${selHtml('edPlat', platOpts, d.platform, 92)}
       ${flx(t('tasks.csvRoom'))}<input class="input mono" id="edRoom" style="width:140px" value="${esc(d.displayRoom)}" placeholder="${roomPh}" />
       ${flx(t('tasks.anchorNameLabel'))}<input class="input" id="edAnchor" style="width:140px" value="${esc(d.anchorName)}" placeholder="${t('tasks.anchorPh')}" />`,
-      `<div class="hintline" id="edPlatHint">${platHintText(d.platform)}</div>`)}
+      `<div class="hintline" id="edPlatHint">${platHintText(d.platform)}</div>`, true)}
     ${cell(t('tasks.colQuality'),
       `<div class="mini-row" id="edQGrid">
         ${QUALITY_CARDS.map((q) => `<span class="mini${d.quality === q.id ? ' sel' : ''}" data-q="${q.id}" title="${esc(t(q.resKey))} · ${esc(t(q.kbpsKey))}">${q.crown ? '★ ' : ''}${t(q.labelKey)}</span>`).join('')}
       </div>`,
-      `<div class="hintline" id="edQualityHint">${qualityHint(d)}</div>`)}
+      `<div class="hintline" id="edQualityHint">${qualityHint(d)}</div>`, true)}
     ${cell(t('tasks.colLive'), `<div id="edInfo">${infoHtml(d)}</div>`)}
-    ${cell('',
-      `${flx(t('tasks.kPoll'))}${selHtml('edPoll', pollOpts, String(d.pollIntervalSec), 118)}
-      ${flx(t('tasks.kReconnect'))}${selHtml('edReconnect', rcOpts, String(d.reconnectMax), 118)}`,
-      `<div class="hintline">${t('tasks.pollDetail', d.pollIntervalSec, d.startDelaySec, d.stopDelaySec)}</div>`)}
     ${cell(t('settings.tabNaming'),
-      selHtml('edNaming', namingOpts, d.namingProfileId, 180),
+      selHtml('edNaming', namingOpts, d.namingProfileId, 170),
       `<div class="hintline" id="edNamingHint">${namingHint(d)}</div>`)}
+    ${cell(t('tasks.kPoll'),
+      selHtml('edPoll', pollOpts, String(d.pollIntervalSec), 118),
+      `<div class="hintline">${t('tasks.pollDetail', d.pollIntervalSec, d.startDelaySec, d.stopDelaySec)}</div>`)}
+    ${cell(t('tasks.kReconnect'), selHtml('edReconnect', rcOpts, String(d.reconnectMax), 118))}
     ${cell(t('tasks.csvSegment'),
       `<div class="row" style="align-items:center;gap:8px;flex-wrap:wrap">
         ${selHtml('edSegMode', segOpts, d.segmentMode, 120)}
@@ -664,10 +672,9 @@ function taskShell(d) {
           <option value="1"${d.autoMerge ? ' selected' : ''}>${t('tasks.segMergeSingle')}</option>
         </select>
       </div>`,
-      `<div class="hintline" id="edSegHint">${segmentHint(d)}</div>`)}
-    ${cell('',
-      `${flx(t('tasks.autoRecordLabel'))}${switchEl(d.autoRecord, 'id="edAuto"')}
-      ${flx(t('tasks.monitorOnlyLabel'))}${switchEl(d.monitorOnly, 'id="edMonitor"')}`,
+      `<div class="hintline" id="edSegHint">${segmentHint(d)}</div>`, true)}
+    ${cell(t('tasks.autoRecordLabel'), switchEl(d.autoRecord, 'id="edAuto"'))}
+    ${cell(t('tasks.monitorOnlyLabel'), switchEl(d.monitorOnly, 'id="edMonitor"'),
       `<div class="hintline" id="edMonitorHint">${d.monitorOnly ? t('tasks.monitorOn') : t('tasks.monitorOff')}</div>`)}
   </div>
   ${d.id ? `<div class="sect"><span class="n">≡</span>${t('tasks.segHeader', (d.task && (d.task.segments || []).length) || 0)}</div>
@@ -685,15 +692,14 @@ function qualityHint(d) {
 }
 
 function segmentHint(d) {
-  const t0 = { segmentMode: d.segmentMode || (d.task && d.task.segmentMode) || 'time', segmentMinutes: d.segmentMinutes, segmentSizeMB: d.segmentSizeMB };
+  const t0 = { segmentMode: d.segmentMode, segmentMinutes: d.segmentMinutes, segmentSizeMB: d.segmentSizeMB };
   const txt = segmentStrategyText(t0);
-  if (!d.segmentMode) return `${t('tasks.followGlobal')} · ${esc(txt)}`;
   return `${t('tasks.currentSel')}<b style="color:var(--txt)">${esc(txt)}</b>${d.recording ? t('tasks.currentSessionNote') : ''}`;
 }
 
 function namingHint(d) {
-  const p = d.profiles.find((x) => x.id === d.namingProfileId);
-  if (!p) return t('tasks.followGlobal') + ' · ' + esc((d.profiles[0] && d.profiles[0].dirTemplate) || '{平台}/{主播}/{日期}');
+  const p = d.profiles.find((x) => x.id === d.namingProfileId) || d.profiles[0];
+  if (!p) return '';
   return esc((p.dirTemplate || '{平台}/{主播}/{日期}') + ' / ' + (p.fnTemplate || '{日期}_{主播}_{序号}'));
 }
 
@@ -924,12 +930,14 @@ async function submit(d, dialog, btn, ctx) {
   if (d.platform === 'douyin' && d.shortId && d.shortId !== (d.task && d.task.shortId)) payload.shortId = d.shortId;
 
   payload.overrides = {};
-  // 清晰度：无"跟随全局"选项，弹窗内默认值即全局默认；仅当所选与任务当前生效值不同时才显式覆盖
-  // （跟随全局的任务所选=全局值时保持跟随，全局调整后自动生效；录制中任务也不会因"原样保存"误触发锁定提示）
+  // 以下四项规则一致：无"跟随全局"选项，弹窗默认值即全局默认；仅当所选与任务当前生效值不同时才显式覆盖
+  // （跟随全局的任务保持跟随，全局调整后自动生效；录制中任务"原样保存"不会误触发锁定提示）
   const curQ = (d.task && d.task.overrides && d.task.overrides.quality) || '';
   if (d.quality && d.quality !== curQ && d.quality !== (curQ || d.qualityGlobal)) payload.overrides.quality = d.quality;
-  if (d.segmentMode) payload.overrides.segmentMode = d.segmentMode;          // '' = 跟随全局
-  payload.overrides.namingProfileId = d.namingProfileId || null;             // '' = 跟随全局
+  const curSeg = (d.task && d.task.overrides && d.task.overrides.segmentMode) || '';
+  if (d.segmentMode && d.segmentMode !== curSeg && d.segmentMode !== (curSeg || d.segmentGlobal)) payload.overrides.segmentMode = d.segmentMode;
+  const curNaming = (d.task && d.task.overrides && d.task.overrides.namingProfileId) || '';
+  if (d.namingProfileId && d.namingProfileId !== curNaming && d.namingProfileId !== (curNaming || d.namingGlobal)) payload.overrides.namingProfileId = d.namingProfileId;
   payload.overrides.customText = null;
   payload.container = null;
   payload.remuxToMp4 = null;
@@ -939,7 +947,10 @@ async function submit(d, dialog, btn, ctx) {
   payload.autoRecord = d.autoRecord;
   payload.monitorOnly = d.monitorOnly;
   payload.pollIntervalSec = Number(d.pollIntervalSec) || 60;
-  payload.reconnectMax = (d.reconnectMax === '' || d.reconnectMax == null) ? null : Number(d.reconnectMax);
+  // 重连：默认带全局值；仅当与任务当前生效值不同才提交（跟随全局的任务保持跟随）
+  const curR = Number(d.task && d.task.reconnectMax != null ? d.task.reconnectMax : d.reconnectGlobal) || 5;
+  const newR = Number(d.reconnectMax) || 5;
+  if (newR !== curR) payload.reconnectMax = newR;
   if (d.resolved && d.resolved.avatar && d.avatarDirty) payload.avatar = d.resolved.avatar; // 重新解析后保存：头像落盘到本地目录
   if (d.anchorName && d.anchorName.trim()) { payload.anchorName = d.anchorName.trim(); payload.anchorNameLocked = true; } // 保存过非空主播名即锁定，解析刷新不再覆盖
 
