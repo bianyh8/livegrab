@@ -270,6 +270,7 @@
   "tasks.readTaskFail": "读取任务失败",
   "tasks.sortSaveFail": "排序保存失败",
   "tasks.searchPh": "搜索主播 / 房间号 / 标题…",
+  "tasks.filterTitle": "查询条件",
   "tasks.allLiveStatus": "全部直播状态",
   "tasks.live": "直播中",
   "tasks.notLive": "未直播",

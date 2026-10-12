@@ -561,6 +561,7 @@ const DEFAULT_DICT = {
   "tasks.exportedOk": "已导出任务清单 CSV",
   "tasks.failReasonUnknown": "原因未知",
   "tasks.fillLinkWarn": "请填写直播间地址，或指定平台 + 房间号",
+  "tasks.filterTitle": "查询条件",
   "tasks.followGlobal": "跟随全局",
   "tasks.gb": "GB",
   "tasks.kPoll": "轮询规则",

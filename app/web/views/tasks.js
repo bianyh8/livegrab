@@ -25,6 +25,7 @@ const state = {
   pending: false,
   bound: false,
   openNew: false,
+  filterOpen: false, // 查询条件默认折叠
 };
 
 let boundRoot = null;
@@ -155,7 +156,12 @@ function paint(ctx, force) {
 
   root.innerHTML = `
     <div class="card">
-      <div class="toolbar tq">
+      <div class="tq-toggle" id="tkFilterToggle" role="button">
+        <span class="tq-title">${t('tasks.filterTitle')}</span>
+        <span class="tq-summary">${filterSummary()}</span>
+        <span class="tq-arrow">${state.filterOpen ? '▴' : '▾'}</span>
+      </div>
+      <div class="toolbar tq" id="tkFilterBar" style="${state.filterOpen ? '' : 'display:none'}">
         <input class="input" id="tkQ" style="width:170px" placeholder="${t('tasks.searchPh')}" value="${esc(state.q)}" />
         <select class="select" id="tkPlat" style="width:108px">
           <option value="">${t('common.allPlatforms')}</option>
@@ -195,6 +201,25 @@ function paint(ctx, force) {
     </div>`;
 
   bind(ctx);
+}
+
+/* 查询条件摘要（折叠头显示当前生效条件，无条件时显示"全部"） */
+function filterSummary() {
+  const parts = [];
+  if (String(state.q || '').trim()) parts.push(t('tasks.searchPh') + '：' + String(state.q).trim());
+  if (state.platform) { const p = state.platforms.find((x) => x.id === state.platform); if (p) parts.push(p.name); }
+  if (state.liveStatus === 'live') parts.push(t('tasks.live'));
+  else if (state.liveStatus === 'offline') parts.push(t('tasks.notLive'));
+  else if (state.liveStatus === 'unknown') parts.push(t('common.unknown'));
+  if (state.status) {
+    const m = { recording: t('common.recording'), stopped: t('tasks.stopped'), queued: t('common.queued'), waiting: t('common.waiting'), completed: t('common.completed'), error: t('common.error'), idle: t('common.idle') };
+    if (m[state.status]) parts.push(m[state.status]);
+  }
+  if (state.sort !== 'created' || state.sortDir !== 'desc') {
+    const s = { custom: t('tasks.sortCustom'), created: t('tasks.sortByCreated'), duration: t('tasks.sortByDuration'), size: t('tasks.sortBySize'), status: t('tasks.sortByStatus') };
+    parts.push((s[state.sort] || state.sort) + (state.sortDir === 'asc' ? ' ↑' : ' ↓'));
+  }
+  return parts.length ? parts.join(' · ') : t('logs.taskAll');
 }
 
 function table(list) {
@@ -302,6 +327,8 @@ function bind(ctx) {
       timer = setTimeout(() => { state.hash = ''; paint(ctx, true); }, 200);
     };
   }
+  const fToggle = root.querySelector('#tkFilterToggle');
+  if (fToggle) fToggle.onclick = () => { state.filterOpen = !state.filterOpen; state.hash = ''; paint(ctx, true); };
   const bindSel = (id, key) => {
     const node = root.querySelector(id);
     if (!node) return;

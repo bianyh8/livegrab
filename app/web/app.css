@@ -375,6 +375,15 @@ select.select.ph{color:var(--txt-3)}
 .toolbar.tq{flex-wrap:nowrap}
 .toolbar.tq .input,.toolbar.tq .select{flex:0 1 auto;min-width:52px;padding:6px 7px}
 .toolbar.tq .input{flex:1 1 auto}
+/* 任务管理查询条件折叠头 */
+.tq-toggle{
+  display:flex;align-items:center;gap:10px;padding:11px 16px;border-bottom:1px solid var(--line);
+  cursor:pointer;user-select:none;color:var(--txt-2);transition:.15s;
+}
+.tq-toggle:hover{background:rgba(255,255,255,.025)}
+.tq-toggle .tq-title{font-size:13px;font-weight:600;color:var(--txt);white-space:nowrap}
+.tq-toggle .tq-summary{flex:1;min-width:0;font-size:11.5px;color:var(--txt-3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tq-toggle .tq-arrow{color:var(--txt-3);font-size:11px;flex:0 0 auto}
 /* 存储统计：左侧环形 + 右侧平台文字（紧凑） */
 .pkbody{display:flex;gap:14px;align-items:center;min-width:0}
 .pkdonut{flex:0 0 auto}
@@ -611,7 +620,7 @@ table.tight th{padding:8px 12px}
   }
   .tb-item svg{width:21px;height:21px;stroke-width:1.9}
   .tb-item .tb-ic{display:flex;align-items:center;gap:3px;line-height:1}
-  .tb-item .tb-lb{line-height:1}
+  .tb-item .tb-lb{display:flex;align-items:center;gap:3px;line-height:1}
   .tb-item.on{color:#fff}
   .tb-item.on::before{
     content:"";position:absolute;top:0;left:50%;transform:translateX(-50%);
@@ -654,6 +663,8 @@ table.tight th{padding:8px 12px}
   .toolbar.tq .input{flex:1 1 100%;min-width:0}
   .toolbar.tq .select{flex:1 1 42%}
   .btn{padding:8px 11px}
+  .tq-toggle{padding:11px 12px}
+  .tq-toggle .tq-summary{max-width:52%}
 
   /* ---- 列表项压缩 ---- */
   .rec-item{gap:10px;padding:11px 12px}
