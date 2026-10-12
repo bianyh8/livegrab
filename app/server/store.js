@@ -10,7 +10,7 @@ export const DEFAULT_SETTINGS = {
   defaultQuality: 'origin',
   qualityFallback: ['origin', 'bluray', 'uhd', 'hd', 'sd'],
   defaultSegmentMode: 'time',
-  defaultSegmentMinutes: 60,
+  defaultSegmentMinutes: 3600, // 单位：秒
   defaultSegmentSizeMB: 2048,
   recordContainer: 'ts',
   remuxToMp4: true,
@@ -258,7 +258,7 @@ export class Store {
     return {
       id: uid('t'), platform: 'douyin', roomId: '', shortId: '', sourceUrl: '', anchorName: '', title: '', avatar: '',
       quality: 'origin', qualityActual: null, qualityLabel: null,
-      segmentMode: 'time', segmentMinutes: 60, segmentSizeMB: 2048,
+      segmentMode: 'time', segmentMinutes: 3600, segmentSizeMB: 2048,
       container: 'ts', remuxToMp4: true, keepSource: true, autoMerge: false,
       namingProfileId: null, customText: '',
       autoRecord: true, monitorOnly: false, manualHeld: false, pollIntervalSec: 60, startDelaySec: 5, stopDelaySec: 30,

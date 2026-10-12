@@ -38,9 +38,8 @@ export async function render(root, ctx, kit) {
           </div>
           <div class="row wrap" style="margin-top:16px">
             <div class="f1" style="min-width:200px"><label class="fl">${t('settings.recSegMinLabel')}</label>
-              <select class="select" id="setSegMin">
-                ${[30, 60, 120].map((m) => `<option value="${m}"${Number(read(kit.state, 'defaultSegmentMinutes', 60)) === m ? ' selected' : ''}>${t('settings.recSegMinOption', m)}</option>`).join('')}
-              </select></div>
+              <input class="input" id="setSegMin" type="number" min="1" step="1" value="${esc(String(Number(read(kit.state, 'defaultSegmentMinutes', 3600)) || 3600))}" />
+              <div class="hintline">${t('settings.recSegMinHint')}</div></div>
             <div class="f1" style="min-width:200px"><label class="fl">${t('settings.recSegModeLabel')}</label>
               <select class="select" id="setSegMode">
                 ${[['time', t('settings.recSegByTime')], ['size', t('settings.recSegBySize')], ['none', t('seg.none')]].map(([v, lbl]) => `<option value="${v}"${read(kit.state, 'defaultSegmentMode', 'time') === v ? ' selected' : ''}>${lbl}</option>`).join('')}

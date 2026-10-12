@@ -15,9 +15,9 @@ export function headerArgs(headers = {}) {
   return lines.length ? ['-headers', `${lines.join('\r\n')}\r\n`] : [];
 }
 
-/** 录制参数（TS 分段、关键帧对齐、直接产出最终文件名） */
+/** 录制参数（TS 分段、关键帧对齐、直接产出最终文件名）；segmentMinutes 单位为秒 */
 export function buildRecordArgs({
-  streamUrl, outputPattern, container = 'ts', segmentMode = 'time', segmentMinutes = 60,
+  streamUrl, outputPattern, container = 'ts', segmentMode = 'time', segmentMinutes = 3600,
   segmentSizeMB = 2048, segmentListPath = null, startNumber = 1, headers = {},
   audioOnly = false, proxy = '', userAgent = '', isHttp = true,
 }) {
@@ -37,7 +37,7 @@ export function buildRecordArgs({
   }
   const seconds = segmentMode === 'size'
     ? Math.max(30, Math.round((Number(segmentSizeMB) || 2048) * 8 * 1024 / 8000)) // 以 8Mbps 估算时长上限
-    : Math.max(10, Math.round(Number(segmentMinutes) * 60 || 3600));
+    : Math.max(10, Math.round(Number(segmentMinutes) || 3600)); // segmentMinutes 已是秒
   args.push(
     '-f', 'segment',
     '-segment_time', String(seconds),

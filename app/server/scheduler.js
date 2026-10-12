@@ -75,7 +75,7 @@ export class Scheduler {
       segmentMode: ov.segmentMode || s.defaultSegmentMode || 'time',
       namingProfileId: ov.namingProfileId || null,
       customText: ov.customText || '',
-      segmentMinutes: Number(task.segmentMinutes ?? s.defaultSegmentMinutes ?? 60),
+      segmentMinutes: Number(task.segmentMinutes ?? s.defaultSegmentMinutes ?? 3600), // 单位：秒
       segmentSizeMB: Number(task.segmentSizeMB ?? s.defaultSegmentSizeMB ?? 2048),
       container: task.container || s.recordContainer || 'ts',
       remuxToMp4: task.remuxToMp4 ?? s.remuxToMp4 !== false,

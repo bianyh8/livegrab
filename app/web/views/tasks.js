@@ -543,7 +543,7 @@ async function openTaskDialog(ctx, id) {
     // 分段：不再有"跟随全局"，直接落到全局默认
     segmentMode: effectiveSeg || segGlobal,
     segmentGlobal: segGlobal,
-    segmentMinutes: task ? (task.segmentMinutes || 60) : ((settings && settings.defaultSegmentMinutes) || 60),
+    segmentMinutes: task ? (task.segmentMinutes || 3600) : ((settings && settings.defaultSegmentMinutes) || 3600),
     segmentSizeMB: task ? (task.segmentSizeMB || 2048) : ((settings && settings.defaultSegmentSizeMB) || 2048),
     autoMerge: false, // 已删除「分段文件处理」选项，固定保留独立分段
     // 命名：不再有"跟随全局"，直接落到当前激活的命名配置
@@ -637,7 +637,6 @@ function taskShell(d) {
   const segTimeStyle = d.segmentMode === 'time' ? '' : 'display:none';
   const segSizeStyle = d.segmentMode === 'size' ? '' : 'display:none';
   const roomPh = d.platform === 'douyin' ? t('tasks.douyinRoomPh') : t('tasks.roomPh');
-  const segMinRaw = [...new Set([30, 60, 120, 180, Number(d.segmentMinutes) || 60])].map((m) => ({ v: String(m), label: `${m} ${t('common.minutes')}` }));
   const segSizeRaw = [...new Set([1024, 2048, 4096, 8192, Number(d.segmentSizeMB) || 2048])].map((m) => ({ v: String(m), label: `${Math.round(m / 1024 * 10) / 10} ${t('tasks.gb')}` }));
   // 下拉框默认 width:100% 占满所在列；cls 可附加样式类（如平台未选的灰字提示 ph）
   const selF = (id, opts, val, cls = '') => `<select class="select${cls}" id="${id}">${optList(opts, val)}</select>`;
@@ -665,7 +664,9 @@ function taskShell(d) {
   <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px 16px;margin-top:14px">
     ${field(t('tasks.csvSegment'), selF('edSegMode', segOpts, d.segmentMode))}
     <div id="edSegParamCol">
-      <div id="edSegMinCell" style="${segTimeStyle}">${field(t('tasks.segMinutesLabel'), selF('edSegMin', segMinRaw, String(d.segmentMinutes)))}</div>
+      <div id="edSegMinCell" style="${segTimeStyle}">${field(t('tasks.segMinutesLabel'),
+        `<input class="input" id="edSegMin" type="number" min="1" step="1" value="${Number(d.segmentMinutes) || 3600}" />`,
+        `<div class="hintline">${t('settings.recSegMinHint')}</div>`)}</div>
       <div id="edSegSizeCell" style="${segSizeStyle}">${field(t('tasks.segSizeLabel'), selF('edSegSize', segSizeRaw, String(d.segmentSizeMB)))}</div>
     </div>
     ${field(t('tasks.autoRecordLabel'), switchEl(d.autoRecord, 'id="edAuto"'))}

@@ -187,7 +187,15 @@ export function segmentStrategyText(task) {
   const mode = task.segmentMode || 'time';
   if (mode === 'none') return t('seg.none');
   if (mode === 'size') return t('seg.bySize', Math.round((task.segmentSizeMB || 2048) / 1024 * 10) / 10);
-  return t('seg.byTime', task.segmentMinutes || 60);
+  return t('seg.byTime', segDurText(task.segmentMinutes));
+}
+
+/** 分段时长（秒）→ 可读文本：3600 → 1 小时，600 → 10 分钟，90 → 90 秒 */
+export function segDurText(sec) {
+  const n = Number(sec) || 3600;
+  if (n >= 3600 && n % 3600 === 0) return `${n / 3600} ${t('common.hour')}`;
+  if (n >= 60 && n % 60 === 0) return `${n / 60} ${t('common.minutes')}`;
+  return `${n} ${t('common.seconds')}`;
 }
 
 /* ================= 小组件 ================= */

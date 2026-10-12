@@ -7,7 +7,7 @@ import { api } from '../api.js';
 import { t as _t } from '../i18n.js';
 import {
   esc, formatBytes, formatDuration,
-  platBadge, segTrack, emptyBox, toast, qualityLabelOf,
+  platBadge, segTrack, emptyBox, toast, qualityLabelOf, segDurText,
 } from '../ui.js';
 
 export const page = 'dashboard';
@@ -250,7 +250,7 @@ function recItem(t) {
 function segLabel(t) {
   if (t.segmentMode === 'none') return 'none';
   if (t.segmentMode === 'size') return _t('seg.bySize', Math.round((t.segmentSizeMB || 2048) / 1024 * 10) / 10);
-  return _t('dashboard.segPerMin', t.segmentMinutes || 60);
+  return _t('dashboard.segPerMin', segDurText(t.segmentMinutes));
 }
 
 function queueItem(q, ctx) {
