@@ -185,6 +185,7 @@ function paint(ctx, force) {
         <span class="chip ${state.selected.size ? 'on' : ''}" id="tkSelChip"><i class="dot"></i>${t('tasks.selected', state.selected.size)}</span>
         <span class="chip">${t('tasks.oneTaskTip')}</span>
         <div class="spacer"></div>
+        <button class="btn sm" data-batch="refresh" title="${t('tasks.batchRefreshTip')}">${t('tasks.batchRefresh')}</button>
         <button class="btn sm" data-batch="start">${t('tasks.batchStart')}</button>
         <button class="btn sm" data-batch="pause">${t('tasks.batchPause')}</button>
         <button class="btn sm" data-batch="stop">${t('common.stopRecord')}</button>
@@ -416,7 +417,7 @@ async function batch(ctx, action) {
     const r = await api.batch(action, ids);
     const ok = (r && r.okIds) || [];
     const failed = (r && r.failed) || [];
-    const verb = { start: t('tasks.verbStart'), pause: t('tasks.verbPause'), stop: t('tasks.stop'), check: t('tasks.verbCheck') }[action] || t('tasks.verbProcess');
+    const verb = { start: t('tasks.verbStart'), pause: t('tasks.verbPause'), stop: t('tasks.stop'), check: t('tasks.verbCheck'), refresh: t('common.refresh') }[action] || t('tasks.verbProcess');
     let msg = t('tasks.batchDone', verb, ok.length);
     if (failed.length) msg += t('tasks.batchFailed', failed.length, failed[0].message || t('tasks.failReasonUnknown'));
     if (r && r.note) msg += ' · ' + r.note;

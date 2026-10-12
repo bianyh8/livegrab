@@ -513,6 +513,8 @@ const DEFAULT_DICT = {
   "tasks.batchHint": "批量操作单次上限 50 条；并发不足时部分成功，会明确告知\"已启动 N 条、M 条进入排队\"。删除默认只解除任务管理、不动已录文件。",
   "tasks.batchLimit": "批量操作单次上限 50 条，请减少勾选数量",
   "tasks.batchPause": "批量暂停",
+  "tasks.batchRefresh": "批量刷新",
+  "tasks.batchRefreshTip": "重新解析全部选中任务的主播信息（主播名/标题/头像/直播状态），不会自动开始录制",
   "tasks.batchStart": "批量启动",
   "tasks.checkDone": "已立即轮询一次开播状态",
   "tasks.colLive": "直播状态",

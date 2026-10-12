@@ -635,6 +635,35 @@ export class Scheduler {
     return { resumed: true };
   }
 
+  /** 仅刷新主播信息（主播名/标题/头像/直播状态/状态文案），不排队、不自动开播 —— 批量刷新用 */
+  async refreshTask(id) {
+    const task = this.store.getTask(id);
+    if (!task) throw new HttpError('NOT_FOUND', '任务不存在', 404);
+    let info;
+    try {
+      info = await resolveRoom(task.sourceUrl || `${task.platform}:${task.roomId}`, { platform: task.platform, settings: this.store.settings, logger: this.logger });
+    } catch (e) {
+      task.failCount = (task.failCount || 0) + 1;
+      task.statusMessage = `刷新失败：${e.message}`;
+      await this.store.saveTask(task);
+      this.onEvent({ type: 'task', task });
+      throw new HttpError('RESOLVE_FAIL', `刷新失败：${e.message}`, 502);
+    }
+    if (!task.nameLocked) task.anchorName = info.anchorName || task.anchorName;
+    task.title = info.title || task.title;
+    task.avatar = info.avatar || task.avatar;
+    if (info.avatar) await this.storage.saveAvatar(task, info.avatar); // 刷新头像落盘缓存
+    task.liveStatus = info.liveStatus;
+    task.statusMessage = task.manualHeld
+      ? (info.liveStatus === 'live' ? '已手动停止 · 直播中未录制，等你手动开始' : '已手动停止 · 未开播，等你手动开始')
+      : (info.liveStatus === 'live' ? '正在直播' : '未开播');
+    task.failCount = 0;
+    task.nextPollAt = Date.now() + Math.max(10, Number(task.pollIntervalSec) || 60) * 1000;
+    await this.store.saveTask(task);
+    this.onEvent({ type: 'task', task });
+    return { id, info };
+  }
+
   async checkTask(id) {
     const task = this.store.getTask(id);
     if (!task) throw new HttpError('NOT_FOUND', '任务不存在', 404);
@@ -693,6 +722,7 @@ export class Scheduler {
         else if (action === 'pause') await this.pauseTask(id);
         else if (action === 'stop') await this.stopTask(id);
         else if (action === 'check') await this.checkTask(id);
+        else if (action === 'refresh') await this.refreshTask(id);
         else if (action === 'retry') await this.retryTask(id);
         else if (action === 'delete') await this.deleteTask(id, { force: true });
         else throw new HttpError('BAD_ACTION', `不支持的操作：${action}`, 400);

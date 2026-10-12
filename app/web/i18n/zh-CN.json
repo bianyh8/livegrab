@@ -288,6 +288,8 @@
   "tasks.oneTaskTip": "1 任务 = 1 直播间；同一房间不允许两条启用任务",
   "tasks.batchStart": "批量启动",
   "tasks.batchPause": "批量暂停",
+  "tasks.batchRefresh": "批量刷新",
+  "tasks.batchRefreshTip": "重新解析全部选中任务的主播信息（主播名/标题/头像/直播状态），不会自动开始录制",
   "tasks.batchDelete": "批量删除",
   "tasks.batchHint": "批量操作单次上限 50 条；并发不足时部分成功，会明确告知\"已启动 N 条、M 条进入排队\"。删除默认只解除任务管理、不动已录文件。",
   "tasks.customSortHint": "当前为自定义排序：点击行尾 ↑ / ↓ 调整顺序（即实际任务执行顺序）。",
