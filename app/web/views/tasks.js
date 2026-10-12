@@ -482,16 +482,13 @@ function exportCsv() {
 /* ================= 统一任务弹窗：新建 / 详情 / 编辑共用同一模板，每行一个栏位，详情即编辑 ================= */
 
 /**
- * 栏位行：左标签（62px，可选）＋ 控件区（flex:1，space-between 左右分布）。
- * 这样每一行都占满相同宽度，内容左右分布对齐；长内容行（直播地址/清晰度/分段策略）标签在左，
- * 多字段行（平台房间主播/状态命名/轮询重连/开关）标签内联、两端对齐。
+ * 网格栏位：标签在控件上方（参照弹窗设计稿），控件占满所在列。
+ * span=true 时横跨整行（直播地址 / 清晰度）。
  */
-function cell(label, ctl, sub = '') {
-  return `<div>
-    <div style="display:flex;align-items:center;gap:8px">
-      ${label ? `<span style="flex:0 0 62px;font-size:12.5px;color:var(--txt-2)">${label}</span>` : ''}
-      <div style="flex:1;min-width:0;display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap">${ctl}</div>
-    </div>
+function field(label, ctl, sub = '', span = false) {
+  return `<div${span ? ' style="grid-column:1/-1"' : ''}>
+    ${label ? `<div style="font-size:12px;color:var(--txt-2);margin-bottom:6px">${label}</div>` : ''}
+    ${ctl}
     ${sub}
   </div>`;
 }
@@ -638,42 +635,37 @@ function taskShell(d) {
   const segTimeStyle = d.segmentMode === 'time' ? '' : 'display:none';
   const segSizeStyle = d.segmentMode === 'size' ? '' : 'display:none';
   const roomPh = d.platform === 'douyin' ? t('tasks.douyinRoomPh') : t('tasks.roomPh');
-  const segMinOpts = optList([...new Set([30, 60, 120, 180, Number(d.segmentMinutes) || 60])].map((m) => ({ v: String(m), label: `${m} ${t('common.minutes')}` })), String(d.segmentMinutes));
-  const segSizeOpts = optList([...new Set([1024, 2048, 4096, 8192, Number(d.segmentSizeMB) || 2048])].map((m) => ({ v: String(m), label: `${Math.round(m / 1024 * 10) / 10} ${t('tasks.gb')}` })), String(d.segmentSizeMB));
-  const flx = (s) => `<span style="font-size:12.5px;color:var(--txt-2);white-space:nowrap">${s}</span>`;
-  // 子选项小标签（与 .hintline 同风格，随模式显隐）
-  const segTag = (id, text, style) => `<span class="hintline" style="margin:0;${style}" id="${id}">${text}</span>`;
-  // 每行 flex 布局：标签 + 控件区占满整行宽度，控件区 space-between 左右分布，保证各行等宽
+  const segMinRaw = [...new Set([30, 60, 120, 180, Number(d.segmentMinutes) || 60])].map((m) => ({ v: String(m), label: `${m} ${t('common.minutes')}` }));
+  const segSizeRaw = [...new Set([1024, 2048, 4096, 8192, Number(d.segmentSizeMB) || 2048])].map((m) => ({ v: String(m), label: `${Math.round(m / 1024 * 10) / 10} ${t('tasks.gb')}` }));
+  // 下拉框默认 width:100% 占满所在列
+  const selF = (id, opts, val) => `<select class="select" id="${id}">${optList(opts, val)}</select>`;
+  // 三列等宽网格（平台/房间号/主播名称 与 命名/轮询/重连 两行列对齐）＋ 两列网格（分段策略、开关）
   return `
-  <div style="display:flex;flex-direction:column;gap:13px">
-    ${cell(t('tasks.kSource'),
-      `<input class="input mono" id="edUrl" style="flex:1;min-width:0" value="${esc(d.url)}" placeholder="${t('tasks.pasteUrlPh')}" />`,
-      `<div class="hintline">${t('tasks.urlEditTip')}</div>`)}
-    ${cell('',
-      `${flx(t('settings.pfColPlatform'))}${selHtml('edPlat', platOpts, d.platform, 125)}
-      ${flx(t('tasks.csvRoom'))}<input class="input mono" id="edRoom" style="width:140px" value="${esc(d.displayRoom)}" placeholder="${roomPh}" />
-      ${flx(t('tasks.anchorNameLabel'))}<input class="input" id="edAnchor" style="width:110px" value="${esc(d.anchorName)}" placeholder="${t('tasks.anchorPh')}" />`,
-      `<div class="hintline" id="edPlatHint">${platHintText(d.platform)}</div>`)}
-    ${cell(t('tasks.colQuality'),
+  <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px 16px">
+    ${field(t('tasks.kSource'),
+      `<input class="input mono" id="edUrl" value="${esc(d.url)}" placeholder="${t('tasks.pasteUrlPh')}" />`,
+      `<div class="hintline">${t('tasks.urlEditTip')}</div>`, true)}
+    ${field(t('settings.pfColPlatform'), selF('edPlat', platOpts, d.platform))}
+    ${field(t('tasks.csvRoom'),
+      `<input class="input mono" id="edRoom" value="${esc(d.displayRoom)}" placeholder="${roomPh}" />`)}
+    ${field(t('tasks.anchorNameLabel'),
+      `<input class="input" id="edAnchor" value="${esc(d.anchorName)}" placeholder="${t('tasks.anchorPh')}" />`)}
+    ${field(t('tasks.colQuality'),
       `<div class="mini-row" id="edQGrid" style="justify-content:flex-start">
         ${QUALITY_CARDS.map((q) => `<span class="mini${d.quality === q.id ? ' sel' : ''}" data-q="${q.id}" title="${esc(t(q.resKey))} · ${esc(t(q.kbpsKey))}">${q.crown ? '★ ' : ''}${t(q.labelKey)}</span>`).join('')}
       </div>`,
-      `<div class="hintline" id="edQualityHint">${qualityHint(d)}</div>`)}
-    ${cell('',
-      `${flx(t('settings.tabNaming'))}${selHtml('edNaming', namingOpts, d.namingProfileId, 150)}
-      ${flx(t('tasks.kPoll'))}${selHtml('edPoll', pollOpts, String(d.pollIntervalSec), 104)}
-      ${flx(t('tasks.kReconnect'))}${selHtml('edReconnect', rcOpts, String(d.reconnectMax), 104)}`,
+      `<div class="hintline" id="edQualityHint">${qualityHint(d)}</div>`, true)}
+    ${field(t('settings.tabNaming'), selF('edNaming', namingOpts, d.namingProfileId),
       `<div class="hintline" id="edNamingHint">${namingHint(d)}</div>`)}
-    ${cell(t('tasks.csvSegment'),
-      `<div class="row" style="align-items:center;gap:8px;flex-wrap:wrap">
-        ${selHtml('edSegMode', segOpts, d.segmentMode, 110)}
-        ${segTag('edSegMinTag', t('tasks.segMinutesLabel'), segTimeStyle)}<select class="select" id="edSegMin" style="width:auto;min-width:80px;${segTimeStyle}">${segMinOpts}</select>
-        ${segTag('edSegSizeTag', t('tasks.segSizeLabel'), segSizeStyle)}<select class="select" id="edSegSize" style="width:auto;min-width:80px;${segSizeStyle}">${segSizeOpts}</select>
-      </div>`,
-      `<div class="hintline" id="edSegHint">${segmentHint(d)}</div>`)}
-    ${cell('',
-      `${flx(t('tasks.autoRecordLabel'))}${switchEl(d.autoRecord, 'id="edAuto"')}
-      ${flx(t('tasks.monitorOnlyLabel'))}${switchEl(d.monitorOnly, 'id="edMonitor"')}`,
+    ${field(t('tasks.kPoll'), selF('edPoll', pollOpts, String(d.pollIntervalSec)))}
+    ${field(t('tasks.kReconnect'), selF('edReconnect', rcOpts, String(d.reconnectMax)))}
+  </div>
+  <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px 16px;margin-top:14px">
+    ${field(t('tasks.csvSegment'), selF('edSegMode', segOpts, d.segmentMode))}
+    <div id="edSegMinCell" style="${segTimeStyle}">${field(t('tasks.segMinutesLabel'), selF('edSegMin', segMinRaw, String(d.segmentMinutes)))}</div>
+    <div id="edSegSizeCell" style="${segSizeStyle}">${field(t('tasks.segSizeLabel'), selF('edSegSize', segSizeRaw, String(d.segmentSizeMB)))}</div>
+    ${field(t('tasks.autoRecordLabel'), switchEl(d.autoRecord, 'id="edAuto"'))}
+    ${field(t('tasks.monitorOnlyLabel'), switchEl(d.monitorOnly, 'id="edMonitor"'),
       `<div class="hintline" id="edMonitorHint">${d.monitorOnly ? t('tasks.monitorOn') : t('tasks.monitorOff')}</div>`)}
   </div>
   ${d.id ? `<div class="sect"><span class="n">≡</span>${t('tasks.segHeader', (d.task && (d.task.segments || []).length) || 0)}</div>
@@ -681,25 +673,15 @@ function taskShell(d) {
   <div id="edResolved"></div>`;
 }
 
-function selHtml(id, options, value, minW = 150) {
-  return `<select class="select" id="${id}" style="width:auto;min-width:${minW}px">${optList(options, value)}</select>`;
-}
-
 function qualityHint(d) {
   if (d.recording) return t('tasks.qualityFallback') + t('tasks.currentSessionNote');
   return `${t('tasks.currentSel')}<b style="color:var(--txt)">${esc(t(QNAME[d.quality]) || d.quality || 'origin')}</b>${t('tasks.qualityHint')}`;
 }
 
-function segmentHint(d) {
-  const t0 = { segmentMode: d.segmentMode, segmentMinutes: d.segmentMinutes, segmentSizeMB: d.segmentSizeMB };
-  const txt = segmentStrategyText(t0);
-  return `${t('tasks.currentSel')}<b style="color:var(--txt)">${esc(txt)}</b>${d.recording ? t('tasks.currentSessionNote') : ''}`;
-}
-
 function namingHint(d) {
   const p = d.profiles.find((x) => x.id === d.namingProfileId) || d.profiles[0];
   if (!p) return '';
-  return esc((p.dirTemplate || '{平台}/{主播}/{日期}') + ' / ' + (p.fnTemplate || '{日期}_{主播}_{序号}'));
+  return t('tasks.namingExample') + esc((p.dirTemplate || '{平台}/{主播}/{日期}') + '-' + (p.fnTemplate || '{日期}_{主播}_{序号}'));
 }
 
 function segTableHtml(task) {
@@ -734,11 +716,6 @@ function roomLabel(x) {
   if (!x) return '';
   if (x.platform === 'douyin') return String(x.shortId || '').trim() || String(x.roomId || '');
   return String(x.roomId || '');
-}
-function platHintText(p) {
-  const base = t('tasks.currentPlatform') + (p ? platNameOf(p) : t('tasks.notSpecified'));
-  if (p === 'douyin') return base + t('tasks.douyinHandleHint');
-  return base;
 }
 
 const TOKENS = ['{日期}', '{主播}', '{平台}', '{房间号}', '{标题}', '{清晰度}', '{序号}', '{时间}', '{任务}', '{分辨率}', '{时长}', '{自定义}'];
@@ -788,17 +765,15 @@ function bindEditor(d, body, ctx) {
   const namingSel = body.querySelector('#edNaming');
   const segMode = body.querySelector('#edSegMode');
 
-  const setPlatHint = () => {
-    const el = body.querySelector('#edPlatHint'); if (el) el.innerHTML = platHintText(d.platform);
+  const setRoomPh = () => {
     if (roomInput) roomInput.placeholder = d.platform === 'douyin' ? t('tasks.douyinRoomPh') : t('tasks.roomPh');
   };
   const setQHint = () => { const el = body.querySelector('#edQualityHint'); if (el) el.innerHTML = qualityHint(d); };
   const setNamingHint = () => { const el = body.querySelector('#edNamingHint'); if (el) el.innerHTML = namingHint(d); };
   function setSegUI() {
     const show = (id, on) => { const el = body.querySelector('#' + id); if (el) el.style.display = on ? '' : 'none'; };
-    show('edSegMin', d.segmentMode === 'time'); show('edSegMinTag', d.segmentMode === 'time');
-    show('edSegSize', d.segmentMode === 'size'); show('edSegSizeTag', d.segmentMode === 'size');
-    const h = body.querySelector('#edSegHint'); if (h) h.innerHTML = segmentHint(d);
+    show('edSegMinCell', d.segmentMode === 'time');
+    show('edSegSizeCell', d.segmentMode === 'size');
   }
 
   async function doResolve({ silent } = {}) {
@@ -826,7 +801,7 @@ function bindEditor(d, body, ctx) {
         if (anchorInput) anchorInput.value = clean;
       }
       const rc = body.querySelector('#edResolved'); if (rc) rc.innerHTML = resolvedCard(d);
-      setPlatHint();
+      setRoomPh();
       if (!silent) toast(t('tasks.resolvedOk'));
       return r;
     } catch (e) {
@@ -850,7 +825,7 @@ function bindEditor(d, body, ctx) {
   if (resolveBtn) resolveBtn.onclick = d.onResolve;
   if (platSel) platSel.onchange = () => {
     d.platform = platSel.value;
-    setPlatHint();
+    setRoomPh();
     const rid = roomInput ? roomInput.value.trim() : '';
     if (rid) autoFromRoom();
   };
