@@ -10,7 +10,7 @@ import { nowIso, ensureDir, safeJoin, sleep } from './util.js';
 const BACKOFF = [2000, 4000, 8000, 16000, 30000];
 
 export class Recorder extends EventEmitter {
-  constructor({ task, settings, naming, logger, resolveStream, mediaMod = media }) {
+  constructor({ task, settings, naming, logger, resolveStream, mediaMod = media, probeOffline = null }) {
     super();
     this.task = task;
     this.settings = settings;
@@ -18,6 +18,7 @@ export class Recorder extends EventEmitter {
     this.logger = logger;
     this.resolveStream = resolveStream;
     this.media = mediaMod;
+    this.probeOffline = probeOffline; // 可选：async () => boolean，判断主播是否已下播（下播时正常收尾而不是断流重连报错）
     this.child = null;
     this.stopping = false;
     this.paused = false;
@@ -273,6 +274,18 @@ export class Recorder extends EventEmitter {
   }
 
   async _handleUnexpectedExit(code, signal) {
+    // 主播已下播导致的流中断：正常收尾（reason=offline），不进入断流重连、不报"录制异常结束"
+    if (this.probeOffline) {
+      try {
+        const offline = await this.probeOffline();
+        if (offline === true) {
+          this.logger.info(`检测到主播已下播，正常结束录制（ffmpeg exit=${code}）`, this._meta());
+          this.reconnectAttempt = 0;
+          await this._finalize('offline');
+          return;
+        }
+      } catch { /* 探活失败按仍在直播处理，走重连 */ }
+    }
     const max = Number(this.settings.reconnectMax) || 5;
     this.reconnectAttempt += 1;
     const tail = this.lastStderrError || this._stderrTail.slice(-2).join(' | ');

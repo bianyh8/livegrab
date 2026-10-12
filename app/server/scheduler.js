@@ -321,6 +321,15 @@ export class Scheduler {
     const recorder = new Recorder({
       task, settings, naming: this.store.naming, logger: this.logger, resolveStream,
       mediaMod: this.mediaMod || undefined,
+      // 下播检测：ffmpeg 意外退出时先探一次直播状态，主播已下播就直接正常收尾，不进入断流重连
+      probeOffline: async () => {
+        try {
+          const info = await probeLive(task.sourceUrl || `${task.platform}:${task.roomId}`, {
+            platform: task.platform, settings, logger: this.logger,
+          });
+          return info.liveStatus === 'offline';
+        } catch { return false; }
+      },
     });
     this.recorders.set(task.id, recorder);
 
@@ -407,8 +416,24 @@ export class Scheduler {
     task.segmentIndex = session.segments.length;
     task.currentFile = null;
     this.logger.info(`分段 #${seg.index} 收尾：${seg.name}（${formatBytes(seg.bytes)} · ${formatDuration(seg.durationSec)}）`, { taskId: task.id, taskName: task.anchorName });
+    // 边录边转封装：每个分段一录完就按配置立即转 MP4（整场结束后 autoRemux 会跳过已转的分段）。
+    // 仅在不自动合并时生效（合并需要源 .ts，先合并再统一转封装）。
+    const canRemuxNow = task.remuxToMp4 !== false && !this.store.settings.autoMerge && ['ts', 'flv', 'mkv'].includes(item.ext);
+    if (canRemuxNow) this._segmentRemuxNow(task, session, item, seg).catch(() => {});
     this._throttledPersist();
     this.onEvent({ type: 'task', task });
+  }
+
+  /** 分段录完立刻转封装 mp4（跟随 remuxToMp4 / keepSource 配置）；失败不阻塞，源文件保留 */
+  async _segmentRemuxNow(task, session, item, seg) {
+    try {
+      const mp4 = await this.storage.remux(item.id);
+      this.logger.info(`分段 #${seg.index} 已立即转封装：${mp4.name}`, { taskId: task.id, taskName: task.anchorName });
+      // keepSource 为全局设置（与收尾 autoRemux 一致）：false 时转完即删源 .ts
+      if (this.store.settings.keepSource === false) await this.storage._dropSourceSegment(item, session);
+    } catch (e) {
+      this.logger.warn(`分段 #${seg.index} 立即转封装失败（源文件保留）：${e.message}`, { taskId: task.id, taskName: task.anchorName });
+    }
   }
 
   _throttledPersist() {
@@ -772,6 +797,12 @@ export class Scheduler {
             this.onEvent({ type: 'task', task });
           }
         } else {
+          // 正在录制时检测到主播下播：正常收尾当前分段（reason=offline），不报"录制异常结束"；
+          // autoRecord 保持开启，下次开播自动续录。已是 stopping 说明正在收尾，不重复触发。
+          if (task.status === 'recording') {
+            await this.stopTask(task.id, { reason: 'offline' });
+            continue;
+          }
           if (task.status !== 'waiting') {
             task.status = 'waiting';
             task.statusMessage = task.monitorOnly ? '未开播 · 仅监控' : (task.endedAt ? '本场已结束，等待下次开播' : '未直播，等待开播');

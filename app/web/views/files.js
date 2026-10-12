@@ -48,12 +48,14 @@ async function tick(ctx, initial) {
   }
 }
 
-/* 把「整场」拍平成「单个文件」行：分段 + 转封装/合并副本 + mp4/m4a；按 id 去重（同一成品可能同时挂在 extras 与 mp4） */
+/* 把「整场」拍平成「单个文件」行：分段 + 转封装/合并副本 + mp4/m4a；
+   按 id 去重（同一成品可能同时挂在 extras 与 mp4），再按路径去重（历史 bug 可能把同一物理文件登记成多个条目） */
 function allFiles() {
   const out = [];
   for (const s of state.sessions) {
     const seen = new Set();
-    const push = (f, tag) => { if (f && f.id && !seen.has(f.id)) { seen.add(f.id); out.push({ f, s, tag }); } };
+    const seenPath = new Set();
+    const push = (f, tag) => { if (f && f.id && !seen.has(f.id) && !seenPath.has(f.path)) { seen.add(f.id); seenPath.add(f.path); out.push({ f, s, tag }); } };
     (s.segments || []).forEach((x) => push(x, null));
     (s.extras || []).forEach((x) => push(x, x.kind === 'm4a' ? 'M4A' : x.kind === 'merged' ? '合并' : 'MP4'));
     if (s.mp4) push(s.mp4, 'MP4');

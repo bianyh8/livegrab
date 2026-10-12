@@ -214,7 +214,9 @@ function row(item) {
   const name = state.platforms.find((p) => p.id === item.platform);
   const checked = state.selected.has(item.id) ? ' checked' : '';
   const isLive = item.liveStatus === 'live' || item.status === 'recording';
-  const avatarImg = isLive
+  // 头像规则：未录制过 → 主播平台头像；已有录制或正在直播/录制 → 录像首帧（/api/tasks/:id/thumb）
+  const hasRec = (item.segmentIndex || 0) > 0 || (item.totalBytes || 0) > 0 || !!item.sessionId;
+  const avatarImg = (isLive || hasRec)
     ? `<img class="tk-thumb" loading="lazy" src="/api/tasks/${esc(item.id)}/thumb" alt="" onerror="this.style.display='none'" />`
     : (item.avatar ? `<img class="tk-thumb" loading="lazy" src="${esc(item.avatar)}" alt="" onerror="this.style.display='none'" />` : '');
   return `<tr data-id="${esc(item.id)}">

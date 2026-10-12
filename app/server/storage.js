@@ -236,13 +236,16 @@ export class Storage {
         }
       }
       if (session) {
-        session.segments = (session.segments || []).filter((x) => x.id !== fid);
-        session.extras = (session.extras || []).filter((x) => x.id !== fid);
-        if (session.merged?.id === fid) session.merged = null;
-        if (session.mp4?.id === fid) session.mp4 = null;
+        // 按 id 且按路径清理：同一物理文件可能被登记为多个条目（历史重复/场次+未登记），
+        // 删除一个必须把同路径的其它记录一并清掉，否则残留条目会"文件缺失、无法播放"。
+        const samePath = (x) => x && x.path === file.path;
+        session.segments = (session.segments || []).filter((x) => x.id !== fid && !samePath(x));
+        session.extras = (session.extras || []).filter((x) => x.id !== fid && !samePath(x));
+        if (session.merged && (session.merged.id === fid || samePath(session.merged))) session.merged = null;
+        if (session.mp4 && (session.mp4.id === fid || samePath(session.mp4))) session.mp4 = null;
         await this.store.saveSession(session);
       } else {
-        this.store.state.external = this.store.state.external.filter((x) => x.id !== fid);
+        this.store.state.external = this.store.state.external.filter((x) => x.id !== fid && x.path !== file.path);
       }
     }
     // 清理因删除而空的目录链
@@ -386,8 +389,12 @@ export class Storage {
       };
       if (session) {
         session.extras = session.extras || [];
+        // 同路径旧条目（重复转封装产生的历史重复）先清掉，避免文件列表出现"同名两份"
+        session.extras = session.extras.filter((x) => x.path !== outPath);
         session.extras.push(item);
-        if (!session.mp4 && (session.segments || []).length <= 1) session.mp4 = item;
+        // 场次级成品 mp4：取第一个分段转出的 mp4（整场代表，供刮削/列表使用）；同路径旧指针一并替换
+        if (session.mp4 && session.mp4.path === outPath) session.mp4 = item;
+        if (!session.mp4 && file.kind === 'segment') session.mp4 = item;
         this._dropExternalByPath(outPath); // 防止同名"未登记"条目残留（扫描可能先一步登记过这个文件）
         await this.store.saveSession(session);
       } else {
@@ -462,7 +469,9 @@ export class Storage {
   /** 录制收尾后的自动转封装（D5）；转 mp4 后按系统设置 keepSource 决定是否删除源 .ts */
   async autoRemux(session) {
     if (!this.store.settings.remuxToMp4) return [];
-    const segs = (session.segments || []).filter((f) => f.ext === 'ts' && f.status !== 'missing');
+    // 边录边转封装已把部分分段转完：跳过有对应 mp4 的分段，避免重复转、重复登记
+    const segs = (session.segments || []).filter((f) => f.ext === 'ts' && f.status !== 'missing'
+      && !(session.extras || []).some((m) => m.sourceFileId === f.id));
     if (!segs.length) return [];
     if (this.store.settings.autoMerge && segs.length > 1) {
       await this.mergeSession(session.id).catch((e) => this.logger.warn(`自动合并失败：${e.message}`));
@@ -496,7 +505,10 @@ export class Storage {
   async writeArt(session) {
     try {
       const segs = (session.segments || []).filter((f) => f && f.path && !/\.(m4a|mp3|aac|wav)$/i.test(f.path));
-      const primary = (session.mp4 && session.mp4.path) || (session.merged && session.merged.path) || (segs[0] && segs[0].path) || null;
+      // 整场代表文件：成品 mp4 → 合并档 → 首个分段 → extras 里的首个 mp4。
+      // （边录边转封装 + keepSource=false 时分段可能已删除，必须兜底到 extras 的 mp4，保证 nfo 始终生成且代表整场）
+      const mp4cand = (session.extras || []).find((f) => f && f.path && (f.kind === 'mp4' || f.kind === 'm4a'));
+      const primary = (session.mp4 && session.mp4.path) || (session.merged && session.merged.path) || (segs[0] && segs[0].path) || (mp4cand && mp4cand.path) || null;
       if (!primary) return false;
       const st = await fsp.stat(primary).catch(() => null);
       if (!st || st.size <= 0) return false;
