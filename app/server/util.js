@@ -54,7 +54,10 @@ export async function statSafe(p) {
 }
 
 export async function readJson(file, fallback = null) {
-  try { return JSON.parse(await fsp.readFile(file, 'utf8')); } catch { return fallback; }
+  try {
+    const raw = await fsp.readFile(file, 'utf8');
+    return JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+  } catch { return fallback; }
 }
 
 export async function writeJsonAtomic(file, data) {

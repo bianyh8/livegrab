@@ -170,6 +170,8 @@ async function enterApp(user) {
   await handleRoute(true);
 }
 
+function hideSplash() { const s = document.getElementById('bootSplash'); if (s) s.remove(); }
+
 async function checkAuth() {
   let mode = 'login';
   try {
@@ -180,16 +182,18 @@ async function checkAuth() {
     if (e instanceof ApiError && e.code === 'NETWORK') {
       applyLoginMode('login');
       showLoginPage();
+      hideSplash();
       showLoginErr(t('common.errConn', e.message));
       return;
     }
   }
   try {
     const me = await api.authMe();
-    if (me && (me.username || me.ok)) { await enterApp(me); return; }
+    if (me && (me.username || me.ok)) { await enterApp(me); hideSplash(); return; }
   } catch { /* 未登录，进入登录页 */ }
   applyLoginMode(mode);
   showLoginPage();
+  hideSplash();
 }
 
 function bindLogin() {

@@ -551,7 +551,7 @@ const DEFAULT_DICT = {
   "tasks.deleteTitle": "删除任务",
   "tasks.deletedOk": "已删除任务（已录文件保留）",
   "tasks.detailTitle": "任务详情",
-  "tasks.douyinHandleHint": " · 可直接填抖音号（如 xyr_1208）、房间号或粘贴直播间/分享链接，自动识别主播与房间",
+  "tasks.douyinHandleHint": " · 可直接填抖音号、房间号或粘贴直播间/分享链接，自动识别主播与房间",
   "tasks.douyinRoomPh": "抖音号 / 房间号 / 直播链接",
   "tasks.dupRoom": "该直播间已有启用中的任务：1 个任务对应 1 个直播间，请编辑现有任务或先停用",
   "tasks.edit": "编辑",

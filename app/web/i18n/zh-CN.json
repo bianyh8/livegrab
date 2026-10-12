@@ -461,7 +461,7 @@
   "tasks.saveFail": "保存失败",
   "tasks.currentPlatform": "当前平台：",
   "tasks.notSpecified": "未指定",
-  "tasks.douyinHandleHint": " · 可直接填抖音号（如 xyr_1208）、房间号或粘贴直播间/分享链接，自动识别主播与房间",
+  "tasks.douyinHandleHint": " · 可直接填抖音号、房间号或粘贴直播间/分享链接，自动识别主播与房间",
   "tasks.douyinRoomPh": "抖音号 / 房间号 / 直播链接",
   "tasks.wan": "万",
   "settings.recStorageTitle": "存储与清理",

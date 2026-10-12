@@ -676,6 +676,7 @@ export class Scheduler {
     task.title = info.title || task.title;
     task.avatar = info.avatar || task.avatar;
     if (info.avatar) await this.storage.saveAvatar(task, info.avatar); // 刷新头像落盘缓存
+    if (task.platform === 'douyin' && info.shortId) task.shortId = String(info.shortId); // 批量刷新后回写短号（抖音号）
     task.liveStatus = info.liveStatus;
     task.statusMessage = task.manualHeld
       ? (info.liveStatus === 'live' ? '已手动停止 · 直播中未录制，等你手动开始' : '已手动停止 · 未开播，等你手动开始')
@@ -696,6 +697,7 @@ export class Scheduler {
       task.title = info.title || task.title;
       task.avatar = info.avatar || task.avatar;
       if (info.avatar) await this.storage.saveAvatar(task, info.avatar); // 手动检查时刷新头像缓存
+      if (task.platform === 'douyin' && info.shortId) task.shortId = String(info.shortId); // 检查后回写短号（抖音号）
       task.liveStatus = info.liveStatus;
       task.statusMessage = task.manualHeld
         ? (info.liveStatus === 'live' ? '已手动停止 · 直播中未录制，等你手动开始' : '已手动停止 · 未开播，等你手动开始')

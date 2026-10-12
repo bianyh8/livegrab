@@ -7,8 +7,11 @@
 <link rel="stylesheet" href="./app.css" />
 </head>
 <body>
+<!-- ================= 启动加载占位：boot() 校验会话期间显示，避免刷新闪现登录页 ================= -->
+<div id="bootSplash" class="boot-splash"><div class="boot-logo">L</div><div class="boot-name">LiveGrab</div></div>
 <!-- ================= 登录页 / 首次初始化（未登录时的唯一入口） ================= -->
-<div class="login" id="loginPage">
+<!-- 默认 hide：避免刷新时先闪现登录页，由 boot() 校验会话后再决定显示登录还是主界面 -->
+<div class="login hide" id="loginPage">
   <div class="login-visual">
     <div class="lv-head">
       <div class="logo" style="width:38px;height:38px;flex:0 0 38px;border-radius:11px">L</div>
@@ -78,7 +81,6 @@
 </div>
 
 <div class="app" id="appRoot" style="display:none">
-  <!-- ============ 侧边栏 ============ -->
   <aside class="sidebar">
     <div class="brand">
       <div class="logo">Live</div>

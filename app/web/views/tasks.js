@@ -482,15 +482,15 @@ function exportCsv() {
 /* ================= 统一任务弹窗：新建 / 详情 / 编辑共用同一模板，每行一个栏位，详情即编辑 ================= */
 
 /**
- * 网格栏位：左侧标签（62px，与控件垂直居中）＋ 右侧控件 ＋ 可选副提示区。
- * span=true 时横跨两列（长内容一行：直播地址/清晰度/分段策略/平台房间主播行）。
- * label 传 '' 时省略左侧标签（多字段合并行）。
+ * 栏位行：左标签（62px，可选）＋ 控件区（flex:1，space-between 左右分布）。
+ * 这样每一行都占满相同宽度，内容左右分布对齐；长内容行（直播地址/清晰度/分段策略）标签在左，
+ * 多字段行（平台房间主播/状态命名/轮询重连/开关）标签内联、两端对齐。
  */
-function cell(label, ctl, sub = '', span = false) {
-  return `<div${span ? ' style="grid-column:1/-1"' : ''}>
-    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+function cell(label, ctl, sub = '') {
+  return `<div>
+    <div style="display:flex;align-items:center;gap:8px">
       ${label ? `<span style="flex:0 0 62px;font-size:12.5px;color:var(--txt-2)">${label}</span>` : ''}
-      ${ctl}
+      <div style="flex:1;min-width:0;display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap">${ctl}</div>
     </div>
     ${sub}
   </div>`;
@@ -578,6 +578,13 @@ async function openTaskDialog(ctx, id) {
       b1.textContent = d.id ? t('common.close') : t('common.cancel');
       b1.onclick = close;
       buttons.push(b1);
+      // 解析按钮：放在「取消/关闭」与「创建/保存修改」之间
+      const br = document.createElement('button');
+      br.className = 'btn';
+      br.id = 'edResolve';
+      br.textContent = t('tasks.resolve');
+      br.onclick = () => { if (d.onResolve) d.onResolve(); };
+      buttons.push(br);
       if (d.id && d.task) {
         if (d.task.status === 'recording') {
           const bp = document.createElement('button');
@@ -637,44 +644,44 @@ function taskShell(d) {
   const flx = (s) => `<span style="font-size:12.5px;color:var(--txt-2);white-space:nowrap">${s}</span>`;
   // 子选项小标签（与 .hintline 同风格，随模式显隐）
   const segTag = (id, text, style) => `<span class="hintline" style="margin:0;${style}" id="${id}">${text}</span>`;
-  // 两列网格：长内容（直播地址/清晰度/分段策略/平台房间主播行）跨整行，短字段左右两两对齐
+  // 每行 flex 布局：标签 + 控件区占满整行宽度，控件区 space-between 左右分布，保证各行等宽
   return `
-  <div style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:13px 20px">
+  <div style="display:flex;flex-direction:column;gap:13px">
     ${cell(t('tasks.kSource'),
-      `<input class="input mono" id="edUrl" style="width:min(100%,300px)" value="${esc(d.url)}" placeholder="${t('tasks.pasteUrlPh')}" />
-      <button class="btn" id="edResolve">${t('tasks.resolve')}</button>`,
-      `<div class="hintline">${t('tasks.urlEditTip')}</div>`, true)}
+      `<input class="input mono" id="edUrl" style="flex:1;min-width:0" value="${esc(d.url)}" placeholder="${t('tasks.pasteUrlPh')}" />`,
+      `<div class="hintline">${t('tasks.urlEditTip')}</div>`)}
     ${cell('',
       `${flx(t('settings.pfColPlatform'))}${selHtml('edPlat', platOpts, d.platform, 92)}
       ${flx(t('tasks.csvRoom'))}<input class="input mono" id="edRoom" style="width:140px" value="${esc(d.displayRoom)}" placeholder="${roomPh}" />
       ${flx(t('tasks.anchorNameLabel'))}<input class="input" id="edAnchor" style="width:140px" value="${esc(d.anchorName)}" placeholder="${t('tasks.anchorPh')}" />`,
-      `<div class="hintline" id="edPlatHint">${platHintText(d.platform)}</div>`, true)}
+      `<div class="hintline" id="edPlatHint">${platHintText(d.platform)}</div>`)}
     ${cell(t('tasks.colQuality'),
-      `<div class="mini-row" id="edQGrid">
+      `<div class="mini-row" id="edQGrid" style="justify-content:flex-start">
         ${QUALITY_CARDS.map((q) => `<span class="mini${d.quality === q.id ? ' sel' : ''}" data-q="${q.id}" title="${esc(t(q.resKey))} · ${esc(t(q.kbpsKey))}">${q.crown ? '★ ' : ''}${t(q.labelKey)}</span>`).join('')}
       </div>`,
-      `<div class="hintline" id="edQualityHint">${qualityHint(d)}</div>`, true)}
-    ${cell(t('tasks.colLive'), `<div id="edInfo">${infoHtml(d)}</div>`)}
-    ${cell(t('settings.tabNaming'),
-      selHtml('edNaming', namingOpts, d.namingProfileId, 170),
+      `<div class="hintline" id="edQualityHint">${qualityHint(d)}</div>`)}
+    ${cell('',
+      `${flx(t('tasks.colLive'))}<div id="edInfo">${infoHtml(d)}</div>
+      ${flx(t('settings.tabNaming'))}${selHtml('edNaming', namingOpts, d.namingProfileId, 170)}`,
       `<div class="hintline" id="edNamingHint">${namingHint(d)}</div>`)}
-    ${cell(t('tasks.kPoll'),
-      selHtml('edPoll', pollOpts, String(d.pollIntervalSec), 118),
+    ${cell('',
+      `${flx(t('tasks.kPoll'))}${selHtml('edPoll', pollOpts, String(d.pollIntervalSec), 118)}
+      ${flx(t('tasks.kReconnect'))}${selHtml('edReconnect', rcOpts, String(d.reconnectMax), 118)}`,
       `<div class="hintline">${t('tasks.pollDetail', d.pollIntervalSec, d.startDelaySec, d.stopDelaySec)}</div>`)}
-    ${cell(t('tasks.kReconnect'), selHtml('edReconnect', rcOpts, String(d.reconnectMax), 118))}
     ${cell(t('tasks.csvSegment'),
       `<div class="row" style="align-items:center;gap:8px;flex-wrap:wrap">
-        ${selHtml('edSegMode', segOpts, d.segmentMode, 120)}
-        ${segTag('edSegMinTag', t('tasks.segMinutesLabel'), segTimeStyle)}<select class="select" id="edSegMin" style="width:auto;min-width:88px;${segTimeStyle}">${segMinOpts}</select>
-        ${segTag('edSegSizeTag', t('tasks.segSizeLabel'), segSizeStyle)}<select class="select" id="edSegSize" style="width:auto;min-width:88px;${segSizeStyle}">${segSizeOpts}</select>
-        ${segTag('edSegMergeTag', t('tasks.segProcessingLabel'), segInlineStyle)}<select class="select" id="edAutoMerge" style="width:auto;min-width:88px;${segInlineStyle}">
+        ${selHtml('edSegMode', segOpts, d.segmentMode, 110)}
+        ${segTag('edSegMinTag', t('tasks.segMinutesLabel'), segTimeStyle)}<select class="select" id="edSegMin" style="width:auto;min-width:80px;${segTimeStyle}">${segMinOpts}</select>
+        ${segTag('edSegSizeTag', t('tasks.segSizeLabel'), segSizeStyle)}<select class="select" id="edSegSize" style="width:auto;min-width:80px;${segSizeStyle}">${segSizeOpts}</select>
+        ${segTag('edSegMergeTag', t('tasks.segProcessingLabel'), segInlineStyle)}<select class="select" id="edAutoMerge" style="width:auto;min-width:80px;${segInlineStyle}">
           <option value="0"${!d.autoMerge ? ' selected' : ''}>${t('tasks.segKeepIndependent')}</option>
           <option value="1"${d.autoMerge ? ' selected' : ''}>${t('tasks.segMergeSingle')}</option>
         </select>
       </div>`,
-      `<div class="hintline" id="edSegHint">${segmentHint(d)}</div>`, true)}
-    ${cell(t('tasks.autoRecordLabel'), switchEl(d.autoRecord, 'id="edAuto"'))}
-    ${cell(t('tasks.monitorOnlyLabel'), switchEl(d.monitorOnly, 'id="edMonitor"'),
+      `<div class="hintline" id="edSegHint">${segmentHint(d)}</div>`)}
+    ${cell('',
+      `${flx(t('tasks.autoRecordLabel'))}${switchEl(d.autoRecord, 'id="edAuto"')}
+      ${flx(t('tasks.monitorOnlyLabel'))}${switchEl(d.monitorOnly, 'id="edMonitor"')}`,
       `<div class="hintline" id="edMonitorHint">${d.monitorOnly ? t('tasks.monitorOn') : t('tasks.monitorOff')}</div>`)}
   </div>
   ${d.id ? `<div class="sect"><span class="n">≡</span>${t('tasks.segHeader', (d.task && (d.task.segments || []).length) || 0)}</div>
@@ -793,7 +800,8 @@ function fmtOnline(n) {
 }
 
 function bindEditor(d, body, ctx) {
-  const resolveBtn = body.querySelector('#edResolve');
+  // 解析按钮在弹窗底部（取消与保存之间），不在 body 内 → 从整个 modal 里查
+  const resolveBtn = (body.closest('.modal') || body).querySelector('#edResolve');
   const urlInput = body.querySelector('#edUrl');
   const roomInput = body.querySelector('#edRoom');
   const anchorInput = body.querySelector('#edAnchor');
@@ -864,7 +872,9 @@ function bindEditor(d, body, ctx) {
     await doResolve({ silent: true });
   }
 
-  if (resolveBtn) resolveBtn.onclick = () => doResolve({ silent: false });
+  // 底部「解析」按钮（footer 在 bindEditor 之前创建，通过 d.onResolve 挂钩）
+  d.onResolve = () => doResolve({ silent: false });
+  if (resolveBtn) resolveBtn.onclick = d.onResolve;
   if (platSel) platSel.onchange = () => {
     d.platform = platSel.value;
     setPlatHint();
