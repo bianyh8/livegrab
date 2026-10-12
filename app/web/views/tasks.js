@@ -620,7 +620,8 @@ async function openTaskDialog(ctx, id) {
 }
 
 function taskShell(d) {
-  const platOpts = [{ v: '', label: t('tasks.platChoose') }, ...d.platforms.map((p) => ({ v: p.id, label: p.name }))];
+  // 新建任务时平台下拉第一项为空标签（不显示"选择平台"文字）
+  const platOpts = [{ v: '', label: '' }, ...d.platforms.map((p) => ({ v: p.id, label: p.name }))];
   const pollOpts = [...new Set([30, 60, 120, 180, 300, Number(d.pollIntervalSec) || 60])].map((v) => ({ v: String(v), label: `${v} ${t('common.seconds')}` }));
   const rcNums = [3, 5, 8, 10];
   if (!rcNums.includes(Number(d.reconnectMax))) rcNums.push(Number(d.reconnectMax));
