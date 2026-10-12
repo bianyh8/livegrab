@@ -155,7 +155,7 @@ export class Recorder extends EventEmitter {
       userAgent: this.settings.userAgent,
       isHttp: /^https?:/i.test(this.streamUrl || ''),
     });
-    this.logger.info(`启动 ffmpeg（第 ${startNumber} 段起 · ${this.qualityLabelText}）`, this._meta());
+    this.logger.info(`启动 ffmpeg（第 ${startNumber} 段起 · ${this.qualityLabelText} · 流地址 ${this.streamUrl}）`, this._meta());
     this.child = this.media.spawnFfmpeg({ args, onStderr: (line) => this._onStderr(line) });
     this.child.on('close', (code, signal) => this._onClose(code, signal));
     this.child.on('error', (e) => {
@@ -313,6 +313,7 @@ export class Recorder extends EventEmitter {
         { settings: this.settings, logger: this.logger },
       );
       if (stream?.url) { this.streamUrl = stream.url; this.headers = stream.headers || this.headers; }
+      this.logger.info(`重连成功，继续拉流（第 ${this.reconnectAttempt}/${max} 次 · 流地址 ${this.streamUrl || '(未知 URL)'}）`, this._meta());
       const segs = await this.scanSegments();
       const next = segs.length ? segs[segs.length - 1].index + 1 : this.startNumber;
       await this._spawn(next);

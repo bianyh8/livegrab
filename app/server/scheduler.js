@@ -397,7 +397,7 @@ export class Scheduler {
       task.failCount = 0;
       await this.store.saveTask(task);
       await this.store.saveSession(session);
-      this.logger.info(`开始录制：${task.anchorName || task.roomId} · ${started.qualityLabel} → ${path.basename(started.dir)}`, { taskId: task.id, taskName: task.anchorName });
+      this.logger.info(`开始录制：${task.anchorName || task.roomId}（${task.platformName || task.platform}）· ${started.qualityLabel} · 拉流 ${recorder.streamUrl || task.sourceUrl || `${task.platform}:${task.roomId}`} → ${path.basename(started.dir)}`, { taskId: task.id, taskName: task.anchorName });
       this.onEvent({ type: 'task', task });
       return { started: true, sessionId: session.id };
     } catch (e) {
@@ -534,6 +534,7 @@ export class Scheduler {
     let info = null;
     try {
       info = await resolveRoom(task.sourceUrl || `${task.platform}:${task.roomId}`, { platform: task.platform, settings: this.store.settings, logger: this.logger });
+      this.logger.info(`手动开始录制：${task.anchorName || task.roomId}（${task.platformName || task.platform}）· 开播检测${info.liveStatus === 'live' ? '：已开播' : '：未开播'}`, { taskId: task.id, taskName: task.anchorName });
     } catch (e) {
       this.logger.warn(`手动开始前的开播检测失败：${e.message}`, { taskId: task.id });
     }
@@ -586,6 +587,8 @@ export class Scheduler {
       this.onEvent({ type: 'task', task });
     }
     if (reason === 'user' && task.manualHeld) this._manualStopLiveRefresh(task).catch(() => {});
+    const why = reason === 'user' ? '用户手动停止' : reason === 'offline' ? '主播下播' : reason;
+    this.logger.info(`停止录制：${task.anchorName || task.roomId}（${task.platformName || task.platform}，${why}）`, { taskId: task.id, taskName: task.anchorName });
     return { stopped: true, segments: payload.segments?.length || 0, bytes: payload.bytes || 0 };
   }
 
@@ -662,6 +665,7 @@ export class Scheduler {
   async refreshTask(id) {
     const task = this.store.getTask(id);
     if (!task) throw new HttpError('NOT_FOUND', '任务不存在', 404);
+    this.logger.info(`批量刷新：${task.anchorName || task.roomId}（${task.platformName || task.platform}）`, { taskId: task.id, taskName: task.anchorName });
     let info;
     try {
       info = await resolveRoom(task.sourceUrl || `${task.platform}:${task.roomId}`, { platform: task.platform, settings: this.store.settings, logger: this.logger });
@@ -672,6 +676,7 @@ export class Scheduler {
       this.onEvent({ type: 'task', task });
       throw new HttpError('RESOLVE_FAIL', `刷新失败：${e.message}`, 502);
     }
+    this.logger.info(`批量刷新结果：${task.anchorName || task.roomId} → ${info.liveStatus === 'live' ? '已开播' : '未开播'}，主播「${info.anchorName || '—'}」`, { taskId: task.id, taskName: task.anchorName });
     if (!task.nameLocked) task.anchorName = info.anchorName || task.anchorName;
     task.title = info.title || task.title;
     task.avatar = info.avatar || task.avatar;
@@ -691,8 +696,10 @@ export class Scheduler {
   async checkTask(id) {
     const task = this.store.getTask(id);
     if (!task) throw new HttpError('NOT_FOUND', '任务不存在', 404);
+    this.logger.info(`手动检查：${task.anchorName || task.roomId}（${task.platformName || task.platform}）`, { taskId: task.id, taskName: task.anchorName });
     try {
       const info = await resolveRoom(task.sourceUrl || `${task.platform}:${task.roomId}`, { platform: task.platform, settings: this.store.settings, logger: this.logger });
+      this.logger.info(`手动检查结果：${task.anchorName || task.roomId} → ${info.liveStatus === 'live' ? '已开播' : '未开播'}`, { taskId: task.id, taskName: task.anchorName });
       if (!task.nameLocked) task.anchorName = info.anchorName || task.anchorName;
       task.title = info.title || task.title;
       task.avatar = info.avatar || task.avatar;
@@ -785,6 +792,8 @@ export class Scheduler {
         if (task.nextPollAt && now < task.nextPollAt) continue;
         const p = this.platformOf(task.platform);
         if (settings.platformEnabled?.[task.platform] === false) continue;
+        const pollLabel = `${task.anchorName || task.roomId || task.id}（${p?.name || task.platform}）`;
+        this.logger.info(`开始轮询直播间状态：${pollLabel}`, { taskId: task.id, taskName: task.anchorName });
 
         let info;
         try {
@@ -820,10 +829,12 @@ export class Scheduler {
         // 避免每次轮询重写主播名与标题（减少流量与资源消耗，且不覆盖用户自定义名称）。
         const wasLive = task.liveStatus === 'live';
         task.liveStatus = info.liveStatus; // 始终落盘真实直播状态，避免"状态未知"
+        this.logger.info(`${pollLabel}：${info.liveStatus === 'live' ? '已开播' : '未开播'}`, { taskId: task.id, taskName: task.anchorName });
 
         // 开播检测：当监控发现某直播间从"未直播"变为"直播"时通知一次（非录制开始/结束）
         if (info.liveStatus === 'live' && !wasLive) {
           const at = `${formatDate()} ${formatTime(new Date(), 'HH:mm:ss')}`;
+          this.logger.info(`检测到开播：${pollLabel}（${at}）`, { taskId: task.id, taskName: task.anchorName });
           const platDot = (p && p.name) || '直播';
           await this.notifier.send('live', '开始直播',
             `${platDot} 直播间 ${task.anchorName || task.roomId} 开始直播，时间：${at}`,
