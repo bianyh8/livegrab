@@ -699,12 +699,12 @@ table.tight th{padding:8px 12px}
   table.tk-tbl tr{position:relative}
   table.tk-tbl td:first-child{position:absolute;top:10px;right:12px;border:0;padding:0;z-index:2}
 
-  /* ---- 弹窗全屏 ---- */
+  /* ---- 弹窗全屏：flex 三段式（头固定 / 内容区内部滚动 / 底部按钮栏常驻），不依赖 sticky，兼容微信等旧 WebView ---- */
   .mask{padding:0}
-  .modal{width:100% !important;height:100%;max-height:100%;border-radius:0;border-left:0;border-right:0;border-top:0}
-  .modal-h{padding:14px 16px}
-  .modal-b{padding:16px 14px}
-  .modal-f{padding:12px 14px;padding-bottom:calc(12px + env(safe-area-inset-bottom))}
+  .modal{width:100% !important;height:100%;max-height:100%;border-radius:0;border-left:0;border-right:0;border-top:0;display:flex;flex-direction:column;overflow:hidden}
+  .modal-h{padding:14px 16px;position:static;flex:0 0 auto}
+  .modal-b{padding:16px 14px;flex:1 1 auto;overflow-y:auto}
+  .modal-f{padding:12px 14px;padding-bottom:calc(12px + env(safe-area-inset-bottom));position:static;flex:0 0 auto;flex-wrap:wrap}
   /* 任务弹窗网格：3 列 / 2 列 → 1 列（!important 覆盖 inline style） */
   .tk-grid3,.tk-grid2{grid-template-columns:1fr !important}
 
