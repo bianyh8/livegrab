@@ -550,12 +550,27 @@ async function main() {
   route('GET', '/api/tasks/:id/avatar', async (req, res) => {
     const task = store.getTask(req.params.id);
     if (!task) throw new HttpError('NOT_FOUND', '任务不存在', 404);
-    // 兼容对象型 avatar（斗鱼旧数据 {big,middle,small}）
+    // 本地缓存优先：点击解析/检查/开播才更新，平时一直用第一次缓存的（平台 CDN 热链、失效、断网都不影响）
+    if (task.avatarFile) {
+      const p = path.join(CONFIG_DIR, 'avatars', path.basename(String(task.avatarFile)));
+      const st = await fsp.stat(p).catch(() => null);
+      if (st && st.size > 0) {
+        const buf = await fsp.readFile(p);
+        const type = String(task.avatarFile).endsWith('.webp') ? 'image/webp'
+          : String(task.avatarFile).endsWith('.png') ? 'image/png' : 'image/jpeg';
+        res.writeHead(200, { 'Content-Type': type, 'Cache-Control': 'private, max-age=3600', 'Content-Length': buf.length });
+        res.end(buf);
+        return null;
+      }
+    }
+    // 无本地缓存（旧数据）：懒拉取一次并存盘，之后就走本地文件
     const raw = task.avatar;
     const url = typeof raw === 'string' ? raw : (raw && typeof raw === 'object' ? (raw.middle || raw.big || raw.small || '') : '');
     if (!url) throw new HttpError('NOT_FOUND', '任务无头像', 404);
     const got = await fetchAvatarBuf(url);
     if (!got) throw new HttpError('AVATAR_FAIL', '头像获取失败', 502);
+    const saved = await storage.saveAvatar(task, url);
+    if (saved) await store.saveTask(task);
     res.writeHead(200, { 'Content-Type': got.type, 'Cache-Control': 'private, max-age=3600', 'Content-Length': got.buf.length });
     res.end(got.buf);
     return null;

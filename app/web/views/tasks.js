@@ -898,6 +898,7 @@ async function submit(d, dialog, btn, ctx) {
   payload.autoMerge = d.autoMerge;
   payload.autoRecord = d.autoRecord;
   payload.monitorOnly = d.monitorOnly;
+  if (d.resolved && d.resolved.avatar) payload.avatar = d.resolved.avatar; // 点击解析后保存：头像落盘到本地目录
   if (d.anchorName && d.anchorName.trim()) { payload.anchorName = d.anchorName.trim(); payload.anchorNameLocked = true; } // 保存过非空主播名即锁定，解析刷新不再覆盖
 
   const old = btn.textContent;

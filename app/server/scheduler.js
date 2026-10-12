@@ -193,6 +193,10 @@ export class Scheduler {
     if (input.anchorNameLocked !== undefined) task.nameLocked = !!input.anchorNameLocked;
     this.applyEffective(task);
     await this.store.addTask(task);
+    if (task.avatar) { // 头像落盘缓存（点击解析/创建时更新）
+      const saved = await this.storage.saveAvatar(task, task.avatar);
+      if (saved) await this.store.saveTask(task);
+    }
     this.logger.info(`创建任务：${task.anchorName || task.roomId}（${p.name} · ${qualityLabel(task.quality)}）`, { taskId: task.id, taskName: task.anchorName });
     this.onEvent({ type: 'task', task });
     return task;
@@ -228,11 +232,14 @@ export class Scheduler {
     if (overrideChanged) task.overrides = overrides;
 
     const allowed = [
-      'anchorName', 'title', 'qualityFallback', 'segmentMinutes', 'segmentSizeMB',
+      'anchorName', 'title', 'avatar', 'qualityFallback', 'segmentMinutes', 'segmentSizeMB',
       'container', 'remuxToMp4', 'keepSource', 'autoMerge', 'autoRecord', 'monitorOnly',
       'pollIntervalSec', 'startDelaySec', 'stopDelaySec', 'roomId', 'nameLocked',
     ];
     for (const k of allowed) if (patch[k] !== undefined) task[k] = patch[k];
+    if (patch.avatar) { // 编辑器点击解析→保存时更新头像落盘；下载失败则保留旧缓存，接口仍回退本地文件
+      await this.storage.saveAvatar(task, patch.avatar);
+    }
     this.applyEffective(task);
     if (patch.quality !== undefined || overrideChanged) task.qualityActual = task.qualityActual || null;
     await this.store.saveTask(task);
@@ -509,6 +516,7 @@ export class Scheduler {
       if (!task.nameLocked) task.anchorName = info.anchorName || task.anchorName;
       task.title = info.title || task.title;
       task.avatar = info.avatar || task.avatar;
+      if (info.avatar) await this.storage.saveAvatar(task, info.avatar); // 手动开始（开播检测）时刷新头像缓存
       if (info.liveStatus === 'offline' && reason === 'manual') {
         task.status = 'waiting';
         task.statusMessage = '未直播，等待开播';
@@ -633,6 +641,7 @@ export class Scheduler {
       if (!task.nameLocked) task.anchorName = info.anchorName || task.anchorName;
       task.title = info.title || task.title;
       task.avatar = info.avatar || task.avatar;
+      if (info.avatar) await this.storage.saveAvatar(task, info.avatar); // 手动检查时刷新头像缓存
       task.liveStatus = info.liveStatus;
       task.statusMessage = task.manualHeld
         ? (info.liveStatus === 'live' ? '已手动停止 · 直播中未录制，等你手动开始' : '已手动停止 · 未开播，等你手动开始')

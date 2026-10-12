@@ -548,6 +548,38 @@ export class Storage {
     await fsp.writeFile(nfoPath, nfo, 'utf8');
   }
 
+  // ---------- 主播头像落盘缓存 ----------
+  // 点击解析 / 创建任务 / 检查直播 / 开播时调用：把平台头像下载到 <configDir>/avatars/<taskId>.<ext>。
+  // 平时头像接口直接读本地文件——只有再次解析才会更新，否则一直保持第一次缓存的（平台 CDN 热链/失效/断网都不影响显示）。
+  async saveAvatar(task, avatarUrl) {
+    const raw = avatarUrl || (task && task.avatar);
+    const url = typeof raw === 'string' ? raw : (raw && typeof raw === 'object' ? (raw.middle || raw.big || raw.small || '') : '');
+    if (!url || !task || !task.id) return null;
+    try {
+      const r = await fetch(url, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          'Accept': 'image/*',
+        },
+        redirect: 'follow',
+        signal: AbortSignal.timeout(8000),
+      });
+      if (!r.ok) return null;
+      const buf = Buffer.from(await r.arrayBuffer());
+      if (!buf.length || buf.length > 2 * 1024 * 1024) return null;
+      const ct = r.headers.get('content-type') || '';
+      const ext = ct.includes('webp') ? 'webp' : ct.includes('png') ? 'png' : 'jpg';
+      const file = `${task.id}.${ext}`;
+      const dir = path.join(this.store.configDir, 'avatars');
+      await ensureDir(dir);
+      await fsp.writeFile(path.join(dir, file), buf);
+      task.avatarFile = file;
+      return file;
+    } catch {
+      return null;
+    }
+  }
+
   // ---------- 保留策略 ----------
   async cleanup({ force = false } = {}) {
     const settings = this.store.settings;
