@@ -262,7 +262,7 @@ async function enterRoom(roomId, settings, logger) {
 
 export async function resolveRoom({ roomId, url = '', settings, logger, probe = false }) {
   const finalId = await normalizeDouyinId(url || roomId, settings, logger);
-  const { room, source, note } = await enterRoom(finalId || roomId, settings, logger);
+  const { room, source, note, shortId: webRid } = await enterRoom(finalId || roomId, settings, logger);
   if (room._fallback) {
     return {
       roomId: String(finalId || roomId),
@@ -291,8 +291,12 @@ export async function resolveRoom({ roomId, url = '', settings, logger, probe = 
     }
   }
   const status = room.status ?? room.room_status;
+  // 短号（前台展示用）：优先主播抖音号(unique_id/display_id)，其次移动端返回的数字短号，再退回 web_rid
+  const handle = String(stripEmoji(room.owner?.unique_id || room.owner?.display_id || room.owner?.short_id || '') || webRid || '');
+  logger?.debug(`抖音短号计算：source=${source} unique=${room.owner?.unique_id || ''} display=${room.owner?.display_id || ''} short=${room.owner?.short_id || ''} webRid=${webRid || ''} → "${handle}"`, {});
   return {
     roomId: String(room.id_str || finalId || roomId),
+    shortId: handle,
     anchorName: stripEmoji(room.owner?.nickname || ''),
     title: room.title || '',
     avatar: (room.owner?.avatar_thumb?.url_list || [])[0] || '',

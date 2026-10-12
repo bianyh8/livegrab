@@ -466,7 +466,7 @@ function exportCsv() {
   if (!list.length) { toast(t('tasks.noExport'), 'warn'); return; }
   const head = [t('tasks.csvId'), t('tasks.csvAnchor'), t('tasks.csvTitle'), t('settings.pfColPlatform'), t('tasks.csvRoom'), t('tasks.colQuality'), t('tasks.csvSegment'), t('tasks.csvStatus'), t('tasks.csvDuration'), t('tasks.csvSize'), t('tasks.csvCreated')];
   const rows = list.map((t) => [
-    t.id, t.anchorName || t.name || '', t.title || '', platName(t.platform) || t.platform || '', t.roomId || '',
+    t.id, t.anchorName || t.name || '', t.title || '', platName(t.platform) || t.platform || '', roomLabel(t),
     qualityLabelOf(t), segmentStrategyText(t), (t.status || ''),
     formatDuration(Number(t.totalDurationSec) || Number(t.live && t.live.elapsedSec) || 0),
     formatBytes(Number(t.totalBytes) || Number(t.live && t.live.bytes) || 0),
@@ -522,11 +522,14 @@ async function openTaskDialog(ctx, id) {
     url: task ? (task.sourceUrl || '') : '',
     platform: task ? task.platform : '',
     roomId: task ? String(task.roomId || '') : '',
+    shortId: task ? String(task.shortId || '') : '',
+    // 房间号输入框显示值：抖音显示短号（抖音号），其余平台显示房间号；解析后回填短号
+    displayRoom: task ? ((task.platform === 'douyin' && task.shortId) ? String(task.shortId) : String(task.roomId || '')) : '',
     anchorName: task ? (task.anchorName || '') : '',
     anchorEdited: false,
     resolved: task ? {
       anchorName: task.anchorName, title: task.title, avatar: task.avatar,
-      platform: task.platform, roomId: task.roomId,
+      platform: task.platform, roomId: task.roomId, shortId: task.shortId,
       liveStatus: task.liveStatus === 'offline' ? 'offline' : 'live',
       online: null, qualityOptions: [],
     } : null,
@@ -629,7 +632,7 @@ function taskShell(d) {
       `<div class="hintline">${t('tasks.urlEditTip')}</div>`)}
     ${fld(t('settings.pfColPlatform'), selHtml('edPlat', platOpts, d.platform))}
     ${fld(t('tasks.csvRoom'),
-      `<input class="input mono" id="edRoom" style="width:210px" value="${esc(d.roomId)}" placeholder="${roomPh}" />`,
+      `<input class="input mono" id="edRoom" style="width:210px" value="${esc(d.displayRoom)}" placeholder="${roomPh}" />`,
       `<div class="hintline" id="edPlatHint">${platHintText(d.platform)}</div>`)}
     ${fld(t('tasks.anchorNameLabel'), `<input class="input" id="edAnchor" style="width:240px" value="${esc(d.anchorName)}" placeholder="${t('tasks.anchorPh')}" />`)}
     ${fld(t('tasks.colQuality'),
@@ -738,6 +741,12 @@ const QUALITY_CARDS = [
 ];
 
 const QNAME = { origin: 'tasks.qOriginName', bluray: 'tasks.qBlurayName', uhd: 'tasks.qUhdName', hd: 'tasks.qHdName', sd: 'tasks.qSdName', audio: 'tasks.qAudioName' };
+/** 前台展示用房间号：抖音显示短号（抖音号），其余平台显示房间号 */
+function roomLabel(x) {
+  if (!x) return '';
+  if (x.platform === 'douyin') return String(x.shortId || '').trim() || String(x.roomId || '');
+  return String(x.roomId || '');
+}
 function platHintText(p) {
   const base = t('tasks.currentPlatform') + (p ? platNameOf(p) : t('tasks.notSpecified'));
   if (p === 'douyin') return base + t('tasks.douyinHandleHint');
@@ -764,7 +773,7 @@ function resolvedCard(d) {
                : '<span class="chip wait"><i class="dot"></i>' + t('tasks.notLive') + '</span>'}
       </div>
       <div style="font-size:11.5px;color:var(--txt-3);margin-top:3px">
-        ${t('tasks.roomNoShort', esc(r.roomId || '—'))}${r.platform === 'douyin' && /^\d{19}$/.test(String(r.roomId || '')) ? ' · ' + t('tasks.mappedRoomNo', esc(r.roomId)) : ''}${r.title ? ' · ' + esc(r.title) : ''}${r.online != null ? t('tasks.onlineNow', esc(fmtOnline(r.online))) : ''}${r.note ? ` · ${esc(r.note)}` : ''}
+        ${t('tasks.roomNoShort', esc((r.platform === 'douyin' && r.shortId) ? r.shortId : (r.roomId || '—')))}${r.title ? ' · ' + esc(r.title) : ''}${r.online != null ? t('tasks.onlineNow', esc(fmtOnline(r.online))) : ''}${r.note ? ` · ${esc(r.note)}` : ''}
       </div>
     </div>
   </div>`;
@@ -819,7 +828,10 @@ function bindEditor(d, body, ctx) {
       d.avatarDirty = true;
       d.platform = r.platform || d.platform;
       d.roomId = String(r.roomId || rid || '');
-      if (roomInput) roomInput.value = d.roomId; // 解析出的房间号直接回填
+      // 房间号输入框显示短号（抖音号）；内部 roomId 仍用 19 位内部号
+      d.shortId = r.shortId ? String(r.shortId) : '';
+      d.displayRoom = (d.platform === 'douyin' && d.shortId) ? d.shortId : d.roomId;
+      if (roomInput) roomInput.value = d.displayRoom;
       if (platSel && [...platSel.options].some((o) => o.value === d.platform)) platSel.value = d.platform;
       if (r.anchorName) {
         const clean = stripEmoji(r.anchorName);
@@ -842,7 +854,7 @@ function bindEditor(d, body, ctx) {
   async function autoFromRoom() {
     const rid = roomInput ? roomInput.value.trim() : '';
     if (!d.platform || !rid) return;
-    if (d.resolved && String(d.resolved.roomId) === rid) return; // 本房间已解析，不再重复请求
+    if (d.resolved && (String(d.resolved.roomId) === rid || (d.displayRoom && String(d.displayRoom) === rid))) return; // 本房间已解析，不再重复请求
     await doResolve({ silent: true });
   }
 
@@ -854,7 +866,7 @@ function bindEditor(d, body, ctx) {
     if (rid) autoFromRoom();
   };
   if (roomInput) {
-    roomInput.oninput = () => { d.roomId = roomInput.value.trim(); };
+    roomInput.oninput = () => { const v = roomInput.value.trim(); d.roomId = v; d.displayRoom = v; };
     roomInput.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); autoFromRoom(); } };
     roomInput.onblur = () => { autoFromRoom(); };
   }
@@ -908,6 +920,8 @@ async function submit(d, dialog, btn, ctx) {
   else if (d.platform && d.roomId) { payload.platform = d.platform; payload.roomId = d.roomId; }
   else if (url) payload.url = url;
   else { toast(t('tasks.fillLinkWarn'), 'warn'); return; }
+  // 抖音短号变化时同步提交，后台直接落库（无需重新解析）
+  if (d.platform === 'douyin' && d.shortId && d.shortId !== (d.task && d.task.shortId)) payload.shortId = d.shortId;
 
   payload.overrides = {};
   if (d.quality) payload.overrides.quality = d.quality;                      // '' = 跟随全局

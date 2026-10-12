@@ -163,18 +163,13 @@ export class Scheduler {
       room = { anchorName: input.anchorName || '', title: input.title || '', roomId, liveStatus: 'unknown', qualityOptions: p.qualities };
     }
 
-    // 抖音分享短链 / 主页链接 / 裸抖音号解析出 19 位内部号后，回写规范化地址（douyin:<长号>）：
-    // 避免每次轮询重复跳转，界面「直播地址」栏也能直接看到 19 位房间号
-    let canonicalSource = raw || `${platform}:${roomId}`;
-    if (platform === 'douyin' && room?.roomId && /^\d{19}$/.test(String(room.roomId)) && String(room.roomId) !== String(roomId)) {
-      canonicalSource = `douyin:${room.roomId}`;
-    }
-
     const task = Store.newTask({
       platform,
       platformName: p.name,
       roomId: String(room?.roomId || roomId),
-      sourceUrl: canonicalSource,
+      // 保留用户原始输入作为「直播地址」；短号（抖音号等）单独存 shortId 供前台展示，房间号仍用 19 位内部号
+      sourceUrl: raw || `${platform}:${roomId}`,
+      shortId: room?.shortId || '',
       anchorName: input.anchorName || room?.anchorName || '',
       title: input.title || room?.title || '',
       avatar: room?.avatar || '',
@@ -245,11 +240,11 @@ export class Scheduler {
     const allowed = [
       'anchorName', 'title', 'avatar', 'platform', 'sourceUrl', 'reconnectMax', 'qualityFallback', 'segmentMinutes', 'segmentSizeMB',
       'container', 'remuxToMp4', 'keepSource', 'autoMerge', 'autoRecord', 'monitorOnly',
-      'pollIntervalSec', 'startDelaySec', 'stopDelaySec', 'roomId', 'nameLocked',
+      'pollIntervalSec', 'startDelaySec', 'stopDelaySec', 'roomId', 'nameLocked', 'shortId',
     ];
     const oldSourceUrl = task.sourceUrl;
     for (const k of allowed) if (patch[k] !== undefined) task[k] = patch[k];
-    // 改了直播地址 → 后台重新解析，回填平台/房间号/主播名/标题/头像（解析失败保留原信息，下轮轮询再校正）
+    // 改了直播地址 → 后台重新解析，回填平台/房间号/主播名/标题/头像/短号（解析失败保留原信息，下轮轮询再校正）
     if (patch.sourceUrl && patch.sourceUrl !== oldSourceUrl) {
       try {
         const info = await resolveRoom(patch.sourceUrl, { platform: task.platform, settings: this.store.settings, logger: this.logger });
@@ -259,10 +254,7 @@ export class Scheduler {
         task.title = info.title || task.title;
         task.avatar = info.avatar || task.avatar;
         if (info.avatar) await this.storage.saveAvatar(task, info.avatar);
-        // 抖音分享短链解析出 19 位内部号后回写规范化地址，避免轮询重复跳转
-        if (task.platform === 'douyin' && info.roomId && /^\d{19}$/.test(String(info.roomId)) && !/^douyin:/i.test(task.sourceUrl)) {
-          task.sourceUrl = `douyin:${info.roomId}`;
-        }
+        if (task.platform === 'douyin' && info.shortId) task.shortId = String(info.shortId);
         this.logger.info(`修改直播地址后已重新解析：${task.anchorName || task.roomId}`, { taskId: id });
       } catch (e) {
         this.logger.warn(`修改直播地址后重解析失败（保留原信息）：${e.message}`, { taskId: id });

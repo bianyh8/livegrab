@@ -124,6 +124,7 @@ export async function resolveRoom(input, ctx = {}) {
   const info = await p.handler.resolveRoom({ roomId, url, settings: ctx.settings, logger: ctx.logger });
   return {
     platform: p.id, platformName: p.name, tier: p.tier, roomId: info.roomId || roomId,
+    shortId: info.shortId || '',
     url, anchorName: info.anchorName || '', title: info.title || '', avatar: info.avatar || '',
     liveStatus: info.liveStatus || 'unknown', online: info.online ?? null,
     qualityOptions: info.qualityOptions || p.qualities,

@@ -265,7 +265,7 @@ async function testResolvers() {
         data: {
           room: {
             id_str: '7694422853944462115', status: 2, title: '测试抖音直播间',
-            owner: { nickname: '抖音测试主播', avatar_thumb: { url_list: ['http://a/b.jpg'] } },
+            owner: { short_id: '83033400459', unique_id: 'dy_测试号', nickname: '抖音测试主播', avatar_thumb: { url_list: ['http://a/b.jpg'] } },
             stats: { total_user: 1234 },
             stream_url: {
               default_resolution: 'HD1',
@@ -288,6 +288,7 @@ async function testResolvers() {
     const room = await resolvers.resolveRoom('https://live.douyin.com/7694422853944462115', { settings: {} });
     eq(room.liveStatus, 'live', '抖音免登录解析出开播状态（移动端接口路径）');
     eq(room.anchorName, '抖音测试主播', '抖音免登录解析出主播名');
+    eq(room.shortId, 'dy_测试号', '抖音解析返回短号（主播抖音号，前台展示用）');
     eq(room.title, '测试抖音直播间', '抖音免登录解析出标题');
     eq(room.online, 1234, '抖音免登录解析出在线人数');
     const stream = await resolvers.resolveStream({ platform: 'douyin', roomId: '7694422854462115', quality: 'origin' }, { settings: {} });

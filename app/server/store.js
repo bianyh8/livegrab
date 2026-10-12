@@ -256,7 +256,7 @@ export class Store {
   static newTask(patch = {}) {
     const now = nowIso();
     return {
-      id: uid('t'), platform: 'douyin', roomId: '', sourceUrl: '', anchorName: '', title: '', avatar: '',
+      id: uid('t'), platform: 'douyin', roomId: '', shortId: '', sourceUrl: '', anchorName: '', title: '', avatar: '',
       quality: 'origin', qualityActual: null, qualityLabel: null,
       segmentMode: 'time', segmentMinutes: 60, segmentSizeMB: 2048,
       container: 'ts', remuxToMp4: true, keepSource: true, autoMerge: false,
