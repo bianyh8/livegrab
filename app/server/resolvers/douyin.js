@@ -291,6 +291,26 @@ export async function resolveRoom({ roomId, url = '', settings, logger, probe = 
     }
   }
   const status = room.status ?? room.room_status;
+  // 轮询（probe=true）只取直播状态：不计算短号、不补全主播信息、不打"抖音短号计算"日志。
+  // 短号（抖音号）只在点击解析 / 批量刷新 / 手动检查时由非 probe 路径统一计算并回写。
+  if (probe) {
+    return {
+      roomId: String(room.id_str || finalId || roomId),
+      shortId: '',
+      anchorName: '',
+      title: '',
+      avatar: '',
+      liveStatus: status === 2 ? 'live' : 'offline',
+      online: room.stats?.total_user ?? null,
+      qualityOptions: [
+        { id: 'origin', label: '原画', note: '最高可用' },
+        { id: 'uhd', label: '超清', note: '720P' },
+        { id: 'hd', label: '高清', note: '540P' },
+        { id: 'sd', label: '标清', note: '360P' },
+        { id: 'audio', label: '仅音频', note: 'AAC 128k' },
+      ],
+    };
+  }
   // 短号（前台展示用）：优先主播抖音号(unique_id/display_id)，其次移动端返回的数字短号，再退回 web_rid
   const handle = String(stripEmoji(room.owner?.unique_id || room.owner?.display_id || room.owner?.short_id || '') || webRid || '');
   logger?.debug(`抖音短号计算：source=${source} unique=${room.owner?.unique_id || ''} display=${room.owner?.display_id || ''} short=${room.owner?.short_id || ''} webRid=${webRid || ''} → "${handle}"`, {});

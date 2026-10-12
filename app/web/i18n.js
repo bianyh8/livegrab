@@ -578,7 +578,7 @@ const DEFAULT_DICT = {
   "tasks.monitorOnlyTip": "该任务仅监控直播状态，不录制",
   "tasks.moveDown": "下移",
   "tasks.moveUp": "上移（上一优先级）",
-  "tasks.namingExample": "命名示例：",
+  "tasks.namingExample": "示例：",
   "tasks.newTask": "＋ 新建任务",
   "tasks.newTaskTitle": "新建录制任务",
   "tasks.noExport": "没有可导出的任务",

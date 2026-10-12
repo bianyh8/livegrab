@@ -421,7 +421,7 @@
   "tasks.manualPlatform": "手动指定平台",
   "tasks.roomPh": "指定平台后填写",
   "tasks.anchorPh": "解析后自动填充",
-  "tasks.namingExample": "命名示例：",
+  "tasks.namingExample": "示例：",
   "tasks.statusNewHint": "保存后由后台自动检测直播状态",
   "tasks.platHint1": "粘贴链接自动识别；识别失败或被风控拦截时：手动指定平台 → 输入房间号，",
   "tasks.platHint2": "<b>松开即自动带入主播名称</b>。",
