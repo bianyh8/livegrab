@@ -214,9 +214,10 @@ function row(item) {
   const name = state.platforms.find((p) => p.id === item.platform);
   const checked = state.selected.has(item.id) ? ' checked' : '';
   const isLive = item.liveStatus === 'live' || item.status === 'recording';
-  // 头像规则：未录制过 → 主播平台头像；已有录制或正在直播/录制 → 录像首帧（/api/tasks/:id/thumb）
-  const hasRec = (item.segmentIndex || 0) > 0 || (item.totalBytes || 0) > 0 || !!item.sessionId;
-  const avatarImg = (isLive || hasRec)
+  // 头像规则：正在录制/收尾中 → 录像首帧（实时画面，/api/tasks/:id/thumb）；
+  // 未开始录制（含已有历史录制但当前没在录）→ 主播平台头像
+  const recording = item.status === 'recording' || item.status === 'stopping';
+  const avatarImg = recording
     ? `<img class="tk-thumb" loading="lazy" src="/api/tasks/${esc(item.id)}/thumb" alt="" onerror="this.style.display='none'" />`
     : (item.avatar ? `<img class="tk-thumb" loading="lazy" src="${esc(item.avatar)}" alt="" onerror="this.style.display='none'" />` : '');
   return `<tr data-id="${esc(item.id)}">
