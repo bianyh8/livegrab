@@ -19,6 +19,10 @@ import {
   ensureDir, formatBytes, tzName, uid, safeJoin,
 } from './util.js';
 
+// 播放日志节流：同一文件 10s 内只记一次，避免视频拖动/Range 请求刷屏日志
+const playLogTs = new Map();
+const PLAY_LOG_GAP = 10000;
+
 // 时区：默认 Asia/Shanghai；Docker 里由 compose 的 environment: TZ 注入（前台不再显示/修改，D15）。
 // 影响「今日」统计口径与文件名/日志里的日期时间，必须在任何时间格式化之前设定。
 if (!process.env.TZ) process.env.TZ = 'Asia/Shanghai';
@@ -375,22 +379,29 @@ async function main() {
   }));
   route('POST', '/api/files/import', async (req) => {
     const body = await readBody(req);
-    return storage.importExternal(body.paths || []);
+    const paths = body.paths || [];
+    logger.info(`导入未注册文件 ${paths.length} 条`);
+    return storage.importExternal(paths);
   });
-  route('POST', '/api/files/scan', async () => storage.scan());
+  route('POST', '/api/files/scan', async () => { logger.info('手动扫描录制目录'); return storage.scan(); });
   route('POST', '/api/files/merge', async (req) => {
     const body = await readBody(req);
+    logger.info(`合并分段会话：${body.sessionId || ''}`);
     const item = await storage.mergeSession(body.sessionId);
     return fileView(item);
   });
   route('POST', '/api/files/:id/remux', async (req) => {
     const body = await readBody(req).catch(() => ({}));
+    logger.info(`转封装文件：${req.params.id} → ${body.kind || 'mp4'}`);
     const item = await storage.remux(req.params.id, { kind: body.kind || 'mp4' });
     return fileView(item);
   });
   route('POST', '/api/files/delete', async (req) => {
     const body = await readBody(req);
-    return storage.moveToTrash({ sessionIds: body.sessionIds || [], fileIds: body.fileIds || [] });
+    const sessionIds = body.sessionIds || [];
+    const fileIds = body.fileIds || [];
+    logger.info(`删除文件：会话 ${sessionIds.length} 条 / 文件 ${fileIds.length} 条（移入回收站）`);
+    return storage.moveToTrash({ sessionIds, fileIds });
   });
   route('GET', '/api/files/:id/download', async (req, res) => streamFile(req, res, true));
   route('GET', '/api/files/:id/stream', async (req, res) => streamFile(req, res, false));
@@ -399,12 +410,19 @@ async function main() {
   route('GET', '/api/trash', async () => storage.listTrash());
   route('POST', '/api/trash/restore', async (req) => {
     const body = await readBody(req);
-    return storage.restoreTrash(body.ids || []);
+    const ids = body.ids || [];
+    logger.info(`从回收站恢复 ${ids.length} 条`);
+    return storage.restoreTrash(ids);
   });
-  route('POST', '/api/trash/empty', async () => storage.emptyTrash());
+  route('POST', '/api/trash/empty', async () => {
+    logger.warn('清空回收站（所有条目将彻底删除，不可恢复）');
+    return storage.emptyTrash();
+  });
   route('POST', '/api/trash/purge', async (req) => {
     const body = await readBody(req);
-    return storage.purgeTrash(body.ids || []);
+    const ids = body.ids || [];
+    logger.warn(`彻底删除回收站条目 ${ids.length} 条（不可恢复）`);
+    return storage.purgeTrash(ids);
   });
   // 回收站缩略图：按回收站条目 id 取首个媒体文件的预览（无则 fallback 到首帧抽帧）
   route('GET', '/api/trash/:id/thumb', async (req, res) => {
@@ -608,7 +626,17 @@ async function main() {
     const mime = mimeByExt(extOf(file.name));
     const range = parseRange(req.headers.range, st.size);
     const base = { 'Content-Type': mime, 'Accept-Ranges': 'bytes', 'Cache-Control': 'no-store' };
-    if (download) base['Content-Disposition'] = `attachment; filename*=UTF-8''${encodeURIComponent(file.name)}`;
+    if (download) {
+      logger.info(`下载文件：${file.name}${hit.session ? `（${hit.session.streamer || ''}）` : ''}`, { taskId: hit.session && hit.session.taskId });
+      base['Content-Disposition'] = `attachment; filename*=UTF-8''${encodeURIComponent(file.name)}`;
+    } else {
+      const now = Date.now();
+      const last = playLogTs.get(file.id);
+      if (!last || now - last > PLAY_LOG_GAP) {
+        playLogTs.set(file.id, now);
+        logger.info(`播放文件：${file.name}${hit.session ? `（${hit.session.streamer || ''}）` : ''}`, { taskId: hit.session && hit.session.taskId });
+      }
+    }
     if (range === 'invalid') {
       res.writeHead(416, { 'Content-Range': `bytes */${st.size}` });
       res.end();

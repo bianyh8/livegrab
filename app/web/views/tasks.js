@@ -160,6 +160,8 @@ function paint(ctx, force) {
         <span class="tq-title">${t('tasks.filterTitle')}</span>
         <span class="tq-summary">${filterSummary()}</span>
         <span class="tq-arrow">${state.filterOpen ? '▴' : '▾'}</span>
+        <div class="spacer"></div>
+        <button class="btn sm primary" id="tkNew" style="flex:0 0 auto">${t('tasks.newTask')}</button>
       </div>
       <div class="toolbar tq" id="tkFilterBar" style="${state.filterOpen ? '' : 'display:none'}">
         <input class="input" id="tkQ" style="width:170px" placeholder="${t('tasks.searchPh')}" value="${esc(state.q)}" />
@@ -185,10 +187,10 @@ function paint(ctx, force) {
         </select>
         <div class="spacer"></div>
         <button class="btn sm ghost" id="tkExport">${t('logs.export')}</button>
-        <button class="btn sm primary" id="tkNew">${t('tasks.newTask')}</button>
       </div>
       <div class="toolbar" style="border-top:1px dashed var(--line);padding-top:12px">
         <span class="chip ${state.selected.size ? 'on' : ''}" id="tkSelChip"><i class="dot"></i>${t('tasks.selected', state.selected.size)}</span>
+        <button class="btn sm ghost" id="tkSelAll">${t('files.selectAll')}</button>
         <span class="chip">${t('tasks.oneTaskTip')}</span>
         <div class="spacer"></div>
         <button class="btn sm" data-batch="refresh" title="${t('tasks.batchRefreshTip')}">${t('tasks.batchRefresh')}</button>
@@ -356,8 +358,20 @@ function bind(ctx) {
     };
   });
 
-  root.querySelector('#tkNew').onclick = () => openTaskDialog(ctx, null);
+  root.querySelector('#tkNew').onclick = (e) => {
+    if (e) e.stopPropagation(); // 按钮位于查询条件折叠头内，避免冒泡触发折叠切换
+    openTaskDialog(ctx, null);
+  };
   root.querySelector('#tkExport').onclick = () => exportCsv();
+
+  const selAll = root.querySelector('#tkSelAll');
+  if (selAll) selAll.onclick = () => {
+    const list = filtered();
+    const allSel = list.length > 0 && list.every((t) => state.selected.has(t.id));
+    list.forEach((t) => { allSel ? state.selected.delete(t.id) : state.selected.add(t.id); });
+    state.hash = '';
+    paint(ctx, true);
+  };
 
   root.querySelectorAll('[data-act]').forEach((btn) => {
     btn.onclick = async () => {
