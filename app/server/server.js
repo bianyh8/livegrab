@@ -464,10 +464,10 @@ async function main() {
 
   // ---------- 主播头像代理：平台 CDN 常做热链保护（浏览器带页面 Referer 会被 403，如 B 站 hdslb.com），
   // 由服务端拉取（无 Referer）再转给浏览器；内存缓存 1 小时，避免每次请求都外发。 ----------
-  const avatarCache = new Map(); // url -> { buf, at }
+  const avatarCache = new Map(); // url -> { buf, type, at }
   async function fetchAvatarBuf(url) {
     const hit = avatarCache.get(url);
-    if (hit && Date.now() - hit.at < 60 * 60 * 1000) return hit.buf;
+    if (hit && Date.now() - hit.at < 60 * 60 * 1000) return hit;
     try {
       const r = await fetch(url, {
         headers: {
@@ -480,9 +480,10 @@ async function main() {
       if (!r.ok) return null;
       const buf = Buffer.from(await r.arrayBuffer());
       if (!buf.length || buf.length > 2 * 1024 * 1024) return null;
-      avatarCache.set(url, { buf, at: Date.now() });
+      const out = { buf, type: r.headers.get('content-type') || 'image/jpeg', at: Date.now() };
+      avatarCache.set(url, out);
       if (avatarCache.size > 200) { const first = avatarCache.keys().next().value; avatarCache.delete(first); }
-      return buf;
+      return out;
     } catch { return null; }
   }
 
@@ -548,11 +549,15 @@ async function main() {
 
   route('GET', '/api/tasks/:id/avatar', async (req, res) => {
     const task = store.getTask(req.params.id);
-    if (!task || !task.avatar) throw new HttpError('NOT_FOUND', '任务无头像', 404);
-    const buf = await fetchAvatarBuf(task.avatar);
-    if (!buf) throw new HttpError('AVATAR_FAIL', '头像获取失败', 502);
-    res.writeHead(200, { 'Content-Type': 'image/jpeg', 'Cache-Control': 'private, max-age=3600', 'Content-Length': buf.length });
-    res.end(buf);
+    if (!task) throw new HttpError('NOT_FOUND', '任务不存在', 404);
+    // 兼容对象型 avatar（斗鱼旧数据 {big,middle,small}）
+    const raw = task.avatar;
+    const url = typeof raw === 'string' ? raw : (raw && typeof raw === 'object' ? (raw.middle || raw.big || raw.small || '') : '');
+    if (!url) throw new HttpError('NOT_FOUND', '任务无头像', 404);
+    const got = await fetchAvatarBuf(url);
+    if (!got) throw new HttpError('AVATAR_FAIL', '头像获取失败', 502);
+    res.writeHead(200, { 'Content-Type': got.type, 'Cache-Control': 'private, max-age=3600', 'Content-Length': got.buf.length });
+    res.end(got.buf);
     return null;
   });
 
