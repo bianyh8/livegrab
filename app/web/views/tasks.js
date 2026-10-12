@@ -663,8 +663,10 @@ function taskShell(d) {
   </div>
   <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px 16px;margin-top:14px">
     ${field(t('tasks.csvSegment'), selF('edSegMode', segOpts, d.segmentMode))}
-    <div id="edSegMinCell" style="${segTimeStyle}">${field(t('tasks.segMinutesLabel'), selF('edSegMin', segMinRaw, String(d.segmentMinutes)))}</div>
-    <div id="edSegSizeCell" style="${segSizeStyle}">${field(t('tasks.segSizeLabel'), selF('edSegSize', segSizeRaw, String(d.segmentSizeMB)))}</div>
+    <div id="edSegParamCol">
+      <div id="edSegMinCell" style="${segTimeStyle}">${field(t('tasks.segMinutesLabel'), selF('edSegMin', segMinRaw, String(d.segmentMinutes)))}</div>
+      <div id="edSegSizeCell" style="${segSizeStyle}">${field(t('tasks.segSizeLabel'), selF('edSegSize', segSizeRaw, String(d.segmentSizeMB)))}</div>
+    </div>
     ${field(t('tasks.autoRecordLabel'), switchEl(d.autoRecord, 'id="edAuto"'))}
     ${field(t('tasks.monitorOnlyLabel'), switchEl(d.monitorOnly, 'id="edMonitor"'),
       `<div class="hintline" id="edMonitorHint">${d.monitorOnly ? t('tasks.monitorOn') : t('tasks.monitorOff')}</div>`)}
