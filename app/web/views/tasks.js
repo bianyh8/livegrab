@@ -497,7 +497,8 @@ function optList(options, value) {
   return options.map((o) => {
     const v = typeof o === 'object' ? o.v : o;
     const label = typeof o === 'object' ? o.label : String(o);
-    return `<option value="${esc(String(v))}"${String(v) === String(value) ? ' selected' : ''}>${esc(label)}</option>`;
+    const extra = (typeof o === 'object' && o.extra) || '';
+    return `<option value="${esc(String(v))}"${extra}${String(v) === String(value) ? ' selected' : ''}>${esc(label)}</option>`;
   }).join('');
 }
 
@@ -620,8 +621,8 @@ async function openTaskDialog(ctx, id) {
 }
 
 function taskShell(d) {
-  // 新建任务时平台下拉第一项显示提示"指定平台"
-  const platOpts = [{ v: '', label: t('tasks.platChoose') }, ...d.platforms.map((p) => ({ v: p.id, label: p.name }))];
+  // 新建任务时平台下拉显示提示"指定平台"（hidden 空选项：下拉列表里不出现该项；ph 类灰字提示，效果同文本框 placeholder。不用 disabled，避免触发浏览器禁用渲染导致文字永久置灰）
+  const platOpts = [{ v: '', label: t('tasks.platChoose'), extra: 'hidden' }, ...d.platforms.map((p) => ({ v: p.id, label: p.name }))];
   const pollOpts = [...new Set([30, 60, 120, 180, 300, Number(d.pollIntervalSec) || 60])].map((v) => ({ v: String(v), label: `${v} ${t('common.seconds')}` }));
   const rcNums = [3, 5, 8, 10];
   if (!rcNums.includes(Number(d.reconnectMax))) rcNums.push(Number(d.reconnectMax));
@@ -638,15 +639,15 @@ function taskShell(d) {
   const roomPh = d.platform === 'douyin' ? t('tasks.douyinRoomPh') : t('tasks.roomPh');
   const segMinRaw = [...new Set([30, 60, 120, 180, Number(d.segmentMinutes) || 60])].map((m) => ({ v: String(m), label: `${m} ${t('common.minutes')}` }));
   const segSizeRaw = [...new Set([1024, 2048, 4096, 8192, Number(d.segmentSizeMB) || 2048])].map((m) => ({ v: String(m), label: `${Math.round(m / 1024 * 10) / 10} ${t('tasks.gb')}` }));
-  // 下拉框默认 width:100% 占满所在列
-  const selF = (id, opts, val) => `<select class="select" id="${id}">${optList(opts, val)}</select>`;
+  // 下拉框默认 width:100% 占满所在列；cls 可附加样式类（如平台未选的灰字提示 ph）
+  const selF = (id, opts, val, cls = '') => `<select class="select${cls}" id="${id}">${optList(opts, val)}</select>`;
   // 三列等宽网格（平台/房间号/主播名称 与 命名/轮询/重连 两行列对齐）＋ 两列网格（分段策略、开关）
   return `
   <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px 16px">
     ${field(t('tasks.kSource'),
       `<input class="input mono" id="edUrl" value="${esc(d.url)}" placeholder="${t('tasks.pasteUrlPh')}" />`,
       `<div class="hintline">${t('tasks.urlEditTip')}</div>`, true)}
-    ${field(t('settings.pfColPlatform'), selF('edPlat', platOpts, d.platform))}
+    ${field(t('settings.pfColPlatform'), selF('edPlat', platOpts, d.platform, d.platform ? '' : ' ph'))}
     ${field(t('tasks.csvRoom'),
       `<input class="input mono" id="edRoom" value="${esc(d.displayRoom)}" placeholder="${roomPh}" />`)}
     ${field(t('tasks.anchorNameLabel'),
@@ -797,7 +798,10 @@ function bindEditor(d, body, ctx) {
       d.shortId = r.shortId ? String(r.shortId) : '';
       d.displayRoom = (d.platform === 'douyin' && d.shortId) ? d.shortId : d.roomId;
       if (roomInput) roomInput.value = d.displayRoom;
-      if (platSel && [...platSel.options].some((o) => o.value === d.platform)) platSel.value = d.platform;
+      if (platSel && [...platSel.options].some((o) => o.value === d.platform)) {
+        platSel.value = d.platform;
+        platSel.classList.toggle('ph', !d.platform);
+      }
       if (r.anchorName) {
         const clean = stripEmoji(r.anchorName);
         d.anchorName = clean;
@@ -828,6 +832,7 @@ function bindEditor(d, body, ctx) {
   if (resolveBtn) resolveBtn.onclick = d.onResolve;
   if (platSel) platSel.onchange = () => {
     d.platform = platSel.value;
+    platSel.classList.toggle('ph', !platSel.value);
     setRoomPh();
     const rid = roomInput ? roomInput.value.trim() : '';
     if (rid) autoFromRoom();
