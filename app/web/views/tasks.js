@@ -481,11 +481,17 @@ function exportCsv() {
 
 /* ================= 统一任务弹窗：新建 / 详情 / 编辑共用同一模板，每行一个栏位，详情即编辑 ================= */
 
-/** 栏位行：左侧标签 + 右侧控件 */
-function fld(label, ctl, opts = '') {
-  return `<div class="row" style="align-items:center;gap:10px;margin-top:10px${opts}">
-    <span style="flex:0 0 90px;font-size:12.5px;color:var(--txt-2)">${label}</span>
-    <div class="f1" style="min-width:0">${ctl}</div>
+/**
+ * 栏位行：左侧标签 + 右侧控件（按内容自适应宽度）+ 可选副提示区。
+ * lh = 标签行高（像素），与控件高度对齐：输入/下拉 40，卡片 30，开关 23。
+ */
+function fld(label, ctl, sub = '', lh = 40) {
+  return `<div class="row" style="align-items:flex-start;gap:12px;margin-top:12px">
+    <span style="flex:0 0 88px;font-size:12.5px;color:var(--txt-2);line-height:${lh}px">${label}</span>
+    <div class="f1" style="min-width:0">
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">${ctl}</div>
+      ${sub}
+    </div>
   </div>`;
 }
 
@@ -601,8 +607,6 @@ async function openTaskDialog(ctx, id) {
 
 function taskShell(d) {
   const platOpts = [{ v: '', label: t('tasks.platChoose') }, ...d.platforms.map((p) => ({ v: p.id, label: p.name + (tierName(p.tier) ? `（${tierName(p.tier)}）` : '') }))];
-  const qualityOpts = [{ v: '', label: t('tasks.followGlobal') + `（${t(QNAME[d.qualityGlobal]) || d.qualityGlobal}）` }]
-    .concat(QUALITY_CARDS.map((q) => ({ v: q.id, label: t(q.labelKey) + (q.crown ? ' ★' : '') })));
   const pollOpts = [...new Set([30, 60, 120, 180, 300, Number(d.pollIntervalSec) || 60])].map((v) => ({ v: String(v), label: `${v} ${t('common.seconds')}` }));
   const rcNums = [3, 5, 8, 10];
   if (d.reconnectMax !== '' && !rcNums.includes(Number(d.reconnectMax))) rcNums.push(Number(d.reconnectMax));
@@ -617,44 +621,44 @@ function taskShell(d) {
   const segPanelStyle = (d.segmentMode === 'time' || d.segmentMode === 'size') ? '' : 'display:none';
   const segTimeStyle = d.segmentMode === 'time' ? '' : 'display:none';
   const segSizeStyle = d.segmentMode === 'size' ? '' : 'display:none';
+  const roomPh = d.platform === 'douyin' ? t('tasks.douyinRoomPh') : t('tasks.roomPh');
   return `
     ${fld(t('tasks.kSource'),
-      `<div class="row" style="align-items:center;gap:8px">
-        <input class="input f1 mono" id="edUrl" value="${esc(d.url)}" placeholder="${t('tasks.pasteUrlPh')}" />
-        <button class="btn" id="edResolve">${t('tasks.resolve')}</button>
-      </div>
-      <div class="hintline" style="margin:5px 0 0">${t('tasks.urlEditTip')}</div>`)}
+      `<input class="input mono" id="edUrl" style="width:min(100%,420px);min-width:240px" value="${esc(d.url)}" placeholder="${t('tasks.pasteUrlPh')}" />
+      <button class="btn" id="edResolve">${t('tasks.resolve')}</button>`,
+      `<div class="hintline">${t('tasks.urlEditTip')}</div>`)}
     ${fld(t('settings.pfColPlatform'), selHtml('edPlat', platOpts, d.platform))}
     ${fld(t('tasks.csvRoom'),
-      `<div class="row" style="align-items:center;gap:8px;flex-wrap:wrap">
-        <input class="input mono" id="edRoom" style="width:220px;min-width:160px" value="${esc(d.roomId)}" placeholder="${t('tasks.roomPh')}" />
-        <span class="hintline" id="edPlatHint" style="margin:0;flex:0 1 auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${platHintText(d.platform)}</span>
-      </div>`)}
-    ${fld(t('tasks.anchorNameLabel'), `<input class="input f1" id="edAnchor" value="${esc(d.anchorName)}" placeholder="${t('tasks.anchorPh')}" />`)}
+      `<input class="input mono" id="edRoom" style="width:210px" value="${esc(d.roomId)}" placeholder="${roomPh}" />`,
+      `<div class="hintline" id="edPlatHint">${platHintText(d.platform)}</div>`)}
+    ${fld(t('tasks.anchorNameLabel'), `<input class="input" id="edAnchor" style="width:240px" value="${esc(d.anchorName)}" placeholder="${t('tasks.anchorPh')}" />`)}
     ${fld(t('tasks.colQuality'),
-      `${selHtml('edQuality', qualityOpts, d.quality)}
-      <div class="hintline" style="margin:5px 0 0" id="edQualityHint">${qualityHint(d)}</div>`)}
+      `<div class="mini-row" id="edQGrid">
+        <span class="mini${d.quality === '' ? ' sel' : ''}" data-q="" title="${t('tasks.followGlobal')}">${t('tasks.followGlobal')}</span>
+        ${QUALITY_CARDS.map((q) => `<span class="mini${d.quality === q.id ? ' sel' : ''}" data-q="${q.id}" title="${esc(t(q.resKey))} · ${esc(t(q.kbpsKey))}">${q.crown ? '★ ' : ''}${t(q.labelKey)}</span>`).join('')}
+      </div>`,
+      `<div class="hintline" id="edQualityHint">${qualityHint(d)}</div>`, 30)}
     ${fld(t('tasks.colLive'), `<div id="edInfo">${infoHtml(d)}</div>`)}
     ${fld(t('tasks.kPoll'),
-      `${selHtml('edPoll', pollOpts, String(d.pollIntervalSec))}
-      <div class="hintline" style="margin:5px 0 0">${t('tasks.pollDetail', d.pollIntervalSec, d.startDelaySec, d.stopDelaySec)}</div>`)}
+      selHtml('edPoll', pollOpts, String(d.pollIntervalSec)),
+      `<div class="hintline">${t('tasks.pollDetail', d.pollIntervalSec, d.startDelaySec, d.stopDelaySec)}</div>`)}
     ${fld(t('tasks.kReconnect'), selHtml('edReconnect', rcOpts, String(d.reconnectMax)))}
     ${fld(t('settings.tabNaming'),
-      `${selHtml('edNaming', namingOpts, d.namingProfileId)}
-      <div class="hintline" style="margin:5px 0 0" id="edNamingHint">${namingHint(d)}</div>`)}
+      selHtml('edNaming', namingOpts, d.namingProfileId),
+      `<div class="hintline" id="edNamingHint">${namingHint(d)}</div>`)}
     ${fld(t('tasks.csvSegment'),
-      `${selHtml('edSegMode', segOpts, d.segmentMode)}
-      <div class="hintline" style="margin:5px 0 0" id="edSegHint">${segmentHint(d)}</div>
+      selHtml('edSegMode', segOpts, d.segmentMode),
+      `<div class="hintline" id="edSegHint">${segmentHint(d)}</div>
       <div class="row wrap" id="edSegPanel" style="margin-top:8px;gap:8px;${segPanelStyle}">
-        <div class="f1" style="min-width:150px;${segTimeStyle}" id="edSegMinWrap">
+        <div style="min-width:150px;${segTimeStyle}" id="edSegMinWrap">
           <label class="fl">${t('tasks.segMinutesLabel')}</label>
           <select class="select" id="edSegMin">${optList([...new Set([30, 60, 120, 180, Number(d.segmentMinutes) || 60])].map((m) => ({ v: String(m), label: `${m} ${t('common.minutes')}` })), String(d.segmentMinutes))}</select>
         </div>
-        <div class="f1" style="min-width:150px;${segSizeStyle}" id="edSegSizeWrap">
+        <div style="min-width:150px;${segSizeStyle}" id="edSegSizeWrap">
           <label class="fl">${t('tasks.segSizeLabel')}</label>
           <select class="select" id="edSegSize">${optList([...new Set([1024, 2048, 4096, 8192, Number(d.segmentSizeMB) || 2048])].map((m) => ({ v: String(m), label: `${Math.round(m / 1024 * 10) / 10} ${t('tasks.gb')}` })), String(d.segmentSizeMB))}</select>
         </div>
-        <div class="f1" style="min-width:150px">
+        <div style="min-width:150px">
           <label class="fl">${t('tasks.segProcessingLabel')}</label>
           <select class="select" id="edAutoMerge">
             <option value="0"${!d.autoMerge ? ' selected' : ''}>${t('tasks.segKeepIndependent')}</option>
@@ -662,16 +666,16 @@ function taskShell(d) {
           </select>
         </div>
       </div>`)}
-    ${fld(t('tasks.autoRecordLabel'), switchEl(d.autoRecord, 'id="edAuto"'))}
-    ${fld(t('tasks.monitorOnlyLabel'), `${switchEl(d.monitorOnly, 'id="edMonitor"')}
-      <div class="hintline" style="margin:6px 0 0" id="edMonitorHint">${d.monitorOnly ? t('tasks.monitorOn') : t('tasks.monitorOff')}</div>`)}
+    ${fld(t('tasks.autoRecordLabel'), switchEl(d.autoRecord, 'id="edAuto"'), '', 23)}
+    ${fld(t('tasks.monitorOnlyLabel'), switchEl(d.monitorOnly, 'id="edMonitor"'),
+      `<div class="hintline" id="edMonitorHint">${d.monitorOnly ? t('tasks.monitorOn') : t('tasks.monitorOff')}</div>`, 23)}
     ${d.id ? `<div class="sect"><span class="n">≡</span>${t('tasks.segHeader', (d.task && (d.task.segments || []).length) || 0)}</div>
       ${segTableHtml(d.task)}` : ''}
     <div id="edResolved"></div>`;
 }
 
 function selHtml(id, options, value) {
-  return `<select class="select" id="${id}" style="width:100%;max-width:320px">${optList(options, value)}</select>`;
+  return `<select class="select" id="${id}" style="width:auto;min-width:150px">${optList(options, value)}</select>`;
 }
 
 function qualityHint(d) {
@@ -736,7 +740,7 @@ const QUALITY_CARDS = [
 const QNAME = { origin: 'tasks.qOriginName', bluray: 'tasks.qBlurayName', uhd: 'tasks.qUhdName', hd: 'tasks.qHdName', sd: 'tasks.qSdName', audio: 'tasks.qAudioName' };
 function platHintText(p) {
   const base = t('tasks.currentPlatform') + (p ? platNameOf(p) : t('tasks.notSpecified'));
-  if (p === 'douyin') return base + t('tasks.fillRoom19');
+  if (p === 'douyin') return base + t('tasks.douyinHandleHint');
   return base;
 }
 
@@ -760,7 +764,7 @@ function resolvedCard(d) {
                : '<span class="chip wait"><i class="dot"></i>' + t('tasks.notLive') + '</span>'}
       </div>
       <div style="font-size:11.5px;color:var(--txt-3);margin-top:3px">
-        ${t('tasks.roomNoShort', esc(r.roomId || '—'))}${r.title ? ' · ' + esc(r.title) : ''}${r.online != null ? t('tasks.onlineNow', esc(fmtOnline(r.online))) : ''}${r.note ? ` · ${esc(r.note)}` : ''}
+        ${t('tasks.roomNoShort', esc(r.roomId || '—'))}${r.platform === 'douyin' && /^\d{19}$/.test(String(r.roomId || '')) ? ' · ' + t('tasks.mappedRoomNo', esc(r.roomId)) : ''}${r.title ? ' · ' + esc(r.title) : ''}${r.online != null ? t('tasks.onlineNow', esc(fmtOnline(r.online))) : ''}${r.note ? ` · ${esc(r.note)}` : ''}
       </div>
     </div>
   </div>`;
@@ -780,14 +784,17 @@ function bindEditor(d, body, ctx) {
   const roomInput = body.querySelector('#edRoom');
   const anchorInput = body.querySelector('#edAnchor');
   const platSel = body.querySelector('#edPlat');
-  const qSel = body.querySelector('#edQuality');
+  const qGrid = body.querySelector('#edQGrid');
   const pollSel = body.querySelector('#edPoll');
   const rcSel = body.querySelector('#edReconnect');
   const namingSel = body.querySelector('#edNaming');
   const segMode = body.querySelector('#edSegMode');
 
   const setInfo = () => { const el = body.querySelector('#edInfo'); if (el) el.innerHTML = infoHtml(d); };
-  const setPlatHint = () => { const el = body.querySelector('#edPlatHint'); if (el) el.innerHTML = platHintText(d.platform); };
+  const setPlatHint = () => {
+    const el = body.querySelector('#edPlatHint'); if (el) el.innerHTML = platHintText(d.platform);
+    if (roomInput) roomInput.placeholder = d.platform === 'douyin' ? t('tasks.douyinRoomPh') : t('tasks.roomPh');
+  };
   const setQHint = () => { const el = body.querySelector('#edQualityHint'); if (el) el.innerHTML = qualityHint(d); };
   const setNamingHint = () => { const el = body.querySelector('#edNamingHint'); if (el) el.innerHTML = namingHint(d); };
   function setSegUI() {
@@ -853,7 +860,14 @@ function bindEditor(d, body, ctx) {
   }
   if (urlInput) urlInput.oninput = () => { d.url = urlInput.value.trim(); };
   if (anchorInput) anchorInput.oninput = () => { d.anchorName = anchorInput.value.trim(); d.anchorEdited = true; };
-  if (qSel) qSel.onchange = () => { d.quality = qSel.value; setQHint(); };
+  // 清晰度：横向卡片，点选即生效（''=跟随全局）
+  if (qGrid) qGrid.querySelectorAll('[data-q]').forEach((card) => {
+    card.onclick = () => {
+      d.quality = card.dataset.q || '';
+      qGrid.querySelectorAll('[data-q]').forEach((c) => c.classList.toggle('sel', c === card));
+      setQHint();
+    };
+  });
   if (pollSel) pollSel.onchange = () => { d.pollIntervalSec = Number(pollSel.value) || 60; };
   if (rcSel) rcSel.onchange = () => { d.reconnectMax = rcSel.value === '' ? '' : Number(rcSel.value); };
   if (namingSel) namingSel.onchange = () => { d.namingProfileId = namingSel.value; setNamingHint(); };

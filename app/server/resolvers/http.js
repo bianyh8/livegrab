@@ -13,7 +13,7 @@ export async function httpGet(url, { headers = {}, timeoutMs = 12000, retries = 
         signal: AbortSignal.timeout(timeoutMs),
       });
       const text = await res.text();
-      return { status: res.status, ok: res.ok, text, headers: res.headers };
+      return { status: res.status, ok: res.ok, text, headers: res.headers, finalUrl: res.url || url };
     } catch (e) {
       lastErr = e;
       if (logger && i < retries) logger.debug(`${label || 'HTTP'} 第 ${i + 1} 次请求失败：${e.message}`);

@@ -221,8 +221,7 @@ const ADD = {
   'tasks.dupRoom': '该直播间已有启用中的任务：1 个任务对应 1 个直播间，请编辑现有任务或先停用',
   'tasks.recordingChanged': '任务正在录制中，清晰度/分段/命名改动将在下一场生效',
   'tasks.saveFail': '保存失败', 'tasks.currentPlatform': '当前平台：', 'tasks.notSpecified': '未指定',
-  'tasks.gb': 'GB',
-  'tasks.fillRoom19': '· <span class="h">填 19 位房间号</span>', 'tasks.wan': '万',
+  'tasks.gb': 'GB', 'tasks.wan': '万',
 
   // logs（清除日志：预设时间范围）
   'logs.clear': '清除日志',

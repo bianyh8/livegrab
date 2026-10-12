@@ -23,11 +23,77 @@ function stripEmoji(s) {
 
 export function roomIdFrom(input) {
   const s = String(input || '').trim();
-  // 「直播地址 / 路径段」：19 位数字内部号、数字短号、或主播自定义文字短号（如 xyr_1208）
+  // 「直播地址 / 路径段」：19 位数字内部号、v.douyin.com 分享短码、数字短号、或主播自定义文字短号（如 xyr_1208）
   const m = /live\.douyin\.com\/([A-Za-z0-9_]+)/i.exec(s)
+    || /v\.douyin\.com\/([A-Za-z0-9_-]+)/i.exec(s)
     || /douyin\.com\/user\/([A-Za-z0-9_-]+)/i.exec(s)
     || /^([A-Za-z0-9_]{3,})$/.exec(s);
   return m ? m[1] : s;
+}
+
+/**
+ * 输入归一化：把「分享短链 / 主播主页链接」换算成可解析的房间号。
+ * - v.douyin.com/xxxx：跟随跳转取最终 live.douyin.com/<19位或短号>；
+ * - douyin.com/user/<sec_uid>：查用户当前直播房间（best-effort，被风控时返回空走兜底）；
+ * - 其余（裸抖音号 / 19 位房间号 / live.douyin.com 链接）原样返回。
+ */
+async function normalizeDouyinId(input, settings, logger) {
+  const s0 = String(input || '').trim();
+  // 调度器传入的是 platform:roomId 形式（如 douyin:xyr_1208），先剥掉前缀
+  const pref = /^douyin:(.*)$/i.exec(s0);
+  const s = pref ? pref[1].trim() : s0;
+  const live = /live\.douyin\.com\/([A-Za-z0-9_]+)/i.exec(s);
+  if (live) return live[1]; // 19 位内部号或文字短号（如 xyr_1208）
+  const share = /(?:https?:\/\/)?v\.douyin\.com\/([A-Za-z0-9_-]+)/i.exec(s);
+  if (share) {
+    try {
+      const r = await httpGet(`https://v.douyin.com/${share[1]}`, { headers: { 'User-Agent': WEB_UA }, retries: 0, logger, label: 'douyin.share' });
+      const finalUrl = r.finalUrl || '';
+      const m = /live\.douyin\.com\/([A-Za-z0-9_]+)/i.exec(finalUrl);
+      if (m) { logger?.debug(`抖音分享短链 → ${m[1]}`, {}); return m[1]; }
+      const um = /douyin\.com\/user\/([A-Za-z0-9_-]+)/i.exec(finalUrl);
+      if (um) {
+        const rid = await profileRoomId(um[1], settings, logger);
+        if (rid) return rid;
+      }
+      logger?.debug(`抖音分享短链未命中直播间地址（最终 ${finalUrl}），用短码直试`, {});
+    } catch (e) {
+      logger?.debug(`抖音分享短链解析失败，用短码直试：${e.message}`, {});
+    }
+    return share[1];
+  }
+  const prof = /douyin\.com\/user\/([A-Za-z0-9_-]+)/i.exec(s);
+  if (prof) {
+    const rid = await profileRoomId(prof[1], settings, logger);
+    if (rid) return rid;
+    return prof[1]; // 找不到房间时交给 enterRoom 报明确错误
+  }
+  return s;
+}
+
+/** 通过 web 用户资料接口按 sec_uid 找「当前直播房间」（19 位内部号）；被风控/未开播时返回空串 */
+async function profileRoomId(secUid, settings, logger) {
+  try {
+    const cookie = await ensureCookie(settings, logger);
+    const p = new URLSearchParams({
+      sec_user_id: secUid, aid: '6383', app_name: 'douyin_web', device_platform: 'web', language: 'zh-CN',
+      browser_language: 'zh-CN', browser_platform: 'Win32', browser_name: 'Chrome', browser_version: '124.0.0.0',
+    });
+    const j = await httpJson(signedUrl('https://www.douyin.com/aweme/v1/web/user/profile/other/', p, WEB_UA), {
+      headers: { 'User-Agent': WEB_UA, Referer: `https://www.douyin.com/user/${secUid.slice(0, 12)}`, Accept: 'application/json, text/plain, */*', ...(cookie ? { Cookie: cookie } : {}) },
+      logger, label: 'douyin.profile', retries: 1,
+    });
+    const u = j?.user || {};
+    const rid = String(u?.live_room?.room_id || u?.room_id || '');
+    if (/^\d{19}$/.test(rid)) {
+      logger?.debug(`抖音主页查询命中当前直播房间：${u.unique_id || secUid.slice(0, 12)} → ${rid}`, {});
+      return rid;
+    }
+    logger?.debug(`抖音主页查询：${u.unique_id || secUid.slice(0, 12)}${rid ? ` room_id=${rid}` : '（未开播或无房间）'}`, {});
+  } catch (e) {
+    logger?.debug(`抖音主页查询失败：${e.message}`, {});
+  }
+  return '';
 }
 
 /** 优先用户 Cookie / 已保存的 ttwid；否则抓首页拿 ttwid（仅 web 接口需要） */
@@ -179,9 +245,9 @@ async function enterRoom(roomId, settings, logger) {
   if (!isFullId) {
     throw new HttpError(
       'ROOM_ID_FORMAT',
-      `抖音房间号「${idStr}」是 web_rid 短号（数字短号或主播自定义短号，如 xyr_1208）：${mobileNote || '移动端接口无有效返回'}；${apiNote || 'web 接口无有效返回'}。`
-      + '免登录的移动端接口只认 19 位内部房间号——请在抖音里打开该直播间，把地址栏里那串 19 位数字填进任务（形如 https://live.douyin.com/7694422853944462115）；'
-      + '或在「系统设置 → 平台账号」粘贴登录 Cookie 后重试（web 接口可映射短号，但需要登录态）；也可用「直链」任务。',
+      `抖音「${idStr}」解析失败（移动/网页接口均无有效返回）：${mobileNote || '移动端接口无有效返回'}；${apiNote || 'web 接口无有效返回'}。`
+      + '请确认抖音号输入无误，或直接粘贴直播间分享链接（v.douyin.com/… 可自动转换出 19 位房间号）；'
+      + '若主播未开播且主页查询被风控，可到「系统设置 → 平台账号」粘贴登录 Cookie 后重试；也可用「直链」任务。',
       400,
     );
   }
@@ -194,11 +260,12 @@ async function enterRoom(roomId, settings, logger) {
   );
 }
 
-export async function resolveRoom({ roomId, settings, logger, probe = false }) {
-  const { room, source, note } = await enterRoom(roomId, settings, logger);
+export async function resolveRoom({ roomId, url = '', settings, logger, probe = false }) {
+  const finalId = await normalizeDouyinId(url || roomId, settings, logger);
+  const { room, source, note } = await enterRoom(finalId || roomId, settings, logger);
   if (room._fallback) {
     return {
-      roomId: String(roomId),
+      roomId: String(finalId || roomId),
       anchorName: stripEmoji(room.nickname || '抖音直播间'),
       title: room.title || '',
       avatar: '',
@@ -225,7 +292,7 @@ export async function resolveRoom({ roomId, settings, logger, probe = false }) {
   }
   const status = room.status ?? room.room_status;
   return {
-    roomId: String(room.id_str || roomId),
+    roomId: String(room.id_str || finalId || roomId),
     anchorName: stripEmoji(room.owner?.nickname || ''),
     title: room.title || '',
     avatar: (room.owner?.avatar_thumb?.url_list || [])[0] || '',
