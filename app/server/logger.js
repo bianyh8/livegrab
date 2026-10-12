@@ -78,6 +78,7 @@ export class Logger {
     this._day = null;
     this._size = 0;
     this._part = 0;
+    this._pageRows = null;
     return { removed };
   }
 
@@ -93,6 +94,7 @@ export class Logger {
     };
     this.ring.push(line);
     if (this.ring.length > RING) this.ring.splice(0, this.ring.length - RING);
+    this._pageRows = null; // 有新日志：使分页查询缓存失效
     this._write(line);
     this.emit(line);
   }
@@ -134,6 +136,59 @@ export class Logger {
       items = items.filter((l) => l.msg.toLowerCase().includes(s) || String(l.taskName || '').toLowerCase().includes(s));
     }
     return items.slice(-Math.max(1, Math.min(2000, Number(limit) || 200)));
+  }
+
+  /**
+   * 分页查询（历史全量，来自日志文件）：读保留期内全部 .log 文件 → 过滤 → 按 ts 倒序 → 分页。
+   * 过滤结果按 (level|taskId|q) 缓存，翻页/换页不重复读文件；有新日志（log/clear）自动失效。
+   * 返回 { items, total, page, pageSize, pages, tasks }，tasks 为匹配集合内的任务名清单（供前端筛选下拉）。
+   */
+  async queryPage({ level, taskId, q, page = 1, pageSize = 50, order = 'desc' } = {}) {
+    const size = Math.max(1, Math.min(20000, Number(pageSize) || 50));
+    const p = Math.max(1, Number(page) || 1);
+    const key = `${level || ''}|${taskId || ''}|${String(q || '').toLowerCase()}`;
+    if (!this._pageRows || this._pageRows.key !== key) {
+      this._pageRows = { key, ...(await this._readAllFiltered({ level, taskId, q })) };
+    }
+    const { rows, tasks } = this._pageRows;
+    const total = rows.length;
+    const ordered = order === 'asc' ? rows.slice().reverse() : rows; // 正向（旧→新）时整体反转
+    const start = (p - 1) * size;
+    return {
+      items: ordered.slice(start, start + size),
+      total,
+      page: p,
+      pageSize: size,
+      pages: Math.max(1, Math.ceil(total / size)),
+      tasks,
+    };
+  }
+
+  async _readAllFiltered({ level, taskId, q }) {
+    const files = await fsp.readdir(this.dir).catch(() => []);
+    const rows = [];
+    const tasks = new Map();
+    for (const f of files) {
+      if (!/\.log$/.test(f)) continue;
+      const txt = await fsp.readFile(path.join(this.dir, f), 'utf8').catch(() => '');
+      for (const line of txt.split('\n')) {
+        if (!line.trim()) continue;
+        try {
+          const l = JSON.parse(line);
+          if (!l || typeof l.ts !== 'string') continue;
+          if (level && l.level !== level) continue;
+          if (taskId && l.taskId !== taskId) continue;
+          if (q) {
+            const s = String(q).toLowerCase();
+            if (!String(l.msg || '').toLowerCase().includes(s) && !String(l.taskName || '').toLowerCase().includes(s)) continue;
+          }
+          rows.push(l);
+          if (l.taskName) tasks.set(l.taskName, l.taskId || '');
+        } catch { /* 跳过坏行 */ }
+      }
+    }
+    rows.sort((a, b) => (a.ts < b.ts ? 1 : a.ts > b.ts ? -1 : 0));
+    return { rows, tasks: [...tasks.entries()].map(([name, id]) => ({ id, name })) };
   }
 
   recent(n = 8) { return this.ring.slice(-n).reverse(); }

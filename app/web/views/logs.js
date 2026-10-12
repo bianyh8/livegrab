@@ -1,12 +1,13 @@
 /* LiveGrab · views/logs.js —— 运行日志
-   级别 / 任务 / 平台 / 关键字过滤 ＋ SSE 实时追加 ＋ 保留策略说明 ＋ 导出 / 复制 ＋ 按日期清除日志。
-   「最近事件」已并入本页（不再有独立最近事件页），这里是完整的运行日志。 */
+   级别 / 任务 / 平台 / 关键字过滤 ＋ 后端分页查询（历史全量，按文件分页）＋ SSE 实时追加 ＋ 保留策略说明
+   ＋ 导出 / 复制 ＋ 按日期清除日志。 */
 
 import { api, normalizeLogLine } from '../api.js';
 import { t } from '../i18n.js';
 import { esc, formatLogTime, formatBytes, emptyBox, toast, copyText, downloadText, confirmDialog, openDialog, el } from '../ui.js';
 
-const MAX_ROWS = 2000;
+const PAGE_SIZE = 50;
+const EXPORT_MAX = 20000;
 
 const state = {
   level: '',
@@ -15,11 +16,17 @@ const state = {
   q: '',
   rows: [],
   files: [],
+  tasks: [],
   newestFirst: true,
   lastTs: 0,
   paused: false,
   pending: false,
   bound: false,
+  livePending: false,
+  page: 1,
+  pageSize: PAGE_SIZE,
+  total: 0,
+  pages: 1,
   limits: { logRetentionDays: 14, logLevel: 'INFO' },
 };
 
@@ -39,11 +46,21 @@ export async function render(root, ctx) {
   offLog = ctx.on('log', (raw) => {
     const line = normalizeLogLine(raw);
     if (!line || state.paused) return;
-    state.rows.push(line);
-    if (state.rows.length > MAX_ROWS) state.rows.splice(0, state.rows.length - MAX_ROWS);
-    const ts = new Date(line.ts || 0).getTime();
-    if (ts > state.lastTs) state.lastTs = ts;
-    appendRow(line, ctx);
+    // 仅当位于最新页（第 1 页）且无过滤条件时实时追加；否则防抖刷新，让新日志经分页查询进入当前视图
+    const liveOk = state.page === 1 && !state.level && !state.taskId && !state.platform && !String(state.q || '').trim();
+    if (liveOk) {
+      const ts = new Date(line.ts || 0).getTime();
+      if (ts > state.lastTs) state.lastTs = ts;
+      state.total += 1;
+      state.pages = Math.max(1, Math.ceil(state.total / state.pageSize));
+      appendRow(line, ctx);
+    } else if (!state.livePending) {
+      state.livePending = true;
+      setTimeout(() => {
+        state.livePending = false;
+        if (boundRoot) refresh(ctx, true);
+      }, 1200);
+    }
   });
 
   if (onRefreshAll) { onRefreshAll(); onRefreshAll = null; }
@@ -77,28 +94,19 @@ async function refresh(ctx, initial) {
         // 页面默认显示全部级别：不随后端"默认日志级别"预设过滤，用户可在下拉手动切换
       } catch { /* 用默认值 */ }
     }
-    if (initial || !state.rows.length || root.querySelector('#lgTable') === null) {
-      const r = await api.logs({ level: state.level, taskId: state.taskId, q: state.q || '', limit: MAX_ROWS });
-      const items = (r && r.items) || [];
-      state.rows = items.slice(-MAX_ROWS);
-      state.files = (r && r.files) || [];
-      state.lastTs = state.rows.reduce((mx, l) => Math.max(mx, new Date(l.ts || 0).getTime()), 0);
-      paint(ctx);
-      return;
-    }
-    /* 轮询兜底：SSE 断线时用增量补齐 */
-    const r = await api.logs({ level: state.level, taskId: state.taskId, q: state.q || '', limit: MAX_ROWS });
-    const items = (r && r.items) || [];
-    state.files = (r && r.files) || [];
-    const fresh = items.filter((l) => new Date(l.ts || 0).getTime() > state.lastTs);
-    if (fresh.length) {
-      state.rows = state.rows.concat(fresh).slice(-MAX_ROWS);
-      state.lastTs = fresh.reduce((mx, l) => Math.max(mx, new Date(l.ts || 0).getTime()), state.lastTs);
-      paint(ctx);
-      scrollBottom();
-    } else {
-      syncCount();
-    }
+    const r = await api.logs({
+      level: state.level, taskId: state.taskId, q: state.q || '',
+      page: state.page, pageSize: state.pageSize, order: state.newestFirst ? 'desc' : 'asc',
+    });
+    state.rows = r.items || [];
+    state.total = Number(r.total) || 0;
+    state.page = Math.max(1, Number(r.page) || 1);
+    state.pageSize = Number(r.pageSize) || state.pageSize;
+    state.pages = Math.max(1, Number(r.pages) || Math.ceil(state.total / state.pageSize));
+    state.tasks = r.tasks || [];
+    state.files = r.files || [];
+    state.lastTs = state.rows.reduce((mx, l) => Math.max(mx, new Date(l.ts || 0).getTime()), 0);
+    paint(ctx);
   } catch (e) {
     if (initial) root.innerHTML = `<div class="card"><div class="empty">${t('logs.loadFailed', esc(e.message || e))}</div></div>`;
   } finally {
@@ -106,7 +114,7 @@ async function refresh(ctx, initial) {
   }
 }
 
-/* ---------- 过滤 ---------- */
+/* ---------- 过滤（当前页数据上的本地过滤：平台匹配 + 兜底） ---------- */
 
 function filtered() {
   const task = state.taskId;
@@ -119,7 +127,16 @@ function filtered() {
     if (kw && !String(l.msg || '').toLowerCase().includes(kw) && !String(l.taskName || '').toLowerCase().includes(kw)) return false;
     return true;
   });
-  return state.newestFirst ? rows.slice().reverse() : rows;
+  return state.newestFirst ? rows : rows.slice().reverse();
+}
+
+/* 导出 / 复制：一次性拉取全量匹配日志（最多 EXPORT_MAX 条） */
+async function fetchAllFiltered() {
+  const r = await api.logs({
+    level: state.level, taskId: state.taskId, q: state.q || '',
+    page: 1, pageSize: EXPORT_MAX, order: state.newestFirst ? 'desc' : 'asc',
+  });
+  return (r.items || []).filter(matches);
 }
 
 /* ---------- 渲染 ---------- */
@@ -127,12 +144,21 @@ function filtered() {
 function paint(ctx) {
   const root = boundRoot;
   if (!root) return;
-  const tasks = [...new Set(state.rows.map((l) => l.taskName).filter(Boolean))];
   const totalBytes = state.files.reduce((n, f) => n + (Number(f.bytes) || 0), 0);
   const retDays = Number(state.limits.logRetentionDays) || 14;
   const retLevel = esc(state.limits.logLevel || 'INFO');
-  let hint = t('logs.hint', retDays, retLevel, MAX_ROWS);
+  let hint = t('logs.hint', retDays, retLevel, state.pageSize);
   if (state.files.length) hint += t('logs.filesNote', state.files.length, esc(formatBytes(totalBytes)));
+
+  const pager = `
+    <div class="pager" id="lgPager">
+      <button class="btn sm ghost" id="lgFirst"${state.page <= 1 ? ' disabled' : ''} title="${t('logs.firstPage')}">«</button>
+      <button class="btn sm ghost" id="lgPrev"${state.page <= 1 ? ' disabled' : ''}>‹ ${t('logs.prevPage')}</button>
+      <span class="pager-info">${t('logs.pagerInfo', state.page, state.pages, state.total)}</span>
+      <button class="btn sm ghost" id="lgNext"${state.page >= state.pages ? ' disabled' : ''}>${t('logs.nextPage')} ›</button>
+      <button class="btn sm ghost" id="lgLast"${state.page >= state.pages ? ' disabled' : ''} title="${t('logs.lastPage')}">»</button>
+      <span class="pager-go">${t('logs.goPage')} <input class="input" id="lgPageGo" type="number" min="1" max="${state.pages}" value="${state.page}" style="width:56px;padding:4px 6px" /> <button class="btn sm ghost" id="lgGo">${t('logs.goBtn')}</button></span>
+    </div>`;
 
   root.innerHTML = `
     <div class="card">
@@ -143,11 +169,8 @@ function paint(ctx) {
         </select>
         <select class="select" id="lgTask" style="width:190px">
           <option value="">${t('logs.taskAll')}</option>
-          ${tasks.map((tk) => {
-            const id = (state.rows.find((l) => l.taskName === tk) || {}).taskId || '';
-            return `<option value="${esc(id)}"${state.taskId === id ? ' selected' : ''}>${esc(tk)}</option>`;
-          }).join('')}
-          ${state.taskId && !tasks.some((tk) => (state.rows.find((l) => l.taskName === tk) || {}).taskId === state.taskId)
+          ${state.tasks.map((tk) => `<option value="${esc(tk.id)}"${state.taskId === tk.id ? ' selected' : ''}>${esc(tk.name)}</option>`).join('')}
+          ${state.taskId && !state.tasks.some((tk) => tk.id === state.taskId)
             ? `<option value="${esc(state.taskId)}" selected>${t('logs.taskLocked', esc(state.taskId))}</option>` : ''}
         </select>
         <select class="select" id="lgPlat" style="width:140px">
@@ -164,6 +187,7 @@ function paint(ctx) {
       </div>
       <div class="hintline" style="margin:0 16px 12px">${hint}</div>
       <div class="card-b" style="padding:0" id="lgTable">${table()}</div>
+      ${pager}
       <div class="hintline" style="margin:10px 16px 14px" id="lgCount"></div>
     </div>`;
 
@@ -198,10 +222,6 @@ function appendRow(line, ctx) {
   const tr = tmp.firstElementChild;
   if (state.newestFirst) tbody.insertBefore(tr, tbody.firstChild);
   else tbody.appendChild(tr);
-  while (tbody.children.length > MAX_ROWS) {
-    if (state.newestFirst) tbody.removeChild(tbody.lastElementChild);
-    else tbody.removeChild(tbody.firstElementChild);
-  }
   if (!state.paused) scrollBottom();
   syncCount();
 }
@@ -224,7 +244,7 @@ function scrollBottom() {
 
 function syncCount() {
   const node = boundRoot && boundRoot.querySelector('#lgCount');
-  if (node) node.textContent = t('logs.count', state.rows.length, filtered().length, state.newestFirst ? t('logs.newestFirst') : t('logs.newestLast'), MAX_ROWS);
+  if (node) node.textContent = t('logs.count', state.total, state.rows.length, state.newestFirst ? t('logs.newestFirst') : t('logs.newestLast'), state.page, state.pages);
   const live = boundRoot && boundRoot.querySelector('#lgLive');
   if (live) {
     live.className = 'chip ' + (state.paused ? 'wait' : 'on');
@@ -245,11 +265,11 @@ function bind(ctx) {
   };
 
   const level = root.querySelector('#lgLevel');
-  if (level) level.onchange = () => rerender({ level: level.value });
+  if (level) level.onchange = () => rerender({ level: level.value, page: 1 });
   const task = root.querySelector('#lgTask');
-  if (task) task.onchange = () => rerender({ taskId: task.value });
+  if (task) task.onchange = () => rerender({ taskId: task.value, page: 1 });
   const plat = root.querySelector('#lgPlat');
-  if (plat) plat.onchange = () => rerender({ platform: plat.value });
+  if (plat) plat.onchange = () => rerender({ platform: plat.value, page: 1 });
 
   const q = root.querySelector('#lgQ');
   if (q) {
@@ -257,7 +277,7 @@ function bind(ctx) {
     q.oninput = () => {
       state.q = q.value;
       clearTimeout(timer);
-      timer = setTimeout(() => { const t = root.querySelector('#lgTable'); if (t) t.innerHTML = table(); syncCount(); }, 200);
+      timer = setTimeout(() => rerender({ q: q.value, page: 1 }), 300);
     };
   }
 
@@ -265,24 +285,40 @@ function bind(ctx) {
   if (live) live.onclick = () => { state.paused = !state.paused; syncCount(); toast(state.paused ? t('logs.pauseLiveToast') : t('logs.resumeLiveToast')); };
 
   const order = root.querySelector('#lgOrder');
-  if (order) order.onclick = () => {
-    state.newestFirst = !state.newestFirst;
-    order.textContent = state.newestFirst ? t('logs.newestFirst') : t('logs.newestLast');
-    const tb = root.querySelector('#lgTable');
-    if (tb) tb.innerHTML = table();
-    syncCount();
+  if (order) order.onclick = () => rerender({ newestFirst: !state.newestFirst, page: 1 });
+
+  /* ---- 分页 ---- */
+  const goto = (page) => {
+    const p = Math.max(1, Math.min(state.pages, Number(page) || 1));
+    if (p !== state.page) rerender({ page: p });
   };
+  const pg = (id, page) => {
+    const b = root.querySelector(id);
+    if (b) b.onclick = () => goto(page);
+  };
+  pg('#lgFirst', 1);
+  pg('#lgPrev', state.page - 1);
+  pg('#lgNext', state.page + 1);
+  pg('#lgLast', state.pages);
+  const goBtn = root.querySelector('#lgGo');
+  const goIn = root.querySelector('#lgPageGo');
+  if (goBtn) goBtn.onclick = () => goto(goIn ? goIn.value : state.page);
+  if (goIn) goIn.onkeydown = (e) => { if (e.key === 'Enter' && goBtn) goBtn.click(); };
 
   const copy = root.querySelector('#lgCopy');
-  if (copy) copy.onclick = () => {
-    const text = filtered().map((l) => `[${formatLogTime(l.ts)}] ${String(l.level || 'INFO').toUpperCase()} ${l.taskName || '-'} ${l.msg || ''}`).join('\n');
-    copyText(text || t('logs.noLogs'), t('logs.copied'));
+  if (copy) copy.onclick = async () => {
+    try {
+      const text = (await fetchAllFiltered()).map((l) => `[${formatLogTime(l.ts)}] ${String(l.level || 'INFO').toUpperCase()} ${l.taskName || '-'} ${l.msg || ''}`).join('\n');
+      copyText(text || t('logs.noLogs'), t('logs.copied'));
+    } catch (e) { toast(e.message || t('logs.loadFailed'), 'err'); }
   };
   const exp = root.querySelector('#lgExport');
-  if (exp) exp.onclick = () => {
-    const text = filtered().map((l) => `[${formatLogTime(l.ts)}] ${String(l.level || 'INFO').toUpperCase()} ${l.taskName || '-'} ${l.msg || ''}`).join('\r\n');
-    downloadText(`livegrab_logs_${new Date().toISOString().slice(0, 10)}.txt`, text, 'text/plain;charset=utf-8');
-    toast(t('logs.exportedToast'));
+  if (exp) exp.onclick = async () => {
+    try {
+      const text = (await fetchAllFiltered()).map((l) => `[${formatLogTime(l.ts)}] ${String(l.level || 'INFO').toUpperCase()} ${l.taskName || '-'} ${l.msg || ''}`).join('\r\n');
+      downloadText(`livegrab_logs_${new Date().toISOString().slice(0, 10)}.txt`, text, 'text/plain;charset=utf-8');
+      toast(t('logs.exportedToast'));
+    } catch (e) { toast(e.message || t('logs.loadFailed'), 'err'); }
   };
 
   const clear = root.querySelector('#lgClear');
@@ -350,6 +386,9 @@ async function doClear(range, ctx) {
         toast(t('logs.clearDone', String((r && r.removed) || 0)));
         state.rows = [];
         state.files = [];
+        state.page = 1;
+        state.total = 0;
+        state.pages = 1;
         await refresh(ctx, true);
       } catch (e) {
         toast((e && e.message) || t('logs.clearFail'), 'err');

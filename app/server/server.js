@@ -434,14 +434,18 @@ async function main() {
   });
 
   // ---- 日志 / 通知 ----
-  route('GET', '/api/logs', async (req) => ({
-    items: logger.query({
-      level: req.query.level, taskId: req.query.taskId, q: req.query.q, limit: req.query.limit,
-    }),
-    files: await logger.files(),
-    retentionDays: store.settings.logRetentionDays,
-    level: store.settings.logLevel,
-  }));
+  route('GET', '/api/logs', async (req) => {
+    const page = await logger.queryPage({
+      level: req.query.level, taskId: req.query.taskId, q: req.query.q,
+      page: req.query.page, pageSize: req.query.pageSize, order: req.query.order,
+    });
+    return {
+      ...page,
+      files: await logger.files(),
+      retentionDays: store.settings.logRetentionDays,
+      level: store.settings.logLevel,
+    };
+  });
   route('POST', '/api/logs/clear', async (req) => {
     const body = await readBody(req).catch(() => ({}));
     return logger.clear({ from: body.from, to: body.to });

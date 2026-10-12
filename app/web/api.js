@@ -75,7 +75,17 @@ function normalizeLogs(r) {
   if (!r) return { items: [], files: [] };
   const items = (Array.isArray(r.items) ? r.items : Array.isArray(r.logs) ? r.logs : [])
     .map(normalizeLogLine).filter(Boolean);
-  return { items, files: Array.isArray(r.files) ? r.files : [] };
+  const total = Number(r.total) || items.length;
+  const pageSize = Number(r.pageSize) || 50;
+  return {
+    items,
+    files: Array.isArray(r.files) ? r.files : [],
+    total,
+    page: Number(r.page) || 1,
+    pageSize,
+    pages: Number(r.pages) || Math.max(1, Math.ceil(total / pageSize)),
+    tasks: Array.isArray(r.tasks) ? r.tasks : [],
+  };
 }
 
 function qs(params) {
