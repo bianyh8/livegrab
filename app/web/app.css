@@ -605,17 +605,19 @@ table.tight th{padding:8px 12px}
     padding-bottom:env(safe-area-inset-bottom);
   }
   .tb-item{
-    flex:1;display:flex;flex-direction:column;align-items:center;gap:3px;padding:9px 0 7px;
+    flex:1;display:flex;flex-direction:column;align-items:center;gap:4px;padding:8px 0 7px;
     color:var(--txt-3);font-size:10.5px;cursor:pointer;user-select:none;position:relative;
     border:0;background:none;font-family:inherit;min-height:52px;justify-content:center;
   }
   .tb-item svg{width:21px;height:21px;stroke-width:1.9}
+  .tb-item .tb-ic{display:flex;align-items:center;gap:3px;line-height:1}
+  .tb-item .tb-lb{line-height:1}
   .tb-item.on{color:#fff}
   .tb-item.on::before{
     content:"";position:absolute;top:0;left:50%;transform:translateX(-50%);
     width:34px;height:3px;border-radius:0 0 3px 3px;background:linear-gradient(90deg,var(--dy),var(--dy-2));
   }
-  .tb-item .badge{position:absolute;top:4px;right:calc(50% - 19px);font-size:9.5px;padding:0 5px;border-radius:8px;line-height:1.5;margin:0}
+  .tb-item .badge{position:static;font-size:9.5px;padding:0 5px;border-radius:8px;line-height:1.6;margin:0}
   /* 更多弹出面板 */
   .tb-more{
     position:fixed;right:10px;bottom:calc(66px + env(safe-area-inset-bottom));z-index:121;
