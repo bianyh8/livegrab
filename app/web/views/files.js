@@ -16,6 +16,9 @@ const state = {
   dateFrom: '',
   dateTo: '',
   ext: '',
+  /* 已生效的筛选条件（点「查询」才提交）；输入框草稿暂存在上面的 q/platform/dateFrom/dateTo/ext */
+  filters: { q: '', platform: '', dateFrom: '', dateTo: '', ext: '' },
+  defaultsSet: false,
   picked: new Set(),
   hash: '',
   pending: false,
@@ -24,10 +27,35 @@ const state = {
 
 let boundRoot = null;
 
+/* 默认查询区间：近 7 天（7 天前 → 今天） */
+function defaultDateRange() {
+  const fmt = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  return { from: fmt(new Date(Date.now() - 7 * 864e5)), to: fmt(new Date()) };
+}
+
+/* 把输入框草稿提交为已生效筛选条件（「查询」按钮触发） */
+function commitFilters() {
+  state.filters = { q: state.q, platform: state.platform, dateFrom: state.dateFrom, dateTo: state.dateTo, ext: state.ext };
+  state.hash = '';
+}
+
+/* 恢复默认查询条件（「清除」按钮触发 / 首次进入页面） */
+function resetToDefaults(commit) {
+  const { from, to } = defaultDateRange();
+  state.q = '';
+  state.platform = '';
+  state.ext = '';
+  state.dateFrom = from;
+  state.dateTo = to;
+  state.defaultsSet = true;
+  if (commit) commitFilters();
+}
+
 export async function render(root, ctx) {
   boundRoot = root;
   root.innerHTML = `<div class="card"><div class="empty">${t('files.loadingLibrary')}</div></div>`;
   if (!state.bound) state.bound = true;
+  if (!state.defaultsSet) resetToDefaults(true);
   ctx.onRefresh(() => tick(ctx));
   await tick(ctx, true);
 }
@@ -38,7 +66,7 @@ async function tick(ctx, initial) {
   if (state.pending) return;
   state.pending = true;
   try {
-    const r = await api.files({ view: 'platform', q: state.q });
+    const r = await api.files({ view: 'platform', q: state.filters.q });
     state.sessions = (r && r.items) || [];
     paint(ctx, initial);
   } catch (e) {
@@ -65,16 +93,17 @@ function allFiles() {
 }
 
 function filtered() {
-  const q = state.q.trim().toLowerCase();
+  const fil = state.filters;
+  const q = fil.q.trim().toLowerCase();
   return allFiles().filter(({ f, s, tag }) => {
-    if (state.platform && s.platform !== state.platform) return false;
+    if (fil.platform && s.platform !== fil.platform) return false;
     // 日期按场次开始日期做闭区间过滤：仅起始 / 仅结束 / 都填均生效
     const day = String(s.startedAt || '').slice(0, 10);
-    if (state.dateFrom && day < state.dateFrom) return false;
-    if (state.dateTo && day > state.dateTo) return false;
-    if (state.ext) {
+    if (fil.dateFrom && day < fil.dateFrom) return false;
+    if (fil.dateTo && day > fil.dateTo) return false;
+    if (fil.ext) {
       const e = String(f.ext || tag || '').toLowerCase();
-      if (e !== state.ext && !(state.ext === 'mp4' && (e === 'mp4' || e === 'm4a'))) return false;
+      if (e !== fil.ext && !(fil.ext === 'mp4' && (e === 'mp4' || e === 'm4a'))) return false;
     }
     if (q) {
       const hay = [f.name, f.relPath, s.streamer, s.title, s.taskId].join(' ').toLowerCase();
@@ -117,6 +146,8 @@ function paint(ctx, force) {
         <select class="select" id="flExt" style="width:120px">
           ${[['', 'files.allTypes'], ['ts', 'files.extTs'], ['mp4', 'files.extMp4'], ['m4a', 'files.extM4a']].map(([v, k]) => `<option value="${v}"${state.ext === v ? ' selected' : ''}>${t(k)}</option>`).join('')}
         </select>
+        <button class="btn sm" id="flQuery">${t('files.query')}</button>
+        <button class="btn sm ghost" id="flClear">${t('files.clear')}</button>
         <div class="spacer"></div>
         <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--txt-2);cursor:pointer"><input type="checkbox" class="cb" id="flSelAll"${allSel ? ' checked' : ''} /> ${t('files.selectAll')}</label>
         <span class="chip ${state.picked.size ? 'on' : ''}" id="flPickChip"><i class="dot"></i>${t('files.selectedCount', state.picked.size)}</span>
@@ -183,22 +214,28 @@ function bind(ctx) {
   const root = boundRoot;
   if (!root) return;
 
+  /* 取消自动查询：输入只改草稿，点「查询」才应用，「清除」恢复默认（近 7 天） */
   const q = root.querySelector('#flQ');
-  if (q) q.oninput = () => { state.q = q.value; state.hash = ''; paint(ctx, true); };
+  if (q) q.oninput = () => { state.q = q.value; };
   const plat = root.querySelector('#flPlat');
-  if (plat) plat.onchange = () => { state.platform = plat.value; state.hash = ''; paint(ctx, true); };
+  if (plat) plat.onchange = () => { state.platform = plat.value; };
   const dateFrom = root.querySelector('#flDateFrom');
   if (dateFrom) {
     bindDatePicker(dateFrom);
-    dateFrom.onchange = () => { state.dateFrom = dateFrom.value; state.hash = ''; paint(ctx, true); };
+    dateFrom.onchange = () => { state.dateFrom = dateFrom.value; };
   }
   const dateTo = root.querySelector('#flDateTo');
   if (dateTo) {
     bindDatePicker(dateTo);
-    dateTo.onchange = () => { state.dateTo = dateTo.value; state.hash = ''; paint(ctx, true); };
+    dateTo.onchange = () => { state.dateTo = dateTo.value; };
   }
   const ext = root.querySelector('#flExt');
-  if (ext) ext.onchange = () => { state.ext = ext.value; state.hash = ''; paint(ctx, true); };
+  if (ext) ext.onchange = () => { state.ext = ext.value; };
+
+  const queryBtn = root.querySelector('#flQuery');
+  if (queryBtn) queryBtn.onclick = () => { commitFilters(); paint(ctx, true); };
+  const clearBtn = root.querySelector('#flClear');
+  if (clearBtn) clearBtn.onclick = () => { resetToDefaults(true); paint(ctx, true); };
 
   root.querySelectorAll('[data-pick-file]').forEach((cb) => {
     cb.onchange = () => {
