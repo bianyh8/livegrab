@@ -410,8 +410,8 @@ export async function openPlayer(ctx, opts) {
       </div>
       <div class="modal-f">
         <button class="btn ghost" id="plCopy">${esc(t('ui.copyDirectLink'))}</button>
-        <button class="btn ghost" id="plRemux">${esc(t('ui.remuxMp4'))}</button>
-        <button class="btn ghost" id="plMerge">${esc(t('ui.mergeWhole'))}</button>
+        ${opts.kind === 'direct' ? '' : `<button class="btn ghost" id="plRemux">${esc(t('ui.remuxMp4'))}</button>
+        <button class="btn ghost" id="plMerge">${esc(t('ui.mergeWhole'))}</button>`}
         <button class="btn primary" id="plClose2">${esc(t('common.close'))}</button>
       </div>
     </div>`;
@@ -546,11 +546,13 @@ export async function openPlayer(ctx, opts) {
   mask.querySelector('#plClose').onclick = closePlayer;
   mask.querySelector('#plClose2').onclick = closePlayer;
   mask.querySelector('#plCopy').onclick = () => copyText(location.origin + ctx.api.downloadUrl(opts.fileId), t('ui.directLinkCopied'));
-  mask.querySelector('#plRemux').onclick = async () => {
+  const remuxBtn = mask.querySelector('#plRemux');
+  if (remuxBtn) remuxBtn.onclick = async () => {
     try { await ctx.api.remux(opts.fileId); toast(t('ui.remuxQueued')); if (opts.onChanged) opts.onChanged(); }
     catch (e) { toast(e.message || t('ui.remuxFail'), 'err'); }
   };
-  mask.querySelector('#plMerge').onclick = async () => {
+  const mergeBtn = mask.querySelector('#plMerge');
+  if (mergeBtn) mergeBtn.onclick = async () => {
     if (!opts.session || !opts.session.id) { toast(t('ui.mergeInvalid'), 'warn'); return; }
     try { await ctx.api.merge(opts.session.id); toast(t('ui.mergeQueued')); if (opts.onChanged) opts.onChanged(); }
     catch (e) { toast(e.message || t('ui.mergeFail'), 'err'); }
