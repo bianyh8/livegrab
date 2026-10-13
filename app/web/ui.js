@@ -335,6 +335,7 @@ export function el(tag, cls, text) {
 /* ================= 播放器弹窗 ================= */
 
 let playerState = null;
+let playerCleanup = [];
 
 /**
  * openPlayer(ctx, {fileId, name, platform, platformName, qualityLabel, kind, segments, session, onChanged})
@@ -344,6 +345,7 @@ export async function openPlayer(ctx, opts) {
   const mask = document.getElementById('playerMask');
   if (!mask) return;
   closePlayer();
+  playerCleanup = [];
 
   const segs = Array.isArray(opts.segments) ? opts.segments : [];
   let info;
@@ -370,7 +372,7 @@ export async function openPlayer(ctx, opts) {
     : t('ui.srcDirect');
 
   mask.innerHTML = `
-    <div class="modal" style="width:min(1000px,94vw)">
+    <div class="modal pv-modal" style="width:min(1000px,94vw)">
       <div class="modal-h">
         <h3 class="mono" style="font-size:13.5px">${esc(opts.name || t('common.playback'))}</h3>
         <span class="chip" style="margin-left:10px">${esc(opts.platformName || platformInfo(opts.platform).name)}</span>
@@ -379,21 +381,24 @@ export async function openPlayer(ctx, opts) {
         <span class="x" id="plClose">✕</span>
       </div>
       <div class="modal-b" style="padding:0">
-        <div class="player">
-          <video id="plVideo" src="${esc(url)}" playsinline style="width:100%;height:100%;background:#000;display:block"></video>
+        <div class="player" id="plBox">
+          <video id="plVideo" src="${esc(url)}" playsinline class="pv-video"></video>
           <div class="pv-badge" id="plSrc">${esc(srcText)}</div>
           <div class="pv-hint">${esc(t('ui.browserPlayerHint'))}</div>
+          <span class="pv-x" id="plX2">✕</span>
         </div>
-        <div class="pv-bar">
-          <button class="pv-btn" id="plToggle">⏯</button>
+        <div class="pv-bar" id="plBar">
+          <button class="pv-btn" id="plToggle" title="播放 / 暂停">⏯</button>
           <span class="mono" style="font-size:11.5px;color:var(--txt-3)" id="plNow">00:00</span>
           <div class="pv-track" id="plTrack"><i id="plFill" style="width:0%"></i></div>
           <span class="mono" style="font-size:11.5px;color:var(--txt-3)" id="plTotal">--:--</span>
-          <button class="pv-btn" id="plMute">🔈</button>
-          <button class="pv-btn" id="plRate">1.0x</button>
-          <button class="pv-btn" id="plFull">⛶</button>
+          <button class="pv-btn" id="plMute" title="静音">🔈</button>
+          <button class="pv-btn" id="plRate" title="倍速">1.0x</button>
+          <button class="pv-btn" id="plFit" title="${esc(t('ui.fitFill'))}">${esc(t('ui.fitContain'))}</button>
+          <button class="pv-btn" id="plRotate" title="${esc(t('ui.rotate'))}">⟳</button>
+          <button class="pv-btn" id="plFull" title="${esc(t('ui.fullscreen'))}">⛶</button>
         </div>
-        <div style="padding:16px 20px">
+        <div class="pv-extra" style="padding:16px 20px">
           ${segs.length ? `<div style="font-size:12.5px;color:var(--txt-2)">${t('ui.segments')} <span style="color:var(--txt-3)">${t('ui.segsHint', segs.length)}</span></div>
           <div class="pv-segs">${segs.map((s) => {
             const idx = String(s.segmentIndex || 0).padStart(3, '0');
@@ -441,7 +446,97 @@ export async function openPlayer(ctx, opts) {
   video.onclick = () => { video.paused ? video.play().catch(() => {}) : video.pause(); };
   muteBtn.onclick = () => { video.muted = !video.muted; muteBtn.textContent = video.muted ? '🔇' : '🔈'; };
   rateBtn.onclick = () => { rateIdx = (rateIdx + 1) % rates.length; video.playbackRate = rates[rateIdx]; rateBtn.textContent = rates[rateIdx].toFixed(1) + 'x'; };
-  mask.querySelector('#plFull').onclick = () => { const p = video.parentElement; (document.fullscreenElement ? document.exitFullscreen() : (p.requestFullscreen ? p.requestFullscreen() : Promise.resolve())).catch(() => {}); };
+
+  const playerEl = mask.querySelector('#plBox');
+  const pvBar = mask.querySelector('#plBar');
+
+  /* ---- 画面自适应：适应（contain，不变形）↔ 铺满（fill，拉伸） ---- */
+  const fitBtn = mask.querySelector('#plFit');
+  let fit = false;
+  const setFit = (f) => {
+    fit = f;
+    video.style.objectFit = fit ? 'fill' : 'contain';
+    fitBtn.textContent = fit ? t('ui.fitFill') : t('ui.fitContain');
+    fitBtn.title = fit ? t('ui.fitContain') : t('ui.fitFill');
+  };
+  setFit(false);
+  fitBtn.onclick = () => setFit(!fit);
+
+  /* ---- 旋转 90°（竖屏视频可横屏观看），按旋转后的外接框精确适配容器 ---- */
+  const rotBtn = mask.querySelector('#plRotate');
+  playerState.rot = 0;
+  const applyRotate = () => {
+    const rot = playerState.rot % 360;
+    if (rot % 180 === 0) {
+      /* 回到 CSS 默认（.pv-video absolute inset:0 铺满播放器） */
+      video.style.left = '';
+      video.style.top = '';
+      video.style.width = '';
+      video.style.height = '';
+      video.style.margin = '';
+      video.style.transform = rot ? `rotate(${rot}deg)` : '';
+      return;
+    }
+    const vw = video.videoWidth, vh = video.videoHeight;
+    const a = vw && vh ? vw / vh : 16 / 9;
+    const box = playerEl.getBoundingClientRect();
+    const bw = box.width || 16, bh = box.height || 9;
+    const eh = Math.min(bw, bh / a); /* 旋转后可视宽 = 元素高 */
+    const ew = a * eh;               /* 旋转后可视高 = 元素宽 */
+    video.style.position = 'absolute';
+    video.style.left = '50%';
+    video.style.top = '50%';
+    video.style.width = ew + 'px';
+    video.style.height = eh + 'px';
+    video.style.margin = `-${eh / 2}px 0 0 -${ew / 2}px`;
+    video.style.transform = `rotate(${rot}deg)`;
+  };
+  rotBtn.onclick = () => { playerState.rot = (playerState.rot + 90) % 360; applyRotate(); };
+  video.addEventListener('loadedmetadata', applyRotate);
+
+  /* ---- 全屏：桌面/Android 对播放器区域全屏；iOS 用 video.webkitEnterFullscreen 兜底 ---- */
+  const fsBtn = mask.querySelector('#plFull');
+  fsBtn.onclick = () => {
+    const inFs = document.fullscreenElement || document.webkitFullscreenElement;
+    if (inFs) {
+      if (document.exitFullscreen) document.exitFullscreen().catch(() => {});
+      else if (document.webkitExitFullscreen) document.webkitExitFullscreen();
+    } else if (video.webkitEnterFullscreen) {
+      video.webkitEnterFullscreen();
+    } else if (playerEl.requestFullscreen) {
+      playerEl.requestFullscreen().catch(() => {});
+    }
+  };
+
+  /* ---- 横屏沉浸式：无操作 3.2 秒后自动隐藏控制条，触屏/移动即显示 ---- */
+  const mqImmersive = window.matchMedia('(orientation:landscape) and (max-width:900px)');
+  let hideTimer = null;
+  const showCtl = () => {
+    pvBar.classList.remove('hid');
+    clearTimeout(hideTimer);
+    if (mqImmersive.matches) hideTimer = setTimeout(() => pvBar.classList.add('hid'), 3200);
+  };
+  const onPlayerTouch = () => showCtl();
+  playerEl.addEventListener('mousemove', onPlayerTouch);
+  playerEl.addEventListener('touchstart', onPlayerTouch, { passive: true });
+  playerEl.addEventListener('click', onPlayerTouch);
+  const onMqChange = () => { applyRotate(); showCtl(); };
+  const onWinResize = () => applyRotate();
+  if (mqImmersive.addEventListener) mqImmersive.addEventListener('change', onMqChange);
+  window.addEventListener('resize', onWinResize);
+  showCtl();
+
+  mask.querySelector('#plX2').onclick = closePlayer;
+  playerCleanup.push(() => {
+    clearTimeout(hideTimer);
+    playerEl.removeEventListener('mousemove', onPlayerTouch);
+    playerEl.removeEventListener('touchstart', onPlayerTouch);
+    playerEl.removeEventListener('click', onPlayerTouch);
+    if (mqImmersive.removeEventListener) mqImmersive.removeEventListener('change', onMqChange);
+    window.removeEventListener('resize', onWinResize);
+    video.removeEventListener('loadedmetadata', applyRotate);
+  });
+
   mask.querySelector('#plTrack').onclick = (e) => {
     if (mode === 'remux') { toast(t('ui.remuxNoSeek'), 'warn'); return; }
     if (!isFinite(video.duration) || !video.duration) return;
@@ -472,6 +567,8 @@ export async function openPlayer(ctx, opts) {
 }
 
 export function closePlayer() {
+  (playerCleanup || []).forEach((fn) => { try { fn(); } catch { /* ignore */ } });
+  playerCleanup = [];
   const mask = document.getElementById('playerMask');
   if (!mask) return;
   const video = mask.querySelector('video');

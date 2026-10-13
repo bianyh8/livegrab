@@ -513,19 +513,25 @@ td .sub{font-size:11.5px;color:var(--txt-3);margin-top:3px}
 .modal-b{padding:20px}
 .modal-f{display:flex;gap:10px;justify-content:flex-end;padding:14px 20px;border-top:1px solid var(--line);position:sticky;bottom:0;background:var(--panel)}
 /* ---------- 娴忚鍣ㄥ唴缃挱鏀惧櫒 ---------- */
-.player{position:relative;aspect-ratio:16/9;border-bottom:1px solid var(--line);display:grid;place-items:center;
+.player{position:relative;width:100%;aspect-ratio:16/9;max-height:68vh;border-bottom:1px solid var(--line);display:grid;place-items:center;
   background:radial-gradient(120% 130% at 28% 18%,#1a2333,#070a10 70%)}
+.pv-video{position:absolute;inset:0;width:100%;height:100%;background:#000;display:block;object-fit:contain}
+/* 横屏沉浸式才显示的独立关闭按钮（全屏弹窗头部被隐藏时兜底） */
+.pv-x{position:absolute;top:12px;right:14px;z-index:6;width:34px;height:34px;border-radius:9px;display:none;place-items:center;
+  background:rgba(10,13,19,.55);border:1px solid var(--line);color:#fff;font-size:16px;line-height:1;cursor:pointer;padding:0}
+.player:fullscreen,.player:-webkit-full-screen{width:100vw;height:100vh;max-height:none;aspect-ratio:auto;border:0;background:#000;border-radius:0}
+.player:fullscreen .pv-hint,.player:-webkit-full-screen .pv-hint{display:none}
 .pv-ico{width:76px;height:76px;border-radius:50%;display:grid;place-items:center;font-size:24px;color:#0a0d13;cursor:pointer;
   padding-left:7px;background:linear-gradient(135deg,var(--dy),var(--dy-2));box-shadow:0 12px 34px rgba(254,44,85,.32)}
 .pv-hint{position:absolute;left:18px;bottom:14px;font-size:12px;color:var(--txt-3)}
 .pv-badge{position:absolute;right:18px;top:14px;font-size:11.5px;padding:4px 9px;border-radius:8px;
   background:rgba(10,13,19,.72);border:1px solid var(--line);color:var(--txt-2)}
-.pv-bar{display:flex;align-items:center;gap:14px;padding:12px 20px;border-bottom:1px solid var(--line)}
+.pv-bar{display:flex;align-items:center;gap:14px;padding:12px 20px;border-bottom:1px solid var(--line);transition:opacity .25s}
 .pv-track{flex:1;height:6px;border-radius:99px;background:#232c3c;overflow:hidden;position:relative;cursor:pointer}
 .pv-track i{display:block;height:100%;background:linear-gradient(90deg,var(--dy),var(--dy-2));position:relative;z-index:1}
 .pv-track em{position:absolute;left:0;top:0;height:100%;width:82%;background:rgba(255,255,255,.12)}
 .pv-btn{width:34px;height:34px;border-radius:9px;border:1px solid var(--line);background:var(--panel-2);color:var(--txt);
-  cursor:pointer;display:grid;place-items:center;font-size:13px}
+  cursor:pointer;display:grid;place-items:center;font-size:13px;padding:0;white-space:nowrap}
 .pv-btn:hover{background:#1d2634}
 .pv-segs{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
 .x{margin-left:auto;cursor:pointer;color:var(--txt-3);font-size:20px;line-height:1;padding:2px 6px;border-radius:6px}
@@ -712,9 +718,14 @@ table.tight th{padding:8px 12px}
   /* ---- 弹窗全屏：flex 三段式（头固定 / 内容区内部滚动 / 底部按钮栏常驻），不依赖 sticky，兼容微信等旧 WebView ---- */
   .mask{padding:0}
   .modal{width:100% !important;height:100%;max-height:100%;border-radius:0;border-left:0;border-right:0;border-top:0;display:flex;flex-direction:column;overflow:hidden}
-  .modal-h{padding:14px 16px;position:static;flex:0 0 auto}
+  .modal-h{padding:14px 16px;position:static;flex:0 0 auto;flex-wrap:wrap;row-gap:6px}
+  .modal-h h3{flex:1 1 100%;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .modal-b{padding:16px 14px;flex:1 1 auto;overflow-y:auto}
   .modal-f{padding:12px 14px;padding-bottom:calc(12px + env(safe-area-inset-bottom));position:static;flex:0 0 auto;flex-wrap:wrap}
+  /* 播放器控制条手机端：进度条独占一行，按钮换行 + 40px 触控目标 */
+  .pv-bar{flex-wrap:wrap;gap:8px;padding:10px 12px}
+  .pv-track{flex:1 1 100%;order:-1}
+  .pv-btn{width:40px;height:40px;font-size:14px}
   /* 任务弹窗网格：3 列 / 2 列 → 1 列（!important 覆盖 inline style） */
   .tk-grid3,.tk-grid2{grid-template-columns:1fr !important}
 
@@ -735,6 +746,21 @@ table.tight th{padding:8px 12px}
 
   /* ---- 日志页 ---- */
   .logline{font-size:11.5px;word-break:break-all}
+}
+/* ---- 播放器横屏沉浸式（手机横屏：视频填满全屏，头/脚隐藏，控制条悬浮底部自动隐藏） ---- */
+@media (orientation:landscape) and (max-width:900px){
+  #playerMask{padding:0}
+  .modal.pv-modal{width:100% !important;height:100%;max-height:100%;border-radius:0;border:0;
+    display:flex;flex-direction:column;overflow:hidden;animation:none}
+  .pv-modal .modal-h,.pv-modal .modal-f{display:none}
+  .pv-modal .modal-b{padding:0;flex:1 1 auto;min-height:0;overflow:hidden;position:relative;display:flex;flex-direction:column}
+  .pv-modal .player{aspect-ratio:auto;flex:1 1 auto;min-height:0;max-height:none;border-bottom:0}
+  .pv-modal .pv-extra{display:none}
+  .pv-modal .pv-x{display:grid}
+  .pv-modal .pv-badge{left:14px;right:auto}
+  .pv-modal .pv-bar{position:absolute;left:0;right:0;bottom:0;z-index:5;border:0;flex-wrap:wrap;gap:10px;
+    padding:40px 12px calc(10px + env(safe-area-inset-bottom));background:linear-gradient(180deg,transparent,rgba(0,0,0,.75))}
+  .pv-modal .pv-bar.hid{opacity:0;pointer-events:none}
 }
 @media (min-width:769px){.tabbar,.tb-more{display:none !important}}
 
