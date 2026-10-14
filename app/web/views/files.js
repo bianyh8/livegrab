@@ -39,7 +39,7 @@ function commitFilters() {
   state.hash = '';
 }
 
-/* 恢复默认查询条件（「清除」按钮触发 / 首次进入页面） */
+/* 恢复默认查询条件（首次进入页面：默认近 7 天） */
 function resetToDefaults(commit) {
   const { from, to } = defaultDateRange();
   state.q = '';
@@ -48,6 +48,16 @@ function resetToDefaults(commit) {
   state.dateFrom = from;
   state.dateTo = to;
   state.defaultsSet = true;
+  if (commit) commitFilters();
+}
+
+/* 完全清空筛选条件（「清除」按钮触发）：关键词/平台/格式 + 日期范围全部清空 → 展示全部日期 */
+function clearAllFilters(commit) {
+  state.q = '';
+  state.platform = '';
+  state.ext = '';
+  state.dateFrom = '';
+  state.dateTo = '';
   if (commit) commitFilters();
 }
 
@@ -214,7 +224,7 @@ function bind(ctx) {
   const root = boundRoot;
   if (!root) return;
 
-  /* 取消自动查询：输入只改草稿，点「查询」才应用，「清除」恢复默认（近 7 天） */
+  /* 输入只改草稿，点「查询」才应用；「清除」完全清空（关键词/平台/格式/日期范围） */
   const q = root.querySelector('#flQ');
   if (q) q.oninput = () => { state.q = q.value; };
   const plat = root.querySelector('#flPlat');
@@ -235,7 +245,7 @@ function bind(ctx) {
   const queryBtn = root.querySelector('#flQuery');
   if (queryBtn) queryBtn.onclick = () => { commitFilters(); paint(ctx, true); };
   const clearBtn = root.querySelector('#flClear');
-  if (clearBtn) clearBtn.onclick = () => { resetToDefaults(true); paint(ctx, true); };
+  if (clearBtn) clearBtn.onclick = () => { clearAllFilters(true); paint(ctx, true); };
 
   root.querySelectorAll('[data-pick-file]').forEach((cb) => {
     cb.onchange = () => {
