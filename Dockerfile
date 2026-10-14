@@ -1,4 +1,20 @@
 # LiveGrab 直播录制台 —— 单容器镜像（Node 内置能力 + 系统 ffmpeg，唯一 npm 依赖 better-sqlite3）
+# 多阶段：构建阶段装工具链编译 better-sqlite3 原生模块；运行阶段保持精简（不含编译工具）
+FROM node:22-bookworm-slim AS build
+
+WORKDIR /app
+
+# 编译 better-sqlite3 所需工具链（node-gyp：python3 + make + g++）
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends python3 make g++ \
+ && rm -rf /var/lib/apt/lists/*
+
+# 只复制依赖清单，装完即可拿到含 better-sqlite3 原生 .node 的 node_modules
+COPY app/package.json ./package.json
+COPY app/package-lock.json ./package-lock.json
+RUN npm ci --omit=dev && npm cache clean --force
+
+# ---------- 运行阶段 ----------
 FROM node:22-bookworm-slim
 
 LABEL org.opencontainers.image.title="LiveGrab 直播录制台" \
@@ -20,10 +36,8 @@ RUN apt-get update \
 
 WORKDIR /app
 
-# 只复制运行需要的东西；npm ci 安装唯一生产依赖 better-sqlite3（SQLite 存储）
-COPY app/package.json ./package.json
-COPY app/package-lock.json ./package-lock.json
-RUN npm ci --omit=dev && npm cache clean --force
+# 直接复用构建阶段编译好的 node_modules（含 better-sqlite3 原生 .node，两阶段同为 bookworm/glibc，可通用）
+COPY --from=build /app/node_modules ./node_modules
 COPY app/server ./server
 COPY app/web ./web
 COPY app/test ./test
