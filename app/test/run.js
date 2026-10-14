@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url';
 
 import * as naming from '../server/naming.js';
 import { Store, DEFAULT_SETTINGS, deepMerge } from '../server/store.js';
+import { openDb } from '../server/db.js';
 import { Logger } from '../server/logger.js';
 import { Storage } from '../server/storage.js';
 import { Notifier } from '../server/notify.js';
@@ -23,6 +24,12 @@ import * as fakeMedia from './fake-media.mjs';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const APP_DIR = path.join(__dirname, '..');
 const SERVER = path.join(APP_DIR, 'server', 'server.js');
+
+/** 测试用：在指定目录打开（或新建）v2 库并加载 store —— 与 server.js bootstrap 同一条路径 */
+async function openStore(dir) {
+  const db = openDb(path.join(dir, 'livegrab.db'));
+  return new Store(dir).init(db);
+}
 
 let passed = 0;
 let failed = 0;
@@ -122,7 +129,7 @@ async function testNaming() {
 async function testStore() {
   suite('持久化 store');
   const dir = p('store-config');
-  const store = await new Store(dir).init();
+  const store = await openStore(dir);
   const keys = Object.keys(DEFAULT_SETTINGS);
   ok(['maxConcurrency', 'platformCaps', 'platformEnabled', 'notify', 'security', 'trashRetentionDays', 'playConcurrency'].every((k) => keys.includes(k)),
     '默认设置项齐全', `${keys.length} 个顶层键`);
@@ -141,7 +148,7 @@ async function testStore() {
     return store.saveTask(t1);
   }));
   await store.persist();
-  const reloaded = await new Store(dir).init();
+  const reloaded = await openStore(dir);
   eq(reloaded.tasks.length, 2, '并发写后任务数正确');
   eq(reloaded.getTask(t1.id).totalBytes, 29, '并发写后最后一次写入生效');
 
@@ -149,12 +156,12 @@ async function testStore() {
   ok(merged.a === 1 && merged.b.c === 9 && merged.b.d === 3, '设置深合并保留未提及字段');
 
   await store.updateSettings({ maxConcurrency: 5 });
-  ok((await new Store(dir).init()).settings.maxConcurrency === 5, '设置落盘并可重载');
+  ok((await openStore(dir)).settings.maxConcurrency === 5, '设置落盘并可重载');
 
   // 残留"录制中"状态在重启时被收敛
   const t3 = Store.newTask({ status: 'recording' });
   await store.addTask(t3);
-  const reloaded2 = await new Store(dir).init();
+  const reloaded2 = await openStore(dir);
   eq(reloaded2.getTask(t3.id).status, 'stopped', '重启后残留录制中状态收敛为已停止');
 
   const s = { id: 's_1', segments: [{ id: 'f_1', path: '/data/x.ts' }], extras: [], merged: null, mp4: null };
@@ -241,7 +248,7 @@ async function testResolvers() {
     const stream = await resolvers.resolveStream({ platform: 'bilibili', roomId: '22637261', quality: 'origin' }, { settings: {} });
     eq(stream.url, 'https://cdn.example.com/live/x.flv?token=1', 'B 站流地址拼接');
     eq(stream.qualityActual, 'origin', 'B 站实际清晰度回写');
-    const fb = await resolvers.resolveStream({ platform: 'bilibili', roomId: '22637261', quality: 'sd', qualityFallback: ['hd'] }, { settings: {} });
+    const fb = await resolvers.resolveStream({ platform: 'bilibili', roomId: '22637261', quality: 'sd' }, { settings: { qualityFallback: ['hd'] } });
     ok(fb.url.includes('cdn.example.com'), '清晰度回退后仍能拿到流');
     // 接口被风控/废弃时必须报错，不能静默当作"未开播"
     forceBlocked = true;
@@ -292,7 +299,8 @@ async function testResolvers() {
     eq(room.title, '测试抖音直播间', '抖音免登录解析出标题');
     eq(room.online, 1234, '抖音免登录解析出在线人数');
     const stream = await resolvers.resolveStream({ platform: 'douyin', roomId: '7694422854462115', quality: 'origin' }, { settings: {} });
-    eq(stream.url, 'http://cdn.example.com/full.flv?sig=1', '抖音原画档取到 FULL_HD1 流地址');
+    // 抖音解析器自 5be560ed 起 HLS 优先（flv 边缘节点常 404/超时）：原画档应命中原画 HLS 单，而不是同档 flv
+    eq(stream.url, 'http://cdn.example.com/full.m3u8', '抖音原画档取到原画 HLS 流地址');
     eq(stream.qualityKey, 'FULL_HD1', '抖音原画档命中最高码率 key');
     eq(stream.qualityActual, 'origin', '抖音实际清晰度回写');
     const hd = await resolvers.resolveStream({ platform: 'douyin', roomId: '7694422853944462115', quality: 'hd' }, { settings: {} });
@@ -324,7 +332,7 @@ async function makeEngine(name, env = {}) {
   const configDir = p(`${name}-config`);
   const recordRoot = p(`${name}-record`);
   await fsp.mkdir(recordRoot, { recursive: true });
-  const store = await new Store(configDir).init();
+  const store = await openStore(configDir);
   store.settings.recordRoot = recordRoot;
   store.settings.diskLimitGB = 0;      // 测试环境不因磁盘阈值拦截
   store.settings.maxConcurrency = 8;
@@ -426,10 +434,11 @@ async function testRecordChain() {
   const mergedMp4 = await waitFor(() => (session.extras || []).some((f) => f.kind === 'mp4' && f.sourceFileId === merged.id), 10000, '合并后自动转封装');
   ok(mergedMp4, '合并后按设置自动转封装');
 
-  // 扫描一致性
+  // 扫描一致性：未登记文件被扫描自动注册为独立场次（不再挂「未登记」列表）
   await fsp.writeFile(path.join(e.recordRoot, 'stray.ts'), Buffer.alloc(2048));
   const scan = await e.storage.scan();
-  ok(scan.added >= 1 && e.store.external.some((f) => f.name === 'stray.ts'), 'D19 未登记文件被发现', `added=${scan.added}`);
+  const straySession = (e.store.sessions || []).find((s) => (s.segments || []).some((f) => f.name === 'stray.ts'));
+  ok(scan.added >= 1 && !!straySession && !e.store.external.some((f) => f.name === 'stray.ts'), 'D19 未登记文件被扫描自动注册为场次', `added=${scan.added}`);
   await fsp.rm(session.segments[0].path, { force: true });
   const scan2 = await e.storage.scan();
   ok(scan2.missing >= 1 && session.segments[0].status === 'missing', 'D19 磁盘缺失被标记为文件缺失');
@@ -444,14 +453,17 @@ async function testRecordChain() {
     const scanGhost = await e.storage.scan();
     ok(scanGhost.cleaned >= 1 && !e.store.external.some((f) => f.id === 'f_ghost'), '路径已归属场次时，幽灵"未登记"条目被清理', `cleaned=${scanGhost.cleaned}`);
   }
-  // 磁盘上已消失的"未登记"条目同样不能永久残留
-  const strayEntry = e.store.external.find((f) => f.name === 'stray.ts');
-  if (strayEntry) {
-    await fsp.rm(strayEntry.path, { force: true });
-    const scanGone = await e.storage.scan();
-    ok(!e.store.external.some((f) => f.name === 'stray.ts') && scanGone.cleaned >= 1, '磁盘已消失的"未登记"条目被清理');
-    ok(scanGone.unregistered === 0, '清理后"未登记"计数归零（文件库不再显示幽灵条目）', `unregistered=${scanGone.unregistered}`);
-  }
+  // 磁盘上已消失的"未登记"条目同样不能永久残留（补登记入口遗留项）
+  const stray2Path = path.join(e.recordRoot, 'stray2.ts');
+  await fsp.writeFile(stray2Path, Buffer.alloc(1024));
+  e.store.state.external.push({
+    id: 'f_stale', sessionId: null, kind: 'unregistered', name: 'stray2.ts', path: stray2Path,
+    relPath: e.storage.rel(stray2Path), ext: 'ts', bytes: 1, status: 'ok',
+  });
+  await fsp.rm(stray2Path, { force: true });
+  const scanGone = await e.storage.scan();
+  ok(!e.store.external.some((f) => f.id === 'f_stale') && scanGone.cleaned >= 1, '磁盘已消失的"未登记"条目被清理');
+  ok(e.store.external.length === 0, '清理后"未登记"列表清空（文件库不再显示幽灵条目）', `unregistered=${scanGone.unregistered}`);
 
   // 0 字节空分段（ffmpeg 在轮转/停止瞬间创建又立即退出的残渣）必须清理，不能变成"未登记"垃圾
   const emptySeg = path.join(session.dir, '2026-10-09_空分段_099.ts');

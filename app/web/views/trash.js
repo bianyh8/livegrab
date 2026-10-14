@@ -90,7 +90,7 @@ function trashLine(item, ctx) {
       </div>
       <div class="acts">
         <button class="btn sm ghost" data-trash-act="restore" data-id="${esc(item.id)}">${t('trash.restore')}</button>
-        <button class="btn sm danger" data-trash-act="purge" data-id="${esc(item.id)}">${t('settings.pfClear')}</button>
+        <button class="btn sm danger" data-trash-act="purge" data-id="${esc(item.id)}">${t('files.clear')}</button>
       </div>
     </div>`;
 }
@@ -133,7 +133,7 @@ function bind(ctx) {
       const id = btn.dataset.id;
       const item = state.items.find((x) => x.id === id);
       confirmDialog({
-        title: t('trash.purgeTitle'), danger: true, ok: t('settings.pfClear'),
+        title: t('trash.purgeTitle'), danger: true, ok: t('files.clear'),
         text: t('trash.purgeText', esc(item && item.name || t('trash.thisItem')), esc(formatBytes(item && item.bytes || 0))),
         onOk: async () => {
           try { const r = await api.trashPurge([id]); toast(t('trash.purged', Number(r && r.purged) || 1)); state.hash = ''; await tick(ctx, true); }

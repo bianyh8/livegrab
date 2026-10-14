@@ -527,7 +527,7 @@
   "settings.recReconnectDesc": "指数退避 2/4/8/16/30 秒",
   "settings.recReconnUnit": "次",
   "settings.recChecking": "检测中…",
-  "settings.recScanResult": "{0} 可访问 · 扫描新增 {1}、更新 {2}、缺失 {3}、未登记 {4}",
+  "settings.recScanResult": "{0} 可访问 · 扫描新增场次 {1}、更新 {2}、缺失 {3}",
   "settings.recScanFail": "检测失败：{0}",
   "settings.recRootNotWritable": "路径不可访问或不可写",
   "settings.qOriginHighest": "原画（最高可用）",
@@ -648,7 +648,6 @@
   "settings.pfRecheckFail": "重新检测失败",
   "settings.pfPasteLabel": "粘贴 Cookie（支持 JSON 或 Netscape 格式）",
   "settings.pfPasteHint": "JSON：<span class=\"mono\">{\"平台id\": \"Cookie 字符串\"}</span>；Netscape：浏览器扩展导出的 cookies.txt 原文。平台 id 见左侧平台表格（douyin / bilibili / kuaishou / huya / douyu 等）。",
-  "settings.pfImportButton": "导入",
   "settings.pfEmptyCookie": "请粘贴 Cookie 内容",
   "settings.pfParseFail": "未能解析出平台 Cookie，请检查格式",
   "settings.pfImported": "已导入 {0}/{1} 个平台的 Cookie",
@@ -667,7 +666,6 @@
   "settings.pfAutoFetch": "自动获取",
   "settings.pfUpdateCookie": "更新 Cookie",
   "settings.pfFillCookie": "填写 Cookie",
-  "settings.pfClear": "清除",
   "settings.pfHowtoDouyin": "抖音无公开扫码接口：请在浏览器登录抖音后打开开发者工具，复制完整 Cookie 字符串（<b>必须包含 ttwid 与 sessionid</b>），粘贴到下方输入框。",
   "settings.pfHowtoBilibili": "B 站原画需要登录：可粘贴完整 Cookie（必须包含 <b>SESSDATA</b>）；页面内扫码登录为 P1，当前先用粘贴方式。",
   "settings.pfHowtoXiaohongshu": "请粘贴小红书 Cookie（若为 xhslink 短链，请先在浏览器中打开得到直播间地址）。",
@@ -762,5 +760,6 @@
   "files.dateTo": "结束日期",
   "files.dateSep": "至",
   "settings.tabStore": "存储",
-  "tasks.verbStart": "启动"
+  "tasks.verbStart": "启动",
+  "settings.pfImportButton": "导入"
 }

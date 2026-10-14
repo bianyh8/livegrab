@@ -572,7 +572,7 @@ async function openTaskDialog(ctx, id) {
     anchorName: task ? (task.anchorName || '') : '',
     anchorEdited: false,
     resolved: task ? {
-      anchorName: task.anchorName, title: task.title, avatar: task.avatar,
+      anchorName: task.anchorName, title: task.title,
       platform: task.platform, roomId: task.roomId, shortId: task.shortId,
       liveStatus: task.liveStatus === 'offline' ? 'offline' : 'live',
       online: null, qualityOptions: [],

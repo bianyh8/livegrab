@@ -3,8 +3,8 @@
 自托管的**直播录制管理台**：自动监控直播间，开播即录、按策略分段、按规则命名入库，带完整 Web 管理界面。个人/小团队长期存档直播内容（切片、留档）用。
 
 - **单容器 Web 服务**：浏览器访问 `http://<主机>:8080` 即可，全部操作在页面完成，无需桌面壳。
-- **零 npm 依赖、无构建步骤**：后端只用 Node 内置模块，ffmpeg 以子进程方式调度，前端为静态 ESM。
-- **免 Docker 也能跑**：本机装了 Node 20+ 与 ffmpeg 可直接运行（见 [本地运行](#本地运行)）。
+- **唯一 npm 依赖 `better-sqlite3`**（SQLite 存储，构建时 `npm ci` 安装），其余后端逻辑只用 Node 内置模块，ffmpeg 以子进程方式调度，前端为静态 ESM、无前端构建步骤。
+- **免 Docker 也能跑**：本机装了 Node 22+ 与 ffmpeg 可直接运行（见 [本地运行](#本地运行)）。
 
 ---
 
@@ -62,7 +62,7 @@ compose 相对 `livegrab/` 目录挂载：
 | 挂载点 | 内容 | 建议 |
 |---|---|---|
 | `./data` → `/data` | 录制成品与分段 | 占空间最大，挂到大容量磁盘 |
-| `./config` → `/config` | 账号哈希、Cookie、任务、场次索引、日志 | 长期保留 |
+| `./config` → `/config` | 账号哈希、Cookie、任务、场次索引、日志、SQLite 库（livegrab.db） | 长期保留 |
 
 ### 环境变量（`docker-compose.yml` 可调）
 
@@ -103,7 +103,7 @@ docker run -d --name livegrab -p 8080:8080 \
 
 ## 本地运行（免 Docker）
 
-需要 **Node.js ≥ 20** 与 **ffmpeg**（在 `PATH` 中）。
+需要 **Node.js ≥ 22**（better-sqlite3 要求）与 **ffmpeg**（在 `PATH` 中）。
 
 ```bash
 start-local.cmd        # Windows：双击或命令行运行
@@ -118,7 +118,7 @@ start-local.cmd        # Windows：双击或命令行运行
 ```bash
 cd app
 node test/run.js              # 常规单元测试（含 API / 解析 / 存储）
-node test/check-docker.mjs    # Docker 打包自检（无需装 Docker）：Dockerfile/compose/.dockerignore 静态校验 + 容器形态冒烟 + 零依赖校验
+node test/check-docker.mjs    # Docker 打包自检（无需装 Docker）：Dockerfile/compose/.dockerignore 静态校验 + 容器形态冒烟 + 依赖校验（唯一第三方依赖 better-sqlite3）
 ```
 
 ## 目录结构

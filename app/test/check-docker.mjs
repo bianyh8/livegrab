@@ -1,7 +1,7 @@
 // Docker 打包自检（本机不需要安装 Docker）
 // 1) 静态校验 Dockerfile / docker-compose.yml / .dockerignore 与代码是否自洽；
 // 2) 用"容器形态"的环境变量（PORT=8080 / RECORD_ROOT / CONFIG_DIR / TZ）真起一次服务做冒烟；
-// 3) 校验零依赖：只允许 node: 内置模块与相对路径 import。
+// 3) 校验依赖：唯一第三方依赖 better-sqlite3，其余只允许 node: 内置模块与相对路径 import。
 // 用法：node app/test/check-docker.mjs
 import fs from 'node:fs';
 import path from 'node:path';
@@ -45,7 +45,7 @@ check(/ENV[\s\S]*RECORD_ROOT=\/data[\s\S]*CONFIG_DIR=\/config/.test(dockerfile),
 check(/HEALTHCHECK[\s\S]*?\/api\/health/.test(dockerfile), 'HEALTHCHECK 探活 /api/health');
 check(/STOPSIGNAL\s+SIGTERM/.test(dockerfile), 'STOPSIGNAL SIGTERM（配合 compose 的 stop_grace_period 收尾当前分段）');
 check(/CMD\s+\["node",\s*"server\/server\.js"\]/.test(dockerfile), 'CMD 与 WORKDIR 下的入口路径一致');
-check(!/\bnpm (install|ci)\b/.test(dockerfile.split(/\r?\n/).filter((l) => !l.trim().startsWith('#')).join('\n')), '镜像里没有 npm install（零依赖，无需 node_modules）');
+check(/\bnpm ci --omit=dev\b/.test(dockerfile), '镜像内 npm ci --omit=dev 安装唯一生产依赖 better-sqlite3');
 
 /* ---------- 3) COPY 源都在构建上下文里 + 没被 .dockerignore 排除 ---------- */
 const copySources = [];
@@ -89,20 +89,21 @@ check(unread.length === 0, 'compose 里的环境变量都被代码读取', unrea
 check(/route\('GET', '\/api\/health'/.test(serverSrc), '健康检查端点 /api/health 真实存在');
 check(/SIGTERM/.test(serverSrc) && /SIGINT/.test(serverSrc), '服务处理 SIGTERM/SIGINT 优雅退出');
 
-/* ---------- 5) 零依赖：只允许 node: 内置模块与相对路径 ---------- */
+/* ---------- 5) 依赖：唯一第三方依赖 better-sqlite3，其余只允许 node: 内置模块与相对路径 ---------- */
 const pkg = JSON.parse(readIf(path.join(APP, 'package.json')) || '{}');
-check(!pkg.dependencies || Object.keys(pkg.dependencies).length === 0, 'package.json 没有第三方依赖');
-check(!fs.existsSync(path.join(APP, 'package-lock.json')) && !fs.existsSync(path.join(APP, 'node_modules')), '没有 package-lock.json / node_modules');
+const deps = Object.keys(pkg.dependencies || {});
+check(deps.length === 1 && deps[0] === 'better-sqlite3', 'package.json 唯一第三方依赖为 better-sqlite3', deps.join(',') || '无依赖');
+check(fs.existsSync(path.join(APP, 'package-lock.json')), '存在 package-lock.json（Dockerfile 里 npm ci 可复现构建）');
 const srcFiles = [...walkFiles(path.join(APP, 'server')), ...walkFiles(path.join(APP, 'web')), ...walkFiles(path.join(APP, 'test'))].filter((f) => /\.(js|mjs)$/.test(f));
 const badImports = [];
 for (const f of srcFiles) {
   const src = fs.readFileSync(f, 'utf8');
   for (const m of src.matchAll(/(?:^|\n)\s*(?:import[^;\n]*?from|export[^;\n]*?from)\s+['"]([^'"]+)['"]/g)) {
     const spec = m[1];
-    if (!spec.startsWith('node:') && !spec.startsWith('.') && !spec.startsWith('/')) badImports.push(`${path.relative(ROOT, f)} → ${spec}`);
+    if (!spec.startsWith('node:') && !spec.startsWith('.') && !spec.startsWith('/') && spec !== 'better-sqlite3') badImports.push(`${path.relative(ROOT, f)} → ${spec}`);
   }
 }
-check(badImports.length === 0, `全部 ${srcFiles.length} 个前端/后端/测试文件只 import node: 内置模块或相对路径`, badImports.slice(0, 4).join(' | '));
+check(badImports.length === 0, `全部 ${srcFiles.length} 个前端/后端/测试文件只 import node: 内置模块、相对路径或唯一依赖 better-sqlite3`, badImports.slice(0, 4).join(' | '));
 
 /* ---------- 6) 容器形态冒烟：用 compose 里的环境变量真起一次服务 ---------- */
 // compose 把容器 8080 映射到宿主；本机若已有实例占用 8080，就换端口做同样的冒烟（只是端口号不同）

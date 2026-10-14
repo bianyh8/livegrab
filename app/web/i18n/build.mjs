@@ -115,6 +115,7 @@ const ADD = {
   'settings.tabLoadFailed': '该页签加载失败：{0}', 'settings.saved': '设置已保存',
   'settings.saveFailed': '设置保存失败', 'settings.namingSaved': '命名配置已保存',
   'settings.namingSaveFailed': '命名配置保存失败',
+  'settings.pfImportButton': '导入',
 
   // tasks
   'tasks.loading': '正在加载任务…', 'tasks.loadFailed': '任务加载失败：{0}',
@@ -260,6 +261,10 @@ const REMOVE = [
   'topbar.refreshStatus',
   // 批量条移除「批量暂停」：暂停功能保留在录制详情弹窗与总览「全部暂停」
   'tasks.batchPause', 'tasks.verbPause',
+  // 未登记文件改为扫描时后台自动注册为场次，移除前端「未注册文件」区块文案
+  'files.unregTitle', 'files.unregCount', 'files.unregTag', 'files.unregHint', 'files.unregEmpty',
+  'files.unregImport', 'files.unregImportAll', 'files.unregImported', 'files.unregImportFail',
+  'files.unregScan', 'files.unregScanDone', 'files.unregScanFail',
 ];
 
 /* ---------------- ③ 去重：同文案归一到单一 key ---------------- */

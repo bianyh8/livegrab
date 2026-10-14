@@ -5,6 +5,8 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Store } from './store.js';
+import { openDb, schemaVersion, SCHEMA_VERSION } from './db.js';
+import { cleanupLegacyFiles } from './legacy-cleanup.js';
 import { Logger } from './logger.js';
 import { Auth } from './auth.js';
 import { Storage, playModeOf } from './storage.js';
@@ -56,6 +58,17 @@ function fileView(f) {
   };
 }
 
+/** 会话实际占用字节：segments+extras+merged+mp4 按路径去重。
+ *  不直接信任存储的 session.bytes（转封装/合并时可能未同步），从真实文件记录计算，保证统计与文件列表一致。 */
+function sessionFileBytes(s) {
+  const seen = new Set();
+  let n = 0;
+  for (const f of [...(s.segments || []), ...(s.extras || []), s.merged, s.mp4]) {
+    if (f && f.path && !seen.has(f.path)) { seen.add(f.path); n += f.bytes || 0; }
+  }
+  return n;
+}
+
 function sessionView(s) {
   const segments = (s.segments || []).map(fileView);
   const extras = (s.extras || []).map(fileView);
@@ -64,7 +77,7 @@ function sessionView(s) {
     roomId: s.roomId, streamer: s.streamer, title: s.title,
     quality: s.quality, qualityLabel: s.qualityLabel || qualityLabel(s.quality),
     startedAt: s.startedAt, endedAt: s.endedAt, durationSec: s.durationSec || 0,
-    bytes: s.bytes || 0, status: s.status, dir: s.dir, relDir: s.relDir,
+    bytes: sessionFileBytes(s), status: s.status, dir: s.dir, relDir: s.relDir,
     segments, extras,
     merged: s.merged ? fileView(s.merged) : null,
     mp4: s.mp4 ? fileView(s.mp4) : null,
@@ -85,12 +98,12 @@ function treeFor(sessions, view = 'platform') {
     const tk = topOf(s);
     const top = map.get(tk) || { key: tk, name: tk, count: 0, bytes: 0, children: [], childrenMap: new Map() };
     top.count += files;
-    top.bytes += s.bytes || 0;
+    top.bytes += sessionFileBytes(s);
     const sk = subOf(s);
     if (sk) {
       const sub = top.childrenMap.get(sk) || { key: sk, name: sk, date: sk, count: 0, bytes: 0, children: [] };
       sub.count += files;
-      sub.bytes += s.bytes || 0;
+      sub.bytes += sessionFileBytes(s); // M2：父子口径一致（子级不再用可能未同步的 s.bytes）
       top.childrenMap.set(sk, sub);
     }
     map.set(tk, top);
@@ -107,10 +120,17 @@ function treeFor(sessions, view = 'platform') {
 
 // ---------- 主流程 ----------
 async function bootstrap() {
-  const store = await new Store(CONFIG_DIR).init();
+  // ---------- 持久层：SQLite v2（唯一存储，无 JSON 镜像、无迁移） ----------
+  const dbPath = path.join(CONFIG_DIR, 'livegrab.db');
+  const db = openDb(dbPath); // 空库建表；旧版本库（含 v1 data_json 结构）作废重建为空库
+  const legacyRemoved = await cleanupLegacyFiles(CONFIG_DIR); // 清除 state.json 等旧 JSON 遗留（独立方法，日后可整段删除）
+  if (legacyRemoved.length) console.log(`[db] 旧 JSON 遗留清理：${legacyRemoved.join('、')}`);
+  const store = new Store(CONFIG_DIR);
   // 容器环境变量优先（compose 是唯一来源）
   store.settings.recordRoot = RECORD_ROOT;
   store.settings.configDir = CONFIG_DIR;
+  await store.init(db);
+  console.log(`[db] SQLite v2 持久层就绪：${dbPath}（schema_version=${schemaVersion(db)}/${SCHEMA_VERSION}，仅 SQLite）`);
   const logger = await new Logger({
     dir: path.join(CONFIG_DIR, 'logs'),
     level: store.settings.logLevel || 'INFO',
@@ -366,7 +386,7 @@ async function main() {
       summary: {
         sessions: store.sessions.length,
         files: store.allFiles().length,
-        bytes: store.sessions.reduce((a, b) => a + (b.bytes || 0), 0),
+        bytes: store.sessions.reduce((a, b) => a + sessionFileBytes(b), 0),
         missing: store.allFiles().filter((f) => f.status === 'missing').length,
         unregistered: store.external.length,
       },
@@ -484,39 +504,16 @@ async function main() {
     return null;
   });
 
-  // ---------- 主播头像代理：平台 CDN 常做热链保护（浏览器带页面 Referer 会被 403，如 B 站 hdslb.com），
-  // 由服务端拉取（无 Referer）再转给浏览器；内存缓存 1 小时，避免每次请求都外发。 ----------
-  const avatarCache = new Map(); // url -> { buf, type, at }
-  async function fetchAvatarBuf(url) {
-    const hit = avatarCache.get(url);
-    if (hit && Date.now() - hit.at < 60 * 60 * 1000) return hit;
-    try {
-      const r = await fetch(url, {
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-          'Accept': 'image/*',
-        },
-        redirect: 'follow',
-        signal: AbortSignal.timeout(8000),
-      });
-      if (!r.ok) return null;
-      const buf = Buffer.from(await r.arrayBuffer());
-      if (!buf.length || buf.length > 2 * 1024 * 1024) return null;
-      const out = { buf, type: r.headers.get('content-type') || 'image/jpeg', at: Date.now() };
-      avatarCache.set(url, out);
-      if (avatarCache.size > 200) { const first = avatarCache.keys().next().value; avatarCache.delete(first); }
-      return out;
-    } catch { return null; }
-  }
-
   // ---------- 首帧图（缩略图）：优先读落盘海报 `<同名>.jpg`，没有才临时抽帧并缓存为文件。
   // 配合 Storage.writeArt：录制收尾会一次生成 `<同名>.jpg`，此后接口/Jellyfin 都只读文件、不再跑 ffmpeg。 ----------
-  async function serveThumb(res, filePath) {    const st = await fsp.stat(filePath).catch(() => null);
+  async function serveThumb(res, filePath) {
+    const st = await fsp.stat(filePath).catch(() => null);
     if (!st || st.size <= 0) throw new HttpError('NOT_FOUND', '文件在磁盘上不存在', 404);
     const sidecar = filePath.replace(/\.[^./\\]+$/, '') + '.jpg';
     const stS = await fsp.stat(sidecar).catch(() => null);
     if (stS && stS.size > 0 && stS.mtimeMs >= st.mtimeMs) {
       const buf = await fsp.readFile(sidecar);
+      await store.setFileThumbnailByPath(filePath, sidecar).catch(() => {}); // 回写 files.thumbnail_path（值未变则不写库）
       res.writeHead(200, { 'Content-Type': 'image/jpeg', 'Cache-Control': 'private, max-age=3600', 'Content-Length': buf.length });
       res.end(buf);
       return null;
@@ -524,6 +521,7 @@ async function main() {
     const buf = await media.grabFrame({ input: filePath, width: 320 });
     if (!buf) throw new HttpError('UNSUPPORTED', '无法从该视频提取首帧（纯音频或 ffmpeg 不可用）', 415);
     fsp.writeFile(sidecar, buf).catch(() => {}); // 落盘为侧车海报，下次直接读
+    await store.setFileThumbnailByPath(filePath, sidecar).catch(() => {});
     res.writeHead(200, { 'Content-Type': 'image/jpeg', 'Cache-Control': 'private, max-age=10', 'Content-Length': buf.length });
     res.end(buf);
     return null;
@@ -586,17 +584,8 @@ async function main() {
         return null;
       }
     }
-    // 无本地缓存（旧数据）：懒拉取一次并存盘，之后就走本地文件
-    const raw = task.avatar;
-    const url = typeof raw === 'string' ? raw : (raw && typeof raw === 'object' ? (raw.middle || raw.big || raw.small || '') : '');
-    if (!url) throw new HttpError('NOT_FOUND', '任务无头像', 404);
-    const got = await fetchAvatarBuf(url);
-    if (!got) throw new HttpError('AVATAR_FAIL', '头像获取失败', 502);
-    const saved = await storage.saveAvatar(task, url);
-    if (saved) await store.saveTask(task);
-    res.writeHead(200, { 'Content-Type': got.type, 'Cache-Control': 'private, max-age=3600', 'Content-Length': got.buf.length });
-    res.end(got.buf);
-    return null;
+    // 任务只保留本地头像缓存文件（不再保存平台头像 URL）：无缓存即视为无头像
+    throw new HttpError('NOT_FOUND', '任务无本地头像缓存（解析/检查/开播时会自动缓存）', 404);
   });
 
   // ---------- 序列化辅助 ----------
@@ -727,10 +716,11 @@ async function main() {
       try { await rec.stop('shutdown'); } catch { /* ignore */ }
       void id;
     }
-    for (const [id] of scheduler.detached) {
-      try { scheduler.detached.get(id)?.stop('shutdown'); } catch { /* ignore */ }
+    for (const [, rec] of scheduler.detached) {
+      try { await rec.stop('shutdown'); } catch { /* ignore */ } // L4：暂停中录制器也 await 收尾，避免写落在已关闭连接上
     }
-    await store.persist();
+    try { await store.persist(); } catch (e) { logger.error(`优雅退出时 SQLite 持久化失败：${e?.message || e}`); }
+    store.close();
     server.close(() => process.exit(0));
     setTimeout(() => process.exit(0), 8000);
   };

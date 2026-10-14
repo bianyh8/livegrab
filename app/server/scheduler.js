@@ -8,10 +8,12 @@ import { qualityLabel } from './naming.js';
 import {
   resolveRoom, resolveStream, getPlatform, platformList, detectPlatform, roomIdFrom, probeLive,
 } from './resolvers/index.js';
+import { buildRoomUrl } from './resolvers/room-url.js';
 import { uid, nowIso, HttpError, formatBytes, formatDuration, dateKey, formatDate, formatTime, sleep } from './util.js';
 
 const LITE = (t) => ({
-  id: t.id, name: t.anchorName || t.title || t.roomId, anchorName: t.anchorName, title: t.title,
+  id: t.id, name: t.anchorName || t.platformAnchorName || t.title || t.roomId,
+  anchorName: t.anchorName || t.platformAnchorName || '', title: t.title, avatar: t.avatarFile || null,
   platform: t.platform, roomId: t.roomId, quality: t.quality, qualityLabel: t.qualityLabel || qualityLabel(t.quality),
   status: t.status, statusMessage: t.statusMessage, queueReason: t.queueReason,
   bytes: t.totalBytes || 0, elapsedSec: 0, retryCount: t.retryCount || 0,
@@ -167,14 +169,14 @@ export class Scheduler {
       platform,
       platformName: p.name,
       roomId: String(room?.roomId || roomId),
-      // 保留用户原始输入作为「直播地址」；短号（抖音号等）单独存 shortId 供前台展示，房间号仍用 19 位内部号
-      sourceUrl: raw || `${platform}:${roomId}`,
+      // 直播地址统一由 buildRoomUrl 推导成规范地址（不再存 `platform:roomId` 这类非 URL 串）
+      sourceUrl: buildRoomUrl(platform, { roomId: String(room?.roomId || roomId), shortId: room?.shortId || '', rawUrl: raw }),
       shortId: room?.shortId || '',
       anchorName: input.anchorName || room?.anchorName || '',
+      // 平台显示名单独留存：用户未定义自定义名时，展示与命名以它兜底
+      platformAnchorName: room?.anchorName || '',
       title: input.title || room?.title || '',
-      avatar: room?.avatar || '',
       overrides: this._overridesFrom(input),
-      qualityFallback: Array.isArray(input.qualityFallback) ? input.qualityFallback : settings.qualityFallback,
       autoRecord: input.autoRecord !== false,
       monitorOnly: input.monitorOnly !== undefined ? !!input.monitorOnly : !!settings.defaultMonitorOnly,
       pollIntervalSec: Number(input.pollIntervalSec ?? settings.pollIntervalSec ?? 60),
@@ -197,8 +199,8 @@ export class Scheduler {
     if (input.reconnectMax !== undefined) task.reconnectMax = Number(input.reconnectMax) || null;
     this.applyEffective(task);
     await this.store.addTask(task);
-    if (task.avatar) { // 头像落盘缓存（点击解析/创建时更新）
-      const saved = await this.storage.saveAvatar(task, task.avatar);
+    if (room?.avatar) { // 头像落盘缓存（点击解析/创建时更新）；任务只存本地缓存路径，不存平台 URL
+      const saved = await this.storage.saveAvatar(task, room.avatar);
       if (saved) await this.store.saveTask(task);
     }
     this.logger.info(`创建任务：${task.anchorName || task.roomId}（${p.name} · ${qualityLabel(task.quality)}）`, { taskId: task.id, taskName: task.anchorName });
@@ -238,7 +240,7 @@ export class Scheduler {
     // 前端新建/编辑统一用 url 字段表示直播地址
     if (patch.url !== undefined) { patch.sourceUrl = patch.url; delete patch.url; }
     const allowed = [
-      'anchorName', 'title', 'avatar', 'platform', 'sourceUrl', 'reconnectMax', 'qualityFallback', 'segmentMinutes', 'segmentSizeMB',
+      'anchorName', 'title', 'platform', 'sourceUrl', 'reconnectMax', 'segmentMinutes', 'segmentSizeMB',
       'container', 'remuxToMp4', 'keepSource', 'autoMerge', 'autoRecord', 'monitorOnly',
       'pollIntervalSec', 'startDelaySec', 'stopDelaySec', 'roomId', 'nameLocked', 'shortId',
     ];
@@ -250,11 +252,14 @@ export class Scheduler {
         const info = await resolveRoom(patch.sourceUrl, { platform: task.platform, settings: this.store.settings, logger: this.logger });
         task.platform = info.platform || task.platform;
         task.roomId = String(info.roomId || task.roomId);
-        if (!task.nameLocked) task.anchorName = info.anchorName || task.anchorName;
+        // 平台显示名始终跟随解析结果；未锁定名称时，展示名以平台名为准（用户自定义名不被覆盖）
+        task.platformAnchorName = info.anchorName || task.platformAnchorName || '';
+        if (!task.nameLocked) task.anchorName = task.platformAnchorName;
         task.title = info.title || task.title;
-        task.avatar = info.avatar || task.avatar;
-        if (info.avatar) await this.storage.saveAvatar(task, info.avatar);
+        if (info.avatar) await this.storage.saveAvatar(task, info.avatar); // 仅刷新本地头像缓存
         if (task.platform === 'douyin' && info.shortId) task.shortId = String(info.shortId);
+        // 解析成功 → 把直播地址归一为规范直播间地址
+        task.sourceUrl = buildRoomUrl(task.platform, { roomId: task.roomId, shortId: task.shortId || info.shortId || '', rawUrl: patch.sourceUrl });
         this.logger.info(`修改直播地址后已重新解析：${task.anchorName || task.roomId}`, { taskId: id });
       } catch (e) {
         this.logger.warn(`修改直播地址后重解析失败（保留原信息）：${e.message}`, { taskId: id });
@@ -340,7 +345,7 @@ export class Scheduler {
     this.applyEffective(task);
 
     const session = {
-      id: uid('s'), taskId: task.id, platform: task.platform, platformName: task.platformName,      roomId: task.roomId, streamer: task.anchorName, title: task.title,
+      id: uid('s'), taskId: task.id, platform: task.platform, platformName: task.platformName,      roomId: task.roomId, streamer: task.anchorName || task.platformAnchorName || '', title: task.title,
       quality: task.quality, qualityLabel: qualityLabel(task.quality),
       startedAt: nowIso(), endedAt: null, durationSec: 0, bytes: 0, status: 'recording',
       dir: null, relDir: '', segments: [], extras: [], merged: null, mp4: null,
@@ -441,8 +446,8 @@ export class Scheduler {
     if (exists) Object.assign(exists, item);
     else session.segments.push(item);
     session.segments.sort((a, b) => a.segmentIndex - b.segmentIndex);
-    session.bytes = session.segments.reduce((a, b) => a + (b.bytes || 0), 0);
-    session.durationSec = session.segments.reduce((a, b) => a + (b.durationSec || 0), 0);
+    session.bytes = this.storage._sessionFileBytes(session); // M3：口径含 extras/merged/mp4（边录边转+keepSource=false 时不欠计）
+    session.durationSec = this.storage._sessionDurationSec(session);
     task.totalBytes = session.bytes;
     task.totalDurationSec = session.durationSec;
     task.segmentIndex = session.segments.length;
@@ -452,7 +457,9 @@ export class Scheduler {
     // 仅在不自动合并时生效（合并需要源 .ts，先合并再统一转封装）。
     const canRemuxNow = task.remuxToMp4 !== false && !this.store.settings.autoMerge && ['ts', 'flv', 'mkv'].includes(item.ext);
     if (canRemuxNow) this._segmentRemuxNow(task, session, item, seg).catch(() => {});
-    this._throttledPersist();
+    // M1：分段收尾直接行级写穿透过称（不依赖 1500ms 防抖），崩溃/强杀窗口内分段登记立即落库
+    await this.store.saveSession(session);
+    await this.store.saveTask(task);
     this.onEvent({ type: 'task', task });
   }
 
@@ -468,14 +475,6 @@ export class Scheduler {
     }
   }
 
-  _throttledPersist() {
-    if (this._persistTimer) return;
-    this._persistTimer = setTimeout(() => {
-      this._persistTimer = null;
-      this.store.persist().catch(() => {});
-    }, 1500);
-  }
-
   async _onFinished(task, payload) {
     const session = this.sessions.get(task.id) || (task.sessionId ? this.store.getSession(task.sessionId) : null);
     this.recorders.delete(task.id);
@@ -484,8 +483,8 @@ export class Scheduler {
     const reason = payload.reason || 'user';
     if (session) {
       session.endedAt = nowIso();
-      session.bytes = (session.segments || []).reduce((a, b) => a + (b.bytes || 0), 0);
-      session.durationSec = (session.segments || []).reduce((a, b) => a + (b.durationSec || 0), 0);
+      session.bytes = this.storage._sessionFileBytes(session); // M3：删源后仍按现存文件口径（不再归零）
+      session.durationSec = this.storage._sessionDurationSec(session);
       session.status = reason === 'error' ? 'error' : (session.segments.length ? 'done' : 'partial');
       await this.store.saveSession(session);
     }
@@ -541,7 +540,6 @@ export class Scheduler {
     if (info) {
       if (!task.nameLocked) task.anchorName = info.anchorName || task.anchorName;
       task.title = info.title || task.title;
-      task.avatar = info.avatar || task.avatar;
       if (info.avatar) await this.storage.saveAvatar(task, info.avatar); // 手动开始（开播检测）时刷新头像缓存
       if (info.liveStatus === 'offline' && reason === 'manual') {
         task.status = 'waiting';
@@ -679,7 +677,6 @@ export class Scheduler {
     this.logger.info(`批量刷新结果：${task.anchorName || task.roomId} → ${info.liveStatus === 'live' ? '已开播' : '未开播'}，主播「${info.anchorName || '—'}」`, { taskId: task.id, taskName: task.anchorName });
     if (!task.nameLocked) task.anchorName = info.anchorName || task.anchorName;
     task.title = info.title || task.title;
-    task.avatar = info.avatar || task.avatar;
     if (info.avatar) await this.storage.saveAvatar(task, info.avatar); // 刷新头像落盘缓存
     if (task.platform === 'douyin' && info.shortId) task.shortId = String(info.shortId); // 批量刷新后回写短号（抖音号）
     task.liveStatus = info.liveStatus;
@@ -702,7 +699,6 @@ export class Scheduler {
       this.logger.info(`手动检查结果：${task.anchorName || task.roomId} → ${info.liveStatus === 'live' ? '已开播' : '未开播'}`, { taskId: task.id, taskName: task.anchorName });
       if (!task.nameLocked) task.anchorName = info.anchorName || task.anchorName;
       task.title = info.title || task.title;
-      task.avatar = info.avatar || task.avatar;
       if (info.avatar) await this.storage.saveAvatar(task, info.avatar); // 手动检查时刷新头像缓存
       if (task.platform === 'douyin' && info.shortId) task.shortId = String(info.shortId); // 检查后回写短号（抖音号）
       task.liveStatus = info.liveStatus;
@@ -906,7 +902,8 @@ export class Scheduler {
     const session = this.sessions.get(task.id) || (task.sessionId ? this.store.getSession(task.sessionId) : null);
     return {
       ...task,
-      name: task.anchorName || task.title || task.roomId,
+      name: task.anchorName || task.platformAnchorName || task.title || task.roomId,
+      avatar: task.avatarFile || null, // M5：前端读 item.avatar，需与 avatarFile 对齐
       overrides: task.overrides || {},
       qualityLabel: task.qualityLabel || qualityLabel(task.qualityActual || task.quality),
       live: {

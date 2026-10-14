@@ -113,7 +113,7 @@ export function buildContext({
   const opts = DEFAULT_OPTIONS;
   const q = quality || t.quality || 'origin';
   const vars = {
-    '{主播}': anchorName ?? room?.anchorName ?? t.anchorName ?? '未知主播',
+    '{主播}': anchorName || room?.anchorName || t.anchorName || t.platformAnchorName || '未知主播',
     '{平台}': platformName ?? room?.platformName ?? t.platformName ?? String(platform ?? t.platform ?? ''),
     '{房间号}': String(roomId ?? room?.roomId ?? t.roomId ?? ''),
     '{标题}': title ?? room?.title ?? t.title ?? '',

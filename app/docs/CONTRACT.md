@@ -3,10 +3,10 @@
 ## 0. 技术约束（硬性）
 
 - **运行形态**：单容器 Web 服务。浏览器访问 `http://<host>:8080`。
-- **零 npm 依赖**：后端只用 Node 内置模块（`node:http`/`node:fs`/`node:child_process`/`node:path`/`node:crypto`/`node:os`）。前端为原生 ES Module + 原生 CSS，**无构建步骤**。
+- **唯一 npm 依赖 `better-sqlite3`**（SQLite 存储，原生模块，构建期 `npm ci` 安装）；后端其余部分只用 Node 内置模块（`node:http`/`node:fs`/`node:child_process`/`node:path`/`node:crypto`/`node:os`）。前端为原生 ES Module + 原生 CSS，**无构建步骤**。
 - **模块格式**：`app/package.json` 声明 `"type":"module"`，全部使用 ESM `import/export`。
 - **Node 版本**：镜像内 `node:22-bookworm-slim`，本机 v24 亦需可运行（不使用实验性 API）。
-- **外部依赖**：仅 `ffmpeg`/`ffprobe`（镜像内 apt 安装，路径由 `FFMPEG_PATH`/`FFPROBE_PATH` 覆盖，默认 `ffmpeg`/`ffprobe`）。
+- **外部依赖**：npm 依赖仅 `better-sqlite3`；系统依赖为 `ffmpeg`/`ffprobe`（镜像内 apt 安装，路径由 `FFMPEG_PATH`/`FFPROBE_PATH` 覆盖，默认 `ffmpeg`/`ffprobe`）。
 - **路径**：容器内 `RECORD_ROOT=/data`、`CONFIG_DIR=/config`、`PORT=8080`。
 
 ## 1. 目录
@@ -17,7 +17,9 @@ app/
   server/
     util.js             # 通用工具（无依赖）
     naming.js           # 命名规则引擎（纯函数）
-    store.js            # JSON 持久化（tasks/files/settings/naming/meta）
+    store.js            # 内存态 + SQLite 写穿透（tasks/sessions/files/settings/naming/trash）
+    db.js               # SQLite v2 建库/PRAGMA/表结构（唯一持久化真相源，无 data_json）
+    legacy-cleanup.js   # 旧 JSON 遗留清理（独立方法，日后可整段删除）
     logger.js           # 环形日志 + SSE 广播
     storage.js          # 磁盘统计与清理策略
     media.js            # ffmpeg/ffprobe 封装（子代理 A 负责）

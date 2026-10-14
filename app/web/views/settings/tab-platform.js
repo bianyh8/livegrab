@@ -222,7 +222,7 @@ function actions(p, has) {
   } else if (p.id === 'kuaishou') btns.push(`<button class="btn sm ghost" data-cookie="${id}">${t('settings.pfAutoFetch')}</button>`);
   else if (p.needCookie) btns.push(`<button class="btn sm" data-cookie="${id}">${has ? t('settings.pfUpdateCookie') : t('settings.pfFillCookie')}</button>`);
   else btns.push(`<button class="btn sm ghost" data-detect="${id}">${t('tasks.verbCheck')}</button>`);
-  if (has) btns.push(`<button class="btn sm danger" data-clear="${id}">${t('settings.pfClear')}</button>`);
+  if (has) btns.push(`<button class="btn sm danger" data-clear="${id}">${t('files.clear')}</button>`);
   return btns.join('');
 }
 

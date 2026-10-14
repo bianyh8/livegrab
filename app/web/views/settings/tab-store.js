@@ -66,7 +66,7 @@ export async function render(root, ctx, kit) {
     check.textContent = t('settings.recChecking');
     try {
       const r = await api.filesScan();
-      toast(t('settings.recScanResult', read(kit.state, 'recordRoot', '/data'), Number(r && r.added) || 0, Number(r && r.updated) || 0, Number(r && r.missing) || 0, Number(r && r.unregistered) || 0));
+      toast(t('settings.recScanResult', read(kit.state, 'recordRoot', '/data'), Number(r && r.added) || 0, Number(r && r.updated) || 0, Number(r && r.missing) || 0));
     } catch (e) {
       toast(t('settings.recScanFail', e.message || t('settings.recRootNotWritable')), 'err');
     } finally {

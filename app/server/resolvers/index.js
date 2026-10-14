@@ -159,7 +159,7 @@ export async function resolveStream(task, ctx = {}) {
   const p = getPlatform(task.platform);
   if (!p?.handler) throw new HttpError('NOT_IMPLEMENTED', `${p?.name || task.platform} 暂未接入`, 400);
   const settings = ctx.settings || {};
-  const order = [task.quality, ...(task.qualityFallback || []), ...(settings.qualityFallback || [])]
+  const order = [task.quality, ...(settings.qualityFallback || [])]
     .filter((v, i, a) => v && a.indexOf(v) === i);
   const tried = [];
   for (const quality of order) {

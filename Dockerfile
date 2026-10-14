@@ -1,4 +1,4 @@
-# LiveGrab 直播录制台 —— 单容器镜像（Node 内置能力 + 系统 ffmpeg，零 npm 依赖）
+# LiveGrab 直播录制台 —— 单容器镜像（Node 内置能力 + 系统 ffmpeg，唯一 npm 依赖 better-sqlite3）
 FROM node:22-bookworm-slim
 
 LABEL org.opencontainers.image.title="LiveGrab 直播录制台" \
@@ -20,8 +20,10 @@ RUN apt-get update \
 
 WORKDIR /app
 
-# 只复制运行需要的东西；没有 npm install，没有 node_modules
+# 只复制运行需要的东西；npm ci 安装唯一生产依赖 better-sqlite3（SQLite 存储）
 COPY app/package.json ./package.json
+COPY app/package-lock.json ./package-lock.json
+RUN npm ci --omit=dev && npm cache clean --force
 COPY app/server ./server
 COPY app/web ./web
 COPY app/test ./test
