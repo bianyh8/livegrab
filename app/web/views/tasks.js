@@ -328,15 +328,15 @@ function rowActions(item) {
   const acts = [];
   const recording = ['recording', 'stopping', 'merging'].includes(item.status);
   if (recording) {
-    // 不开自动录制的任务：停止只作用于本场，不改变 autoRecord 配置
-    if (item.autoRecord === false && !item.monitorOnly) {
+    // 不开播自动录制的任务（autoRecord=false，含仅监控）：停止只作用于本场，不改变 autoRecord 配置
+    if (item.autoRecord === false) {
       acts.push(`<button class="btn sm danger" data-act="stop-once" data-id="${id}" title="${t('tasks.stopOnceTip')}">${t('tasks.stopOnce')}</button>`);
     } else {
       acts.push(`<button class="btn sm danger" data-act="stop" data-id="${id}">${t('common.stopRecord')}</button>`);
     }
   } else if (item.liveStatus === 'live') {
     // 不开播自动录制的任务：提供「录制本场」，只录本场不改配置
-    if (item.autoRecord === false && !item.monitorOnly) {
+    if (item.autoRecord === false) {
       acts.push(`<button class="btn sm ok" data-act="record-once" data-id="${id}" title="${t('tasks.recordOnceTip')}">${t('tasks.recordOnce')}</button>`);
     } else {
       acts.push(`<button class="btn sm ok" data-act="start" data-id="${id}"${item.monitorOnly ? ' title="' + t('tasks.monitorOnlyStartTip') + '"' : ''}>${t('tasks.batchStart')}</button>`);
@@ -888,8 +888,13 @@ function bindEditor(d, body, ctx) {
       }
       if (r.anchorName) {
         const clean = stripEmoji(r.anchorName);
-        d.anchorName = clean;
-        if (anchorInput) anchorInput.value = clean;
+        // 用户已手动改过主播名：解析不覆盖自定义名（只保留平台名供内部使用）
+        if (!d.anchorEdited) {
+          d.anchorName = clean;
+          if (anchorInput) anchorInput.value = clean;
+        } else {
+          d.platformAnchorName = clean;
+        }
       }
       const rc = body.querySelector('#edResolved'); if (rc) rc.innerHTML = resolvedCard(d);
       setRoomPh();

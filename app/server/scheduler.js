@@ -860,8 +860,9 @@ export class Scheduler {
 
         if (info.liveStatus === 'live') {
           if (task.monitorOnly) {
-            if (task.status !== 'waiting') task.status = 'waiting';
-            task.statusMessage = '正在直播 · 仅监控不录制';
+            // 仅监控任务「录制本场」进行中（recording/stopping）不能被重置回 waiting，否则状态显示错乱
+            if (!['waiting', 'recording', 'stopping'].includes(task.status)) task.status = 'waiting';
+            if (!['recording', 'stopping'].includes(task.status)) task.statusMessage = '正在直播 · 仅监控不录制';
             await this.store.saveTask(task);
             this.onEvent({ type: 'task', task });
           } else if (task.autoRecord && task.status !== 'recording' && task.status !== 'paused') {
