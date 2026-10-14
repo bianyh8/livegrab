@@ -282,11 +282,13 @@ async function main() {
     return scheduler.serializeTask(t);
   });
   route('DELETE', '/api/tasks/:id', async (req) => scheduler.deleteTask(req.params.id, { force: req.query.force === '1' || req.query.force === 'true' }));
-  for (const action of ['start', 'stop', 'pause', 'resume', 'check', 'retry']) {
+  for (const action of ['start', 'stop', 'pause', 'resume', 'check', 'retry', 'record-once', 'stop-once']) {
     route('POST', `/api/tasks/:id/${action}`, async (req) => {
       const id = req.params.id;
       if (action === 'start') return scheduler.startTask(id, { reason: 'manual' });
       if (action === 'stop') return scheduler.stopTask(id);
+      if (action === 'record-once') return scheduler.startTask(id, { reason: 'manual', oneShot: true }); // 录制本场：不改 autoRecord
+      if (action === 'stop-once') return scheduler.stopTask(id, { reason: 'user', oneShot: true });      // 停止本场：不改 autoRecord/manualHeld
       if (action === 'pause') return scheduler.pauseTask(id);
       if (action === 'resume') return scheduler.resumeTask(id);
       if (action === 'check') return scheduler.checkTask(id);
@@ -610,6 +612,7 @@ async function main() {
     const st = await fsp.stat(file.path).catch(() => null);
     if (!st) {
       if (file.status !== 'missing') { file.status = 'missing'; await store.persist(); broadcast('files', { type: 'files' }); }
+      logger.error(`文件读取失败（磁盘上不存在）：${file.name}｜路径：${file.path}`, { taskId: hit.session && hit.session.taskId, path: file.path });
       throw new HttpError('FILE_MISSING', '文件在磁盘上不存在（可能被手动删除或移走），可在文件库里清理该记录', 404);
     }
     const mime = mimeByExt(extOf(file.name));
@@ -626,6 +629,11 @@ async function main() {
         logger.info(`播放文件：${file.name}${hit.session ? `（${hit.session.streamer || ''}）` : ''}`, { taskId: hit.session && hit.session.taskId });
       }
     }
+    /* 流式读取中途失败（文件被删/磁盘错误等）也要落日志，写明路径与具体原因 */
+    const guard = (rs) => rs.on('error', (err) => {
+      logger.error(`文件流读取失败：${file.name}｜路径：${file.path}｜原因：${err.message}`, { taskId: hit.session && hit.session.taskId, path: file.path });
+      try { res.destroy(); } catch { /* ignore */ }
+    });
     if (range === 'invalid') {
       res.writeHead(416, { 'Content-Range': `bytes */${st.size}` });
       res.end();
@@ -637,10 +645,10 @@ async function main() {
         'Content-Range': `bytes ${range.start}-${range.end}/${st.size}`,
         'Content-Length': range.end - range.start + 1,
       });
-      fs.createReadStream(file.path, { start: range.start, end: range.end }).pipe(res);
+      guard(fs.createReadStream(file.path, { start: range.start, end: range.end }).pipe(res));
     } else {
       res.writeHead(200, { ...base, 'Content-Length': st.size });
-      fs.createReadStream(file.path).pipe(res);
+      guard(fs.createReadStream(file.path).pipe(res));
     }
     return null;
   }

@@ -512,7 +512,7 @@ export class Scheduler {
     this.tick().catch(() => {});
   }
 
-  async startTask(id, { reason = 'manual' } = {}) {
+  async startTask(id, { reason = 'manual', oneShot = false } = {}) {
     const task = this.store.getTask(id);
     if (!task) throw new HttpError('NOT_FOUND', '任务不存在', 404);
     const isMonitor = task.monitorOnly === true;
@@ -520,14 +520,17 @@ export class Scheduler {
     if (isMonitor) {
       // 仅监控任务点「开始录制」：只录本场一次，不改变"仅监控/不自动录制"的设置，本场结束回到仅监控
       task.manualHeld = false;
-    } else {
+    } else if (!oneShot) {
       // 正常任务点「开始录制」：重新开启自动录制，之后自动跟进
       task.autoRecord = true;
+      task.manualHeld = false;
+    } else {
+      // 「录制本场」（oneShot）：不开自动录制，只手动录这一场；autoRecord 保持原配置，下次照旧按系统配置运行
       task.manualHeld = false;
     }
     // 直链任务不需要开播检测
     if (task.platform === 'direct') {
-      task.autoRecord = true;
+      if (!oneShot) task.autoRecord = true; // 录制本场：不改 autoRecord
       return { result: await this._startRecording(task, { reason }) };
     }
     let info = null;
@@ -552,11 +555,12 @@ export class Scheduler {
     return { result: r };
   }
 
-  async stopTask(id, { reason = 'user' } = {}) {
+  async stopTask(id, { reason = 'user', oneShot = false } = {}) {
     const task = this.store.getTask(id);
     if (!task) throw new HttpError('NOT_FOUND', '任务不存在', 404);
     // 手动停止（正常任务）：关闭自动录制、等手动重新开始，但直播状态监控照常刷新；仅监控任务停掉的是当场一次性录制，回到"仅监控"
-    if (reason === 'user' && !task.monitorOnly) {
+    // 「停止本场」（oneShot）：只停这一场录制，不改变 autoRecord/manualHeld 配置，下次照旧按系统配置运行
+    if (reason === 'user' && !task.monitorOnly && !oneShot) {
       task.autoRecord = false;
       task.manualHeld = true;
     }
@@ -577,14 +581,15 @@ export class Scheduler {
       await this._onFinished(task, payload);
     } else if (reason === 'user') {
       // 收尾已被自动最终化抢先执行（recorder 已移除），手动停止仍统一收敛为"已停止"
-      task.status = 'stopped';
-      task.statusMessage = '已手动停止，等待你手动开始';
+      // 停止本场（oneShot）：保持 completed，不显示"等手动开始"
+      task.status = oneShot ? 'completed' : 'stopped';
+      task.statusMessage = oneShot ? '本场录制已结束' : '已手动停止，等待你手动开始';
       task.currentFile = null;
       task.endedAt = nowIso();
       await this.store.saveTask(task);
       this.onEvent({ type: 'task', task });
     }
-    if (reason === 'user' && task.manualHeld) this._manualStopLiveRefresh(task).catch(() => {});
+    if (reason === 'user' && task.manualHeld && !oneShot) this._manualStopLiveRefresh(task).catch(() => {});
     const why = reason === 'user' ? '用户手动停止' : reason === 'offline' ? '主播下播' : reason;
     this.logger.info(`停止录制：${task.anchorName || task.roomId}（${task.platformName || task.platform}，${why}）`, { taskId: task.id, taskName: task.anchorName });
     return { stopped: true, segments: payload.segments?.length || 0, bytes: payload.bytes || 0 };

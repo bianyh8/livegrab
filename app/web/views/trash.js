@@ -8,7 +8,30 @@ import { t } from '../i18n.js';
 
 export const page = 'trash';
 
-const state = { items: [], bytes: 0, retentionDays: 7, hash: '', pending: false, bound: false };
+const state = { items: [], bytes: 0, retentionDays: 7, page: 1, pages: 1, hash: '', pending: false, bound: false };
+
+/* 分页：默认每页 10 条（任务/文件/回收站统一） */
+const PAGE_SIZE = 10;
+function pagerHTML(id, page, pages, total) {
+  return `<div class="pager" id="${id}">
+    <button class="btn sm ghost" data-pg="first"${page <= 1 ? ' disabled' : ''}>«</button>
+    <button class="btn sm ghost" data-pg="prev"${page <= 1 ? ' disabled' : ''}>‹ ${t('common.pagerPrev')}</button>
+    <span class="pager-info">${t('common.pagerInfo', page, pages, total)}</span>
+    <button class="btn sm ghost" data-pg="next"${page >= pages ? ' disabled' : ''}>${t('common.pagerNext')} ›</button>
+    <button class="btn sm ghost" data-pg="last"${page >= pages ? ' disabled' : ''}>»</button>
+  </div>`;
+}
+function bindPager(root, pagerId, st, paintFn) {
+  const el = root.querySelector('#' + pagerId);
+  if (!el) return;
+  el.querySelectorAll('[data-pg]').forEach((b) => {
+    b.onclick = () => {
+      const map = { first: 1, prev: st.page - 1, next: st.page + 1, last: st.pages };
+      st.page = Math.max(1, Math.min(st.pages, map[b.dataset.pg]));
+      paintFn();
+    };
+  });
+}
 
 let boundRoot = null;
 
@@ -46,6 +69,9 @@ function paint(ctx, force) {
   state.hash = hash;
 
   const items = state.items;
+  state.pages = Math.max(1, Math.ceil(items.length / PAGE_SIZE));
+  if (state.page > state.pages) state.page = state.pages;
+  const pageItems = items.slice((state.page - 1) * PAGE_SIZE, state.page * PAGE_SIZE);
   root.innerHTML = `
     <div class="card">
       <div class="card-h">
@@ -58,7 +84,8 @@ function paint(ctx, force) {
       <div class="card-b">
         ${items.length
           ? `<div class="hintline" style="margin:0 0 12px">${t('trash.retentionHint', Number(state.retentionDays) || 7)}</div>
-             ${items.map((t) => trashLine(t, ctx)).join('')}`
+             ${pageItems.map((t) => trashLine(t, ctx)).join('')}
+             ${pagerHTML('trPager', state.page, state.pages, items.length)}`
           : emptyBox(t('trash.empty'))}
       </div>
     </div>`;
@@ -142,4 +169,5 @@ function bind(ctx) {
       });
     };
   });
+  bindPager(root, 'trPager', state, () => { state.hash = ''; paint(ctx, true); });
 }

@@ -20,10 +20,35 @@ const state = {
   filters: { q: '', platform: '', dateFrom: '', dateTo: '', ext: '' },
   defaultsSet: false,
   picked: new Set(),
+  page: 1,
+  pages: 1,
   hash: '',
   pending: false,
   bound: false,
 };
+
+/* 分页：默认每页 10 条（任务/文件/回收站统一） */
+const PAGE_SIZE = 10;
+function pagerHTML(id, page, pages, total) {
+  return `<div class="pager" id="${id}">
+    <button class="btn sm ghost" data-pg="first"${page <= 1 ? ' disabled' : ''}>«</button>
+    <button class="btn sm ghost" data-pg="prev"${page <= 1 ? ' disabled' : ''}>‹ ${t('common.pagerPrev')}</button>
+    <span class="pager-info">${t('common.pagerInfo', page, pages, total)}</span>
+    <button class="btn sm ghost" data-pg="next"${page >= pages ? ' disabled' : ''}>${t('common.pagerNext')} ›</button>
+    <button class="btn sm ghost" data-pg="last"${page >= pages ? ' disabled' : ''}>»</button>
+  </div>`;
+}
+function bindPager(root, pagerId, st, paintFn) {
+  const el = root.querySelector('#' + pagerId);
+  if (!el) return;
+  el.querySelectorAll('[data-pg]').forEach((b) => {
+    b.onclick = () => {
+      const map = { first: 1, prev: st.page - 1, next: st.page + 1, last: st.pages };
+      st.page = Math.max(1, Math.min(st.pages, map[b.dataset.pg]));
+      paintFn();
+    };
+  });
+}
 
 let boundRoot = null;
 
@@ -36,6 +61,7 @@ function defaultDateRange() {
 /* 把输入框草稿提交为已生效筛选条件（「查询」按钮触发） */
 function commitFilters() {
   state.filters = { q: state.q, platform: state.platform, dateFrom: state.dateFrom, dateTo: state.dateTo, ext: state.ext };
+  state.page = 1;
   state.hash = '';
 }
 
@@ -58,6 +84,7 @@ function clearAllFilters(commit) {
   state.ext = '';
   state.dateFrom = '';
   state.dateTo = '';
+  state.page = 1;
   if (commit) commitFilters();
 }
 
@@ -127,10 +154,13 @@ function paint(ctx, force) {
   const root = boundRoot;
   if (!root) return;
   const list = filtered();
+  state.pages = Math.max(1, Math.ceil(list.length / PAGE_SIZE));
+  if (state.page > state.pages) state.page = state.pages;
+  const pageList = list.slice((state.page - 1) * PAGE_SIZE, state.page * PAGE_SIZE);
   const allSel = list.length > 0 && list.every(({ f }) => state.picked.has(f.id));
   const platforms = [...new Set(state.sessions.map((s) => s.platform).filter(Boolean))];
   const hash = JSON.stringify([list.map(({ f, s }) => [f.id, f.status, s.platform, s.streamer, s.startedAt]),
-    state.q, state.platform, state.dateFrom, state.dateTo, state.ext, Array.from(state.picked)]);
+    state.q, state.platform, state.dateFrom, state.dateTo, state.ext, Array.from(state.picked), 'p' + state.page]);
   if (!force && hash === state.hash) return;
   state.hash = hash;
 
@@ -164,8 +194,9 @@ function paint(ctx, force) {
         <button class="btn sm danger" id="flDelPicked"${state.picked.size ? '' : ' disabled'}>${t('files.deleteSelected')}</button>
       </div>
       <div style="padding:0 16px 16px" id="flBody">
-        ${list.length ? list.map(filenameRow).join('') : emptyBox(t('files.noFilteredFiles'))}
+        ${pageList.length ? pageList.map(filenameRow).join('') : emptyBox(t('files.noFilteredFiles'))}
       </div>
+      ${pagerHTML('flPager', state.page, state.pages, list.length)}
     </div>`;
 
   bind(ctx);
@@ -246,6 +277,7 @@ function bind(ctx) {
   if (queryBtn) queryBtn.onclick = () => { commitFilters(); paint(ctx, true); };
   const clearBtn = root.querySelector('#flClear');
   if (clearBtn) clearBtn.onclick = () => { clearAllFilters(true); paint(ctx, true); };
+  bindPager(root, 'flPager', state, () => { state.hash = ''; paint(ctx, true); });
 
   root.querySelectorAll('[data-pick-file]').forEach((cb) => {
     cb.onchange = () => {

@@ -32,18 +32,18 @@ body{
 /* ================= 甯冨眬 ================= */
 .app{display:flex;min-height:100vh}
 .sidebar{
-  width:236px;flex:0 0 236px;background:rgba(14,19,27,.92);border-right:1px solid var(--line);
+  width:158px;flex:0 0 158px;background:rgba(14,19,27,.92);border-right:1px solid var(--line);
   display:flex;flex-direction:column;position:sticky;top:0;height:100vh;backdrop-filter:blur(8px);
 }
-.brand{display:flex;gap:11px;align-items:center;padding:18px 18px 16px}
+.brand{display:flex;gap:9px;align-items:center;padding:16px 12px 14px}
 .brand .logo{
-  width:34px;height:34px;border-radius:10px;position:relative;flex:0 0 34px;
+  width:32px;height:32px;border-radius:9px;position:relative;flex:0 0 32px;
   background:linear-gradient(135deg,var(--dy),#ff6a8a 45%,var(--dy-2));
-  display:grid;place-items:center;font-weight:800;font-size:15px;color:#0a0d13;
+  display:grid;place-items:center;font-weight:800;font-size:14px;color:#0a0d13;
   box-shadow:0 6px 18px rgba(254,44,85,.32);
 }
-.brand h1{margin:0;font-size:15px;letter-spacing:.3px}
-.brand small{display:block;color:var(--txt-3);font-size:11px;font-weight:400;letter-spacing:.6px}
+.brand h1{margin:0;font-size:14px;letter-spacing:.3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.brand small{display:block;color:var(--txt-3);font-size:10.5px;font-weight:400;letter-spacing:.6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .nav{padding:6px 10px;overflow:auto;flex:1}
 .nav-group{color:var(--txt-3);font-size:11px;letter-spacing:1.2px;padding:14px 10px 6px;font-weight:600}
 .nav-item{
@@ -533,6 +533,21 @@ td .sub{font-size:11.5px;color:var(--txt-3);margin-top:3px}
 .pv-btn{width:34px;height:34px;border-radius:9px;border:1px solid var(--line);background:var(--panel-2);color:var(--txt);
   cursor:pointer;display:grid;place-items:center;font-size:13px;padding:0;white-space:nowrap}
 .pv-btn:hover{background:#1d2634}
+/* ---- 手机全屏播放器：直达竖屏全屏，右上角横竖屏切换 + 关闭 ---- */
+.pv-mobile{position:fixed;inset:0;width:100vw;height:100vh;background:#000;display:grid;place-items:center;overflow:hidden}
+.pv-mobile video{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;background:#000;display:block}
+.pv-mtools{
+  position:absolute;top:calc(12px + env(safe-area-inset-top));right:calc(12px + env(safe-area-inset-right));
+  display:flex;flex-direction:column;gap:10px;z-index:8;transition:opacity .25s;
+}
+.pv-mtools.hid{opacity:0;pointer-events:none}
+.pv-mbtn{
+  width:46px;height:46px;border-radius:13px;border:1px solid rgba(255,255,255,.28);
+  background:rgba(10,14,20,.55);color:#fff;font-size:14px;font-weight:600;
+  display:grid;place-items:center;backdrop-filter:blur(6px);cursor:pointer;user-select:none;
+}
+.pv-mbtn:active{transform:scale(.94)}
+.pv-mbtn.danger{color:#ff6a8a}
 .pv-segs{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
 .x{margin-left:auto;cursor:pointer;color:var(--txt-3);font-size:20px;line-height:1;padding:2px 6px;border-radius:6px}
 .x:hover{background:var(--panel-2);color:var(--txt)}

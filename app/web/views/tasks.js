@@ -21,6 +21,8 @@ const state = {
   sort: 'created',
   sortDir: 'desc',
   selected: new Set(),
+  page: 1,
+  pages: 1,
   hash: '',
   pending: false,
   bound: false,
@@ -31,6 +33,29 @@ const state = {
 let boundRoot = null;
 let offModal = null;
 let boundCtx = null;
+
+/* 分页：默认每页 10 条（任务/文件/回收站统一） */
+const PAGE_SIZE = 10;
+function pagerHTML(id, page, pages, total) {
+  return `<div class="pager" id="${id}">
+    <button class="btn sm ghost" data-pg="first"${page <= 1 ? ' disabled' : ''}>«</button>
+    <button class="btn sm ghost" data-pg="prev"${page <= 1 ? ' disabled' : ''}>‹ ${t('common.pagerPrev')}</button>
+    <span class="pager-info">${t('common.pagerInfo', page, pages, total)}</span>
+    <button class="btn sm ghost" data-pg="next"${page >= pages ? ' disabled' : ''}>${t('common.pagerNext')} ›</button>
+    <button class="btn sm ghost" data-pg="last"${page >= pages ? ' disabled' : ''}>»</button>
+  </div>`;
+}
+function bindPager(root, pagerId, st, paintFn) {
+  const el = root.querySelector('#' + pagerId);
+  if (!el) return;
+  el.querySelectorAll('[data-pg]').forEach((b) => {
+    b.onclick = () => {
+      const map = { first: 1, prev: st.page - 1, next: st.page + 1, last: st.pages };
+      st.page = Math.max(1, Math.min(st.pages, map[b.dataset.pg]));
+      paintFn();
+    };
+  });
+}
 
 export async function render(root, ctx) {
   boundRoot = root;
@@ -147,10 +172,13 @@ function paint(ctx, force) {
   const root = boundRoot;
   if (!root) return;
   const list = filtered();
+  state.pages = Math.max(1, Math.ceil(list.length / PAGE_SIZE));
+  if (state.page > state.pages) state.page = state.pages;
+  const pageList = list.slice((state.page - 1) * PAGE_SIZE, state.page * PAGE_SIZE);
   const hash = JSON.stringify(list.map((t) => [
     t.id, t.status, t.queueReason, t.retryCount, t.statusMessage, t.qualityLabel,
     t.live && t.live.elapsedSec, t.live && t.live.bytes, t.live && t.live.segmentIndex, t.updatedAt,
-  ])) + '|' + state.q + '|' + state.platform + '|' + state.liveStatus + '|' + state.status + '|' + state.sort + '|' + state.sortDir + '|' + Array.from(state.selected).join(',');
+  ])) + '|' + state.q + '|' + state.platform + '|' + state.liveStatus + '|' + state.status + '|' + state.sort + '|' + state.sortDir + '|' + Array.from(state.selected).join(',') + '|p' + state.page;
   if (!force && hash === state.hash) { syncBatchBar(); return; }
   state.hash = hash;
 
@@ -199,7 +227,8 @@ function paint(ctx, force) {
         <button class="btn sm danger" data-batch="delete">${t('tasks.batchDelete')}</button>
       </div>
       <div class="hintline" style="margin:0 0 12px 2px">${t('tasks.batchHint')}${state.sort === 'custom' ? t('tasks.customSortHint') : t('tasks.customSortTip')}</div>
-      <div id="tkTable">${table(list)}</div>
+      <div id="tkTable">${table(pageList)}</div>
+      ${pagerHTML('tkPager', state.page, state.pages, list.length)}
     </div>`;
 
   bind(ctx);
@@ -299,9 +328,19 @@ function rowActions(item) {
   const acts = [];
   const recording = ['recording', 'stopping', 'merging'].includes(item.status);
   if (recording) {
-    acts.push(`<button class="btn sm danger" data-act="stop" data-id="${id}">${t('common.stopRecord')}</button>`);
+    // 不开自动录制的任务：停止只作用于本场，不改变 autoRecord 配置
+    if (item.autoRecord === false && !item.monitorOnly) {
+      acts.push(`<button class="btn sm danger" data-act="stop-once" data-id="${id}" title="${t('tasks.stopOnceTip')}">${t('tasks.stopOnce')}</button>`);
+    } else {
+      acts.push(`<button class="btn sm danger" data-act="stop" data-id="${id}">${t('common.stopRecord')}</button>`);
+    }
   } else if (item.liveStatus === 'live') {
-    acts.push(`<button class="btn sm ok" data-act="start" data-id="${id}"${item.monitorOnly ? ' title="' + t('tasks.monitorOnlyStartTip') + '"' : ''}>${t('tasks.batchStart')}</button>`);
+    // 不开播自动录制的任务：提供「录制本场」，只录本场不改配置
+    if (item.autoRecord === false && !item.monitorOnly) {
+      acts.push(`<button class="btn sm ok" data-act="record-once" data-id="${id}" title="${t('tasks.recordOnceTip')}">${t('tasks.recordOnce')}</button>`);
+    } else {
+      acts.push(`<button class="btn sm ok" data-act="start" data-id="${id}"${item.monitorOnly ? ' title="' + t('tasks.monitorOnlyStartTip') + '"' : ''}>${t('tasks.batchStart')}</button>`);
+    }
   } else {
     acts.push(`<button class="btn sm" data-act="check" data-id="${id}" title="${t('common.checkLiveTip')}">${t('common.checkLive')}</button>`);
   }
@@ -326,7 +365,7 @@ function bind(ctx) {
     q.oninput = () => {
       state.q = q.value;
       clearTimeout(timer);
-      timer = setTimeout(() => { state.hash = ''; paint(ctx, true); }, 200);
+      timer = setTimeout(() => { state.page = 1; state.hash = ''; paint(ctx, true); }, 200);
     };
   }
   const fToggle = root.querySelector('#tkFilterToggle');
@@ -334,7 +373,7 @@ function bind(ctx) {
   const bindSel = (id, key) => {
     const node = root.querySelector(id);
     if (!node) return;
-    node.onchange = () => { state[key] = node.value; state.hash = ''; paint(ctx, true); };
+    node.onchange = () => { state[key] = node.value; state.page = 1; state.hash = ''; paint(ctx, true); };
   };
   bindSel('#tkPlat', 'platform');
   bindSel('#tkLive', 'liveStatus');
@@ -396,6 +435,8 @@ function bind(ctx) {
           resume: t('tasks.resumeDone'),
           check: t('tasks.checkDone'),
           retry: t('tasks.retryDone'),
+          'record-once': t('tasks.recordOnceDone'),
+          'stop-once': t('tasks.stopOnceDone'),
         }[act] || t('tasks.actionDone');
         toast(msg);
         state.hash = '';
@@ -411,6 +452,7 @@ function bind(ctx) {
   root.querySelectorAll('[data-batch]').forEach((btn) => {
     btn.onclick = () => batch(ctx, btn.dataset.batch);
   });
+  bindPager(root, 'tkPager', state, () => { state.hash = ''; paint(ctx, true); });
 
   syncBatchBar();
 }

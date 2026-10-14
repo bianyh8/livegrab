@@ -364,6 +364,12 @@ export async function openPlayer(ctx, opts) {
 
   playerState = { playId: info.playId || null, fileId: opts.fileId };
 
+  /* 手机（≤900px）：点播放直接进竖屏全屏，无中间页；全屏内可切横竖屏、可关闭（关闭退回文件页） */
+  if (window.matchMedia('(max-width: 900px)').matches) {
+    openMobilePlayer(ctx, opts, info, mode, url);
+    return;
+  }
+
   const modeChip = mode === 'remux'
     ? { cls: 'chip wait', text: t('ui.remuxStreaming') }
     : { cls: 'chip on', text: t('ui.directPlay') };
@@ -568,9 +574,102 @@ export async function openPlayer(ctx, opts) {
   video.play().catch(() => { /* 自动播放被拦截时由用户点播放键 */ });
 }
 
+/* ================= 手机播放器：点播放直达竖屏全屏（无中间页），可切横竖屏、可关闭 ================= */
+function openMobilePlayer(ctx, opts, info, mode, url) {
+  const mask = document.getElementById('playerMask');
+  if (!mask) return;
+  closePlayer();
+  playerCleanup = [];
+
+  playerState = { playId: info.playId || null, fileId: opts.fileId };
+
+  mask.innerHTML = `
+    <div class="pv-mobile" id="plBox">
+      <video id="plVideo" src="${esc(url)}" playsinline webkit-playsinline autoplay class="pv-video"></video>
+      <div class="pv-mtools" id="plMBar">
+        <button class="pv-mbtn" id="plOrient" title="${esc(t('ui.switchOrient'))}">横屏</button>
+        <button class="pv-mbtn danger" id="plMClose" title="${esc(t('common.close'))}">✕</button>
+      </div>
+    </div>`;
+  mask.classList.add('show');
+  document.body.style.overflow = 'hidden';
+
+  const playerEl = mask.querySelector('#plBox');
+  const video = mask.querySelector('#plVideo');
+  const bar = mask.querySelector('#plMBar');
+  const orientBtn = mask.querySelector('#plOrient');
+
+  /* 竖屏（默认，contain 不变形）↔ 横屏（旋转 90° 铺满全屏）切换 */
+  let landscape = false;
+  const applyLandscape = () => {
+    if (!landscape) {
+      video.style.position = '';
+      video.style.width = ''; video.style.height = ''; video.style.left = ''; video.style.top = '';
+      video.style.margin = ''; video.style.transform = ''; video.style.objectFit = 'contain';
+      orientBtn.textContent = '横屏';
+      return;
+    }
+    const box = playerEl.getBoundingClientRect();
+    const bw = box.width || window.innerWidth, bh = box.height || window.innerHeight;
+    video.style.position = 'absolute';
+    video.style.width = bh + 'px';
+    video.style.height = bw + 'px';
+    video.style.left = '50%';
+    video.style.top = '50%';
+    video.style.margin = `-${bw / 2}px 0 0 -${bh / 2}px`;
+    video.style.transform = 'rotate(90deg)';
+    video.style.objectFit = 'cover';
+    orientBtn.textContent = '竖屏';
+  };
+  const toggleOrient = () => {
+    landscape = !landscape;
+    applyLandscape();
+    try { if (screen.orientation && screen.orientation.lock) screen.orientation.lock(landscape ? 'landscape' : 'portrait').catch(() => {}); } catch { /* ignore */ }
+  };
+  orientBtn.onclick = toggleOrient;
+
+  /* 无操作 3 秒自动隐藏按钮，触屏/移动即显示（沉浸观看） */
+  let hideTimer = null;
+  const showBar = () => {
+    bar.classList.remove('hid');
+    clearTimeout(hideTimer);
+    hideTimer = setTimeout(() => bar.classList.add('hid'), 3200);
+  };
+  playerEl.addEventListener('touchstart', showBar, { passive: true });
+  playerEl.addEventListener('mousemove', showBar);
+  showBar();
+
+  video.onclick = () => { video.paused ? video.play().catch(() => {}) : video.pause(); };
+  video.onerror = () => { if (playerState) toast(t('ui.playUnsupported'), 'err'); };
+  mask.querySelector('#plMClose').onclick = closePlayer;
+  mask.onclick = (e) => { if (e.target === mask) closePlayer(); };
+
+  /* 直接进入全屏；若被浏览器手势限制拒绝，首次播放/触摸时重试 */
+  const enterFs = () => {
+    if (document.fullscreenElement || document.webkitFullscreenElement) return;
+    if (playerEl.requestFullscreen) playerEl.requestFullscreen().catch(() => {});
+    else if (video.webkitEnterFullscreen) video.webkitEnterFullscreen();
+  };
+  enterFs();
+  video.addEventListener('play', () => enterFs(), { once: true });
+  playerEl.addEventListener('touchend', () => { if (!document.fullscreenElement) enterFs(); });
+
+  playerCleanup.push(() => {
+    clearTimeout(hideTimer);
+    playerEl.removeEventListener('touchstart', showBar);
+    playerEl.removeEventListener('mousemove', showBar);
+    try { if (screen.orientation && screen.orientation.unlock) screen.orientation.unlock(); } catch { /* ignore */ }
+  });
+}
+
 export function closePlayer() {
   (playerCleanup || []).forEach((fn) => { try { fn(); } catch { /* ignore */ } });
   playerCleanup = [];
+  /* 手机全屏播放：关闭时一并退出全屏，直接退回文件页 */
+  if (document.fullscreenElement || document.webkitFullscreenElement) {
+    if (document.exitFullscreen) document.exitFullscreen().catch(() => {});
+    else if (document.webkitExitFullscreen) document.webkitExitFullscreen();
+  }
   const mask = document.getElementById('playerMask');
   if (!mask) return;
   const video = mask.querySelector('video');

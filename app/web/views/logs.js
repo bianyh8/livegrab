@@ -153,9 +153,9 @@ function paint(ctx) {
   const pager = `
     <div class="pager" id="lgPager">
       <button class="btn sm ghost" id="lgFirst"${state.page <= 1 ? ' disabled' : ''} title="${t('logs.firstPage')}">«</button>
-      <button class="btn sm ghost" id="lgPrev"${state.page <= 1 ? ' disabled' : ''}>‹ ${t('logs.prevPage')}</button>
+      <button class="btn sm ghost" id="lgPrev"${state.page <= 1 ? ' disabled' : ''}>‹ ${t('common.pagerPrev')}</button>
       <span class="pager-info">${t('logs.pagerInfo', state.page, state.pages, state.total)}</span>
-      <button class="btn sm ghost" id="lgNext"${state.page >= state.pages ? ' disabled' : ''}>${t('logs.nextPage')} ›</button>
+      <button class="btn sm ghost" id="lgNext"${state.page >= state.pages ? ' disabled' : ''}>${t('common.pagerNext')} ›</button>
       <button class="btn sm ghost" id="lgLast"${state.page >= state.pages ? ' disabled' : ''} title="${t('logs.lastPage')}">»</button>
       <span class="pager-go">${t('logs.goPage')} <input class="input" id="lgPageGo" type="number" min="1" max="${state.pages}" value="${state.page}" style="width:56px;padding:4px 6px" /> <button class="btn sm ghost" id="lgGo">${t('logs.goBtn')}</button></span>
     </div>`;
