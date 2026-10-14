@@ -675,7 +675,8 @@ export class Scheduler {
       throw new HttpError('RESOLVE_FAIL', `刷新失败：${e.message}`, 502);
     }
     this.logger.info(`批量刷新结果：${task.anchorName || task.roomId} → ${info.liveStatus === 'live' ? '已开播' : '未开播'}，主播「${info.anchorName || '—'}」`, { taskId: task.id, taskName: task.anchorName });
-    if (!task.nameLocked) task.anchorName = info.anchorName || task.anchorName;
+    task.platformAnchorName = info.anchorName || task.platformAnchorName || ''; // 平台名总是刷新
+    if (!task.nameLocked) task.anchorName = task.platformAnchorName; // 未自定义时同步展示名；已自定义则不动
     task.title = info.title || task.title;
     if (info.avatar) await this.storage.saveAvatar(task, info.avatar); // 刷新头像落盘缓存
     if (task.platform === 'douyin' && info.shortId) task.shortId = String(info.shortId); // 批量刷新后回写短号（抖音号）
