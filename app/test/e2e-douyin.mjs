@@ -109,7 +109,7 @@ fs.mkdirSync(CFG, { recursive: true });
 fs.mkdirSync(REC, { recursive: true });
 const PORT = 18096;
 const BASE = `http://127.0.0.1:${PORT}`;
-const seed = spawnSync(NODE, ['-e', `import(process.argv[1]).then(async m=>{const s=await new m.Store(process.argv[2]).init();await s.updateSettings({security:{trustLan:true},maxConcurrency:2,platformCaps:{douyin:2},defaultSegmentMinutes:1,diskLimitGB:1,remuxToMp4:true,autoMerge:false,keepSource:true,pollIntervalSec:5});console.log('ok')})`, 'file:///' + path.join(APP, 'server', 'store.js').replace(/\\/g, '/'), CFG], { encoding: 'utf8' });
+const seed = spawnSync(NODE, ['-e', `Promise.all([import(process.argv[1]), import(process.argv[3])]).then(async ([m, dbm]) => { const db = dbm.openDb(process.argv[4]); const s = await new m.Store(process.argv[2]).init(db); await s.updateSettings({security:{trustLan:true},maxConcurrency:2,platformCaps:{douyin:2},defaultSegmentMinutes:1,diskLimitGB:1,remuxToMp4:true,autoMerge:false,keepSource:true,pollIntervalSec:5}); db.close(); console.log('ok'); }).catch((e) => { console.error('seed ERR: ' + (e?.message || e)); process.exit(1); })`, 'file:///' + path.join(APP, 'server', 'store.js').replace(/\\/g, '/'), CFG, 'file:///' + path.join(APP, 'server', 'db.js').replace(/\\/g, '/'), path.join(CFG, 'livegrab.db')], { encoding: 'utf8' });
 check((seed.stdout || '').includes('ok'), '预置设置（含空 Cookie）', (seed.stdout || '').trim() + (seed.stderr ? ' ERR ' + seed.stderr.slice(0, 60) : ''));
 const env = { ...process.env, PORT: String(PORT), CONFIG_DIR: CFG, RECORD_ROOT: REC, FFMPEG_PATH: FFMPEG, FFPROBE_PATH: FFPROBE || 'ffprobe', TZ: 'Asia/Shanghai', LIVEGRAB_VERSION: '0.1.0' };
 const srv = spawn(NODE, [path.join(APP, 'server', 'server.js')], { env, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -181,7 +181,7 @@ try {
     await jpost(`/api/tasks/${task.id}/stop`);
     const done = await waitFor(async () => {
       const t = (await tasksAll()).find((x) => x.id === task.id);
-      return t && ['completed', 'error', 'waiting', 'idle'].includes(t.status) ? t : null;
+      return t && ['completed', 'error', 'waiting', 'idle', 'stopped'].includes(t.status) ? t : null;
     }, 90000);
     check(!!done, '停止后任务正常收尾', done?.status || '超时');
     const mp4 = await waitFor(async () => {

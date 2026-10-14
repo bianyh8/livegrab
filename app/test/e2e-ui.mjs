@@ -32,7 +32,7 @@ const check = (cond, label, extra = '') => { if (!cond) bad++; line(`  ${cond ? 
 
 // 1) 预置：内网免登录 + 初始化管理员（无头浏览器可直接进控制台）
 const storeUrl = 'file:///' + path.join(APP, 'server/store.js').replace(/\\/g, '/');
-const seed = spawnSync(NODE, ['-e', `import(process.argv[1]).then(async m=>{const s=await new m.Store(process.argv[2]).init();await s.updateSettings({security:{trustLan:true,maxConcurrency:6}});console.log('seeded')})`, storeUrl, CFG], { encoding: 'utf8' });
+const seed = spawnSync(NODE, ['-e', `Promise.all([import(process.argv[1]), import(process.argv[3])]).then(async ([m, dbm]) => { const db = dbm.openDb(process.argv[4]); const s = await new m.Store(process.argv[2]).init(db); await s.updateSettings({security:{trustLan:true,maxConcurrency:6}}); db.close(); console.log('seeded'); }).catch((e) => { console.error('seed ERR: ' + (e?.message || e)); process.exit(1); })`, storeUrl, CFG, 'file:///' + path.join(APP, 'server', 'db.js').replace(/\\/g, '/'), path.join(CFG, 'livegrab.db')], { encoding: 'utf8' });
 line(`1) 预置配置: ${(seed.stdout || '').trim()}${seed.stderr ? ' ERR:' + seed.stderr : ''}`);
 // 账号必须在服务启动前就存在（服务启动时把 users.json 读进内存，之后写文件不会热加载）
 const authSeed = spawnSync(NODE, ['-e', `import(process.argv[1]).then(async m=>{const a=await new (m.Auth)(process.argv[2]).init();if(!a.users)await a.createUser({username:'admin',password:'livegrab123'});console.log('admin ok')})`, 'file:///' + path.join(APP, 'server', 'auth.js').replace(/\\/g, '/'), CFG], { encoding: 'utf8' });

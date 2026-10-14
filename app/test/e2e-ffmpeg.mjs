@@ -95,7 +95,7 @@ await new Promise((r) => streamSrv.listen(STREAM_PORT, '127.0.0.1', r));
 line(`1) 本地直播流服务 http://127.0.0.1:${STREAM_PORT}/live{1,2,3}.ts（真实 ffmpeg 现编现推）`);
 
 /* ---------- 2) 启动 LiveGrab 服务（指向真实 ffmpeg） ---------- */
-const seedStore = spawnSync(NODE, ['-e', `import(process.argv[1]).then(async m=>{const s=await new m.Store(process.argv[2]).init();await s.updateSettings({security:{trustLan:true},maxConcurrency:2,platformCaps:{direct:2},defaultSegmentMinutes:1,diskLimitGB:1,remuxToMp4:true,autoMerge:false,keepSource:true});console.log('ok')})`, 'file:///' + path.join(APP, 'server', 'store.js').replace(/\\/g, '/'), CFG], { encoding: 'utf8' });
+const seedStore = spawnSync(NODE, ['-e', `Promise.all([import(process.argv[1]), import(process.argv[3])]).then(async ([m, dbm]) => { const db = dbm.openDb(process.argv[4]); const s = await new m.Store(process.argv[2]).init(db); await s.updateSettings({security:{trustLan:true},maxConcurrency:2,platformCaps:{direct:2},defaultSegmentMinutes:1,diskLimitGB:1,remuxToMp4:true,autoMerge:false,keepSource:true}); db.close(); console.log('ok'); }).catch((e) => { console.error('seed ERR: ' + (e?.message || e)); process.exit(1); })`, 'file:///' + path.join(APP, 'server', 'store.js').replace(/\\/g, '/'), CFG, 'file:///' + path.join(APP, 'server', 'db.js').replace(/\\/g, '/'), path.join(CFG, 'livegrab.db')], { encoding: 'utf8' });
 line(`2) 预置设置: ${(seedStore.stdout || '').trim()}${seedStore.stderr ? ' ERR:' + seedStore.stderr : ''}`);
 const env = { ...process.env, PORT: String(PORT), CONFIG_DIR: CFG, RECORD_ROOT: REC, FFMPEG_PATH: FFMPEG, FFPROBE_PATH: FFPROBE || 'ffprobe', TZ: 'Asia/Shanghai', LIVEGRAB_VERSION: '0.1.0' };
 const srv = spawn(NODE, [path.join(APP, 'server', 'server.js')], { env, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -261,10 +261,11 @@ if (merged?.merged) {
 if (bDone?.mp4) {
   const p1 = await jpost('/api/play', { fileId: bDone.mp4.id });
   check(p1.data?.mode === 'direct', 'MP4 回放走直放', p1.data?.mode);
-  const r = await fetch(`${BASE}/api/play/${p1.data.playId}/stream`, { headers: { Range: 'bytes=0-2047' } });
+  // 成品文件（MP4）direct 直放走 /api/files/:id/stream（可 Range/拖动），无 playId 会话
+  const r = await fetch(`${BASE}${p1.data.url}`, { headers: { Range: 'bytes=0-2047' } });
   const buf = Buffer.from(await r.arrayBuffer());
   check(r.status === 206 && /bytes 0-2047\//.test(r.headers.get('content-range') || '') && /ftyp/.test(buf.toString('latin1')), 'MP4 直放支持 Range（206 + ftyp）', `${r.status} ${r.headers.get('content-range')}`);
-  await fetch(`${BASE}/api/play/${p1.data.playId}`, { method: 'DELETE' });
+  if (p1.data.playId) await fetch(`${BASE}/api/play/${p1.data.playId}`, { method: 'DELETE' });
 }
 const tsSeg = ((merged || aBefore)?.segments || [])[0];
 if (tsSeg) {
