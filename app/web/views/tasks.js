@@ -328,16 +328,18 @@ function rowActions(item) {
   const acts = [];
   const recording = ['recording', 'stopping', 'merging'].includes(item.status);
   if (recording) {
-    // 不开播自动录制的任务（autoRecord=false，含仅监控）：停止只作用于本场，不改变 autoRecord 配置
     if (item.autoRecord === false) {
+      // 不开播自动录制：两个停止都要——「停止本场」只停本次（不改配置）＋「停止录制」永久停止（关自动录制）
       acts.push(`<button class="btn sm danger" data-act="stop-once" data-id="${id}" title="${t('tasks.stopOnceTip')}">${t('tasks.stopOnce')}</button>`);
+      acts.push(`<button class="btn sm danger" data-act="stop" data-id="${id}" title="${t('tasks.stopPermanentTip')}">${t('common.stopRecord')}</button>`);
     } else {
       acts.push(`<button class="btn sm danger" data-act="stop" data-id="${id}">${t('common.stopRecord')}</button>`);
     }
   } else if (item.liveStatus === 'live') {
-    // 不开播自动录制的任务：提供「录制本场」，只录本场不改配置
     if (item.autoRecord === false) {
+      // 不开播自动录制：两个开始都要——「录制本场」只录本次（不改配置）＋「开始录制」永久录制（开自动录制）
       acts.push(`<button class="btn sm ok" data-act="record-once" data-id="${id}" title="${t('tasks.recordOnceTip')}">${t('tasks.recordOnce')}</button>`);
+      acts.push(`<button class="btn sm ok" data-act="start" data-id="${id}" title="${t('tasks.startPermanentTip')}">${t('tasks.batchStart')}</button>`);
     } else {
       acts.push(`<button class="btn sm ok" data-act="start" data-id="${id}"${item.monitorOnly ? ' title="' + t('tasks.monitorOnlyStartTip') + '"' : ''}>${t('tasks.batchStart')}</button>`);
     }

@@ -307,6 +307,8 @@
   "tasks.stopOnce": "停止本场",
   "tasks.recordOnceTip": "只录制本场直播，不改变自动录制配置，下次仍按系统配置运行",
   "tasks.stopOnceTip": "只停止本场录制，不改变自动录制配置，下次仍按系统配置运行",
+  "tasks.startPermanentTip": "开启自动录制：本场及以后每次开播都自动录制",
+  "tasks.stopPermanentTip": "永久停止并关闭自动录制：以后开播不再自动录制",
   "tasks.recordOnceDone": "已开始录制本场（不改自动录制配置）",
   "tasks.stopOnceDone": "已停止本场（不改自动录制配置）",
   "tasks.batchRefresh": "批量刷新",
