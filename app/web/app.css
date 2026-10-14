@@ -548,6 +548,18 @@ td .sub{font-size:11.5px;color:var(--txt-3);margin-top:3px}
 }
 .pv-mbtn:active{transform:scale(.94)}
 .pv-mbtn.danger{color:#ff6a8a}
+.pv-mbtn.small{width:auto;height:34px;padding:0 12px;font-size:13px;border-radius:10px}
+/* 手机播放器底部控制条：进度条 + 时间 + 倍速 */
+.pv-mctl{
+  position:absolute;left:0;right:0;bottom:0;z-index:8;
+  padding:14px 16px calc(12px + env(safe-area-inset-bottom));
+  background:linear-gradient(transparent,rgba(0,0,0,.6));transition:opacity .25s;
+}
+.pv-mctl.hid{opacity:0;pointer-events:none}
+.pv-mtrack{height:6px;border-radius:99px;background:rgba(255,255,255,.28);overflow:hidden;position:relative;cursor:pointer}
+.pv-mtrack i{display:block;height:100%;width:0%;background:linear-gradient(90deg,var(--dy),var(--dy-2))}
+.pv-mrow{display:flex;align-items:center;gap:10px;margin-top:10px;color:#fff;font-size:12px}
+.pv-mrow .spacer{flex:1}
 .pv-segs{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
 .x{margin-left:auto;cursor:pointer;color:var(--txt-3);font-size:20px;line-height:1;padding:2px 6px;border-radius:6px}
 .x:hover{background:var(--panel-2);color:var(--txt)}

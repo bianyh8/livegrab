@@ -590,6 +590,15 @@ function openMobilePlayer(ctx, opts, info, mode, url) {
         <button class="pv-mbtn" id="plOrient" title="${esc(t('ui.switchOrient'))}">横屏</button>
         <button class="pv-mbtn danger" id="plMClose" title="${esc(t('common.close'))}">✕</button>
       </div>
+      <div class="pv-mctl" id="plMCtl">
+        <div class="pv-mtrack" id="plMTrack"><i id="plMFill"></i></div>
+        <div class="pv-mrow">
+          <span class="mono" id="plMNow">00:00</span>
+          <span class="mono" id="plMTotal">--:--</span>
+          <div class="spacer"></div>
+          <button class="pv-mbtn small" id="plMRate" title="倍速">1.0x</button>
+        </div>
+      </div>
     </div>`;
   mask.classList.add('show');
   document.body.style.overflow = 'hidden';
@@ -597,20 +606,68 @@ function openMobilePlayer(ctx, opts, info, mode, url) {
   const playerEl = mask.querySelector('#plBox');
   const video = mask.querySelector('#plVideo');
   const bar = mask.querySelector('#plMBar');
+  const ctl = mask.querySelector('#plMCtl');
   const orientBtn = mask.querySelector('#plOrient');
+  const fill = mask.querySelector('#plMFill');
+  const nowEl = mask.querySelector('#plMNow');
+  const totalEl = mask.querySelector('#plMTotal');
+  const rateBtn = mask.querySelector('#plMRate');
+  const rates = [1, 1.5, 2, 0.5];
+  let rateIdx = 0;
 
-  /* 竖屏（默认，contain 不变形）↔ 横屏（旋转 90° 铺满全屏）切换 */
+  /* 进度同步 */
+  const sync = () => {
+    nowEl.textContent = formatDuration(video.currentTime || 0);
+    if (isFinite(video.duration) && video.duration > 0) {
+      totalEl.textContent = formatDuration(video.duration);
+      fill.style.width = Math.min(100, (video.currentTime / video.duration) * 100) + '%';
+    } else {
+      totalEl.textContent = '--:--';
+    }
+  };
+  video.ontimeupdate = sync;
+  video.onloadedmetadata = sync;
+
+  /* 进度条拖动（直放可拖动；remux 边转边播不可拖） */
+  const track = mask.querySelector('#plMTrack');
+  track.onclick = (e) => {
+    if (mode === 'remux') { toast(t('ui.remuxNoSeek'), 'warn'); return; }
+    if (!isFinite(video.duration) || !video.duration) return;
+    const r = track.getBoundingClientRect();
+    video.currentTime = ((e.clientX - r.left) / r.width) * video.duration;
+  };
+
+  /* 倍速 */
+  rateBtn.onclick = () => {
+    rateIdx = (rateIdx + 1) % rates.length;
+    video.playbackRate = rates[rateIdx];
+    rateBtn.textContent = rates[rateIdx].toFixed(1) + 'x';
+  };
+
+  /* 竖屏（默认，contain 完整显示）↔ 横屏（自适应：物理横屏时正常铺满，仍竖屏时旋转 90° 模拟横屏） */
   let landscape = false;
-  const applyLandscape = () => {
+  const isPortraitViewport = () => window.innerHeight > window.innerWidth;
+  const resetVideoStyle = () => {
+    video.style.position = '';
+    video.style.width = ''; video.style.height = ''; video.style.left = ''; video.style.top = '';
+    video.style.margin = ''; video.style.transform = ''; video.style.objectFit = 'contain';
+  };
+  const applyOrient = () => {
+    const portraitViewport = isPortraitViewport();
     if (!landscape) {
-      video.style.position = '';
-      video.style.width = ''; video.style.height = ''; video.style.left = ''; video.style.top = '';
-      video.style.margin = ''; video.style.transform = ''; video.style.objectFit = 'contain';
+      /* 目标竖屏：正常显示（contain 完整不变形） */
+      resetVideoStyle();
       orientBtn.textContent = '横屏';
       return;
     }
-    const box = playerEl.getBoundingClientRect();
-    const bw = box.width || window.innerWidth, bh = box.height || window.innerHeight;
+    if (!portraitViewport) {
+      /* 目标横屏，屏幕已是横屏（手机已转屏 / orientation.lock 生效）：正常 contain 铺满横屏 */
+      resetVideoStyle();
+      orientBtn.textContent = '竖屏';
+      return;
+    }
+    /* 目标横屏但屏幕仍是竖的：旋转 video 90° 模拟横屏，完整显示（contain） */
+    const bw = window.innerWidth, bh = window.innerHeight;
     video.style.position = 'absolute';
     video.style.width = bh + 'px';
     video.style.height = bw + 'px';
@@ -618,22 +675,26 @@ function openMobilePlayer(ctx, opts, info, mode, url) {
     video.style.top = '50%';
     video.style.margin = `-${bw / 2}px 0 0 -${bh / 2}px`;
     video.style.transform = 'rotate(90deg)';
-    video.style.objectFit = 'cover';
+    video.style.objectFit = 'contain';
     orientBtn.textContent = '竖屏';
   };
   const toggleOrient = () => {
     landscape = !landscape;
-    applyLandscape();
+    applyOrient();
     try { if (screen.orientation && screen.orientation.lock) screen.orientation.lock(landscape ? 'landscape' : 'portrait').catch(() => {}); } catch { /* ignore */ }
   };
   orientBtn.onclick = toggleOrient;
+  const onOrientResize = () => applyOrient();
+  window.addEventListener('resize', onOrientResize);
+  window.addEventListener('orientationchange', onOrientResize);
 
-  /* 无操作 3 秒自动隐藏按钮，触屏/移动即显示（沉浸观看） */
+  /* 无操作 3 秒自动隐藏控制，触屏/移动即显示（沉浸观看） */
   let hideTimer = null;
   const showBar = () => {
     bar.classList.remove('hid');
+    ctl.classList.remove('hid');
     clearTimeout(hideTimer);
-    hideTimer = setTimeout(() => bar.classList.add('hid'), 3200);
+    hideTimer = setTimeout(() => { bar.classList.add('hid'); ctl.classList.add('hid'); }, 3200);
   };
   playerEl.addEventListener('touchstart', showBar, { passive: true });
   playerEl.addEventListener('mousemove', showBar);
@@ -654,10 +715,35 @@ function openMobilePlayer(ctx, opts, info, mode, url) {
   video.addEventListener('play', () => enterFs(), { once: true });
   playerEl.addEventListener('touchend', () => { if (!document.fullscreenElement) enterFs(); });
 
+  /* 系统返回键关闭：Android 按返回会先退出全屏（浏览器原生行为）→ 借此直接关闭播放器回文件页；
+     不在全屏时（或 iOS 原生播放器结束）→ 用 history 回退监听兜底 */
+  let closingByBack = false;
+  const onFsChange = () => {
+    const inFs = document.fullscreenElement || document.webkitFullscreenElement;
+    if (!inFs && !closingByBack && playerState) { closingByBack = true; closePlayer(); }
+  };
+  document.addEventListener('fullscreenchange', onFsChange);
+  document.addEventListener('webkitfullscreenchange', onFsChange);
+  const onIosFsEnd = () => { if (!closingByBack && playerState) { closingByBack = true; closePlayer(); } };
+  video.addEventListener('webkitendfullscreen', onIosFsEnd);
+
+  let poppedBack = false;
+  try { history.pushState({ lgPlayer: 1 }, ''); } catch { /* ignore */ }
+  const onPop = () => { poppedBack = true; if (playerState) { closingByBack = true; closePlayer(); } };
+  window.addEventListener('popstate', onPop);
+
   playerCleanup.push(() => {
     clearTimeout(hideTimer);
     playerEl.removeEventListener('touchstart', showBar);
     playerEl.removeEventListener('mousemove', showBar);
+    window.removeEventListener('resize', onOrientResize);
+    window.removeEventListener('orientationchange', onOrientResize);
+    document.removeEventListener('fullscreenchange', onFsChange);
+    document.removeEventListener('webkitfullscreenchange', onFsChange);
+    video.removeEventListener('webkitendfullscreen', onIosFsEnd);
+    window.removeEventListener('popstate', onPop);
+    // 非返回键关闭时，回退掉自己压入的那条历史（避免残留一步空历史）
+    if (!poppedBack && history.state && history.state.lgPlayer) { try { history.back(); } catch { /* ignore */ } }
     try { if (screen.orientation && screen.orientation.unlock) screen.orientation.unlock(); } catch { /* ignore */ }
   });
 }
