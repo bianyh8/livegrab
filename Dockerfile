@@ -19,7 +19,7 @@ FROM node:22-bookworm-slim
 
 LABEL org.opencontainers.image.title="LiveGrab 直播录制台" \
       org.opencontainers.image.description="抖音/B站/快手/虎牙/斗鱼/小红书/微博 直播分段录制，带 Web 管理页面" \
-      org.opencontainers.image.version="0.1.0"
+      org.opencontainers.image.version="0.1.6"
 
 ENV NODE_ENV=production \
     PORT=8080 \
@@ -43,12 +43,16 @@ COPY app/web ./web
 COPY app/test ./test
 COPY app/docs ./docs
 COPY README.md ./README.md
+# package.json 必须进运行阶段：「系统更新」的 localInfo() 从 <appDir>/package.json 读本地版本，
+# 漏掉这行会导致容器内版本显示 0.0.0、版本比对永远误报「可更新」。
+COPY app/package.json ./package.json
 
 # 构建时注入 commit（由 docker compose / deploy/update.sh 通过 --build-arg BUILD_COMMIT 传入），
 # 写入 .build-info.json，供「系统更新」在容器内（无 .git）精确比对自身代码版本，避免误报更新。
-# 未传入则 commit 为空，更新检测回退到版本号比对。
+# 未传入则 commit 为空，更新检测回退到版本号比对（此时 package.json 的 version 必须准确）。
 ARG BUILD_COMMIT=""
-RUN echo "{\"commit\":\"${BUILD_COMMIT}\",\"builtAt\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}" > /app/.build-info.json
+RUN VER=$(node -p "require('./package.json').version") \
+ && echo "{\"version\":\"${VER}\",\"commit\":\"${BUILD_COMMIT}\",\"builtAt\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}" > /app/.build-info.json
 
 RUN mkdir -p /data /config
 
