@@ -36,9 +36,12 @@ function readGitCredentialsToken() {
 }
 
 export class UpdateManager {
-  constructor({ appDir, logger, token } = {}) {
+  constructor({ appDir, logger, token, restart } = {}) {
     this.appDir = appDir || process.cwd();
     this.logger = logger || null;
+    // 本地（非容器）更新完成后的自重启钩子：由 server.js 注入优雅停止 + re-exec 逻辑。
+    // 容器/无 git 场景不走此钩子（会提前返回手动重建指引）。
+    this.restartHook = (typeof restart === 'function') ? restart : null;
     // Token 优先级：显式传入 > 环境变量 LIVEGRAB_GITHUB_TOKEN > 本地 ~/.git-credentials 兜底
     this.token = token || process.env.LIVEGRAB_GITHUB_TOKEN || readGitCredentialsToken();
     this._apiHeaders = { 'User-Agent': UA, 'Accept': 'application/vnd.github+json' };
@@ -137,9 +140,24 @@ export class UpdateManager {
       if (br.ok) branch = br.out;
       if (at.ok) commitAt = at.out;
       if (tg.ok) tag = tg.out;
+    } else {
+      // 容器/无 git：尝试从构建时注入的构建信息读取自身 commit（镜像构建时写入 .build-info.json 或 LIVEGRAB_BUILD_COMMIT），
+      // 用于和远程分支 HEAD 做精确比对；拿不到则回退到版本号比对。
+      const buildCommit = (process.env.LIVEGRAB_BUILD_COMMIT || '').trim()
+        || (await this._readBuildCommit().catch(() => ''));
+      if (buildCommit) commit = String(buildCommit).slice(0, 12);
+      branch = BRANCH;
     }
     this.state.local = { version, commit, branch: branch || BRANCH, commitAt, tag: tag || `v${version}` };
     return this.state.local;
+  }
+
+  /** 容器/无 git 环境下，从构建信息读取自身 commit（镜像构建时写入 <appDir>/.build-info.json 的 commit 字段）。 */
+  async _readBuildCommit() {
+    try {
+      const raw = JSON.parse(await fsp.readFile(path.join(this.appDir, '.build-info.json'), 'utf8'));
+      return raw && raw.commit ? String(raw.commit).trim() : '';
+    } catch { return ''; }
   }
 
   /* ---------- GitHub 最新版本 ---------- */
@@ -189,7 +207,9 @@ export class UpdateManager {
 
     const tagName = (rel && rel.tag_name) || (tags && tags.length && tags[0].name) || '';
     const version = String(tagName || '').replace(/^v/i, '');
-    const commit = (rel && rel.target_commitish) || (main && main.sha ? main.sha.slice(0, 12) : '');
+    // 权威「最新代码」以分支 HEAD 的 commit sha 为准：release 的 target_commitish 通常只是分支/标签名，
+    // 不能用于精确比对（例如 v0.1.0 标签可能指向旧提交，而 main 最新提交才是真正要去比对的）。
+    const commit = (main && main.sha) ? main.sha.slice(0, 12) : (rel && rel.target_commitish) || '';
     const commitAt = (main && main.commit && main.commit.committer && main.commit.committer.date) || (rel && rel.published_at) || '';
     const commitMsg = (main && main.commit && main.commit.message || '').split('\n')[0] || '';
     const notes = (rel && rel.body) || '';
@@ -260,22 +280,29 @@ export class UpdateManager {
       await this.fetchRemote();
       const latest = this.state.latest;
       this.state.progress = 8;
+
+      const hasNew = this._computeHasUpdate(local, latest);
+
+      // 没有新版本：直接结束，不再误报「发现新版本」（commit 一致即视为最新，即使版本号字符串不同）
+      if (!hasNew) {
+        this._phase('done', 100, '');
+        this._log('OK', `已是最新版本${local.commit ? `（${local.commit}）` : `（${local.version}）`}，无需更新`);
+        return;
+      }
+
       this._log('INFO', `发现新版本：${latest.tag} (${latest.commit || '?'})`);
 
-      const hasNew = latest.version && latest.version !== local.version;
-      const targetVersion = latest.version || local.version;
-
       if (!env.gitAvailable) {
-        // 容器/无 git：不能伪更新，给手动指引
-        this._phase('error', 15, '');
+        // 容器/无 git：不能伪更新，给手动指引。这是正常的「需手动重建」状态，不是错误。
+        this._phase('done', 15, '需手动重建镜像更新');
         this._log('WARN', env.inContainer
           ? '当前运行在容器中，容器内不含 .git，无法在线拉取代码'
           : '未检测到可用 git 仓库，无法在线拉取代码');
         this._log('INFO', env.dockerAvailable || env.inContainer
           ? '请在宿主机执行：docker compose up -d --build'
           : `请在源码目录手动执行：git pull origin ${BRANCH} && npm install`);
-        this._log('INFO', '更新完成（手动模式）。重启服务后生效。');
-        this._phase('error', 100, '');
+        this._log('INFO', '已生成手动更新指引。重建并重启容器后生效。');
+        this._phase('done', 100, '需手动重建镜像更新');
         return;
       }
 
@@ -331,7 +358,20 @@ export class UpdateManager {
         this._log('OK', '依赖安装完成');
       }
 
-      // ⑥ 完成
+      // ⑥ 完成：本地模式优先「拉取后自重启」以加载新版本；无重启钩子时退回手动提示
+      if (typeof this.restartHook === 'function') {
+        this._log('OK', '更新完成，正在重启服务以加载新版本…');
+        try {
+          await this.restartHook();
+        } catch (e) {
+          this._log('WARN', `自动重启失败（${e?.message || e}），请手动重启服务使新版本生效`);
+        }
+        // 若重启钩子未真正退出进程（如被上层拦截），兜底给手动提示
+        this._phase('done', 100, '');
+        this._log('INFO', '更新完成。请重启服务使新版本生效。');
+        this.state.task = `更新完成 ${latest.tag}`;
+        return;
+      }
       this._phase('done', 100, '');
       this._log('OK', '更新完成。请重启服务使新版本生效。');
       this.state.task = `更新完成 ${latest.tag}`;
@@ -344,6 +384,16 @@ export class UpdateManager {
   }
 
   /* ---------- 状态输出 ---------- */
+
+  /** 计算是否真的有更新：优先按 commit sha 比对（最权威），commit 不可得时退回版本号比对。 */
+  _computeHasUpdate(local, latest) {
+    if (!latest || latest.unavailable) return false;
+    const lc = local && local.commit ? String(local.commit).slice(0, 12) : '';
+    const rc = latest && latest.commit ? String(latest.commit).slice(0, 12) : '';
+    if (lc && rc) return lc !== rc; // 两端都能拿到 commit：以 commit 为准（避免版本号滞后/发布标签错位造成的误报）
+    // commit 不可得（如未注入构建信息的旧镜像）：退回版本号比对
+    return !!(latest.version && local && local.version && latest.version !== local.version);
+  }
 
   status() {
     const s = this.state;
@@ -361,7 +411,7 @@ export class UpdateManager {
       startedAt: s.startedAt || 0,
       elapsedSec: s.startedAt ? Math.round((now - s.startedAt) / 1000) : 0,
       log: s.log,
-      hasUpdate: !!(s.latest && !s.latest.unavailable && s.local && s.latest.version && s.latest.version !== s.local.version),
+      hasUpdate: this._computeHasUpdate(s.local, s.latest),
       remoteUnavailable: !!(s.latest && s.latest.unavailable),
       repo: REPO,
       branch: BRANCH,

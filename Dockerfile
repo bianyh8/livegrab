@@ -44,6 +44,12 @@ COPY app/test ./test
 COPY app/docs ./docs
 COPY README.md ./README.md
 
+# 构建时注入 commit（由 docker compose / deploy/update.sh 通过 --build-arg BUILD_COMMIT 传入），
+# 写入 .build-info.json，供「系统更新」在容器内（无 .git）精确比对自身代码版本，避免误报更新。
+# 未传入则 commit 为空，更新检测回退到版本号比对。
+ARG BUILD_COMMIT=""
+RUN echo "{\"commit\":\"${BUILD_COMMIT}\",\"builtAt\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}" > /app/.build-info.json
+
 RUN mkdir -p /data /config
 
 VOLUME ["/data", "/config"]

@@ -45,10 +45,14 @@ git pull --ff-only origin main 2>>"$LOG" || git pull --ff-only origin master 2>>
 echo "  新提交：$LOCAL → $(git rev-parse HEAD)" >> "$LOG"
 
 # 4) 重建并重启（兼容 docker compose / docker-compose）
+#    构建时注入当前 commit，供容器内「系统更新」精确比对版本（避免误报更新）。
+BUILD_COMMIT=$(git rev-parse --short=12 HEAD 2>/dev/null || echo "")
 if docker compose version >/dev/null 2>&1; then
-  docker compose up -d --build >>"$LOG" 2>&1 || { echo "  ❌ docker compose 构建失败，详见上方日志" >> "$LOG"; exit 1; }
+  BUILD_COMMIT="$BUILD_COMMIT" docker compose build >>"$LOG" 2>&1 || { echo "  ❌ docker compose 构建失败，详见上方日志" >> "$LOG"; exit 1; }
+  docker compose up -d >>"$LOG" 2>&1 || { echo "  ❌ docker compose 启动失败，详见上方日志" >> "$LOG"; exit 1; }
 elif command -v docker-compose >/dev/null 2>&1; then
-  docker-compose up -d --build >>"$LOG" 2>&1 || { echo "  ❌ docker-compose 构建失败，详见上方日志" >> "$LOG"; exit 1; }
+  BUILD_COMMIT="$BUILD_COMMIT" docker-compose build >>"$LOG" 2>&1 || { echo "  ❌ docker-compose 构建失败，详见上方日志" >> "$LOG"; exit 1; }
+  docker-compose up -d >>"$LOG" 2>&1 || { echo "  ❌ docker-compose 启动失败，详见上方日志" >> "$LOG"; exit 1; }
 else
   echo "  ❌ 未找到 docker compose / docker-compose" >> "$LOG"
   exit 1

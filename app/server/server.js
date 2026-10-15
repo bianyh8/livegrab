@@ -1,5 +1,6 @@
 // HTTP 服务：静态资源 + API + SSE + Range 流
 import http from 'node:http';
+import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
@@ -160,6 +161,26 @@ async function bootstrap() {
   await scheduler.init();
   const version = VERSION;
   const update = new UpdateManager({ appDir: path.join(APP_DIR), logger });
+  // 本地（非容器）更新完成后自重启：优雅停止录制器/持久化/关服务，再 re-exec 自身加载新版本。
+  // 容器/无 git 场景不会走到此钩子（update.js 会提前返回手动重建指引）。
+  update.restartHook = async () => {
+    logger.info('更新完成，正在优雅停止当前实例并重启以加载新版本…');
+    scheduler.stopPolling();
+    for (const [, rec] of scheduler.recorders) { try { await rec.stop('shutdown'); } catch { /* ignore */ } }
+    for (const [, rec] of scheduler.detached) { try { await rec.stop('shutdown'); } catch { /* ignore */ } }
+    try { await store.persist(); } catch (e) { logger.error(`重启前持久化失败：${e?.message || e}`); }
+    try { store.close(); } catch { /* ignore */ }
+    // 先释放端口，再启动新进程，避免新实例 EADDRINUSE
+    await new Promise((resolve) => server.close(() => resolve()));
+    const child = spawn(process.execPath, process.argv.slice(1), {
+      cwd: process.cwd(),
+      env: process.env,
+      detached: true,
+      stdio: 'inherit',
+    });
+    child.unref();
+    setTimeout(() => process.exit(0), 400).unref();
+  };
   await update.detectEnv().catch(() => {});
   await update.localInfo().catch(() => {});
   // 版本细节进日志、不进页面：只保留第一行并去掉 "Copyright (c) …" 噪声，例如 "ffmpeg version git-2019-10-22-0b8956b"
@@ -721,13 +742,28 @@ async function main() {
     }
   });
 
-  server.listen(PORT, HOST, () => {
-    console.log(`[livegrab] v${version} listening on http://${HOST}:${PORT}`);
-    console.log(`[livegrab] 录制目录 ${RECORD_ROOT} · 配置目录 ${CONFIG_DIR} · 时区 ${tzName()}`);
-    console.log(`[livegrab] 管理员账号：${auth.mode === 'init' ? '未初始化（首次打开页面设置密码）' : '已初始化'}`);
-    // 一次性清理：录制目录里的旧 seg csv 残留、旧版 config/avatars 头像缓存（已统一迁入 config/meta）
-    void storage.sweepLegacyArtifacts().catch(() => {});
+  // 监听时若端口被占用（如自重启瞬间旧进程尚未完全释放），重试而非直接退出
+  let listenTries = 0;
+  const tryListen = () => {
+    server.listen(PORT, HOST, () => {
+      console.log(`[livegrab] v${version} listening on http://${HOST}:${PORT}`);
+      console.log(`[livegrab] 录制目录 ${RECORD_ROOT} · 配置目录 ${CONFIG_DIR} · 时区 ${tzName()}`);
+      console.log(`[livegrab] 管理员账号：${auth.mode === 'init' ? '未初始化（首次打开页面设置密码）' : '已初始化'}`);
+      // 一次性清理：录制目录里的旧 seg csv 残留、旧版 config/avatars 头像缓存（已统一迁入 config/meta）
+      void storage.sweepLegacyArtifacts().catch(() => {});
+    });
+  };
+  server.on('error', (err) => {
+    if (err && err.code === 'EADDRINUSE' && listenTries < 30) {
+      listenTries++;
+      logger.warn(`端口 ${PORT} 被占用，0.5s 后重试（第 ${listenTries} 次）`);
+      setTimeout(tryListen, 500);
+    } else {
+      logger.error(`服务启动失败：${err?.message || err}`);
+      process.exit(1);
+    }
   });
+  tryListen();
 
   const shutdown = async (sig) => {
     logger.info(`收到 ${sig}，正在优雅退出：停止调度并收尾正在录制的任务…`);
