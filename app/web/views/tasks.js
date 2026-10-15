@@ -198,11 +198,11 @@ function paint(ctx, force) {
           ${state.platforms.filter((p) => state.enabledSet[p.id] !== false || state.platform === p.id).map((p) => `<option value="${esc(p.id)}"${state.platform === p.id ? ' selected' : ''}>${esc(p.name)}</option>`).join('')}
         </select>
         <select class="select" id="tkLive" style="width:118px">
-          ${[['', t('tasks.allLiveStatus')], ['live', t('tasks.live')], ['offline', t('tasks.notLive')], ['unknown', t('common.unknown')]]
+          ${[['', t('tasks.allLiveStatus')], ['live', t('tasks.live')], ['offline', t('tasks.notLive')]]
             .map(([v, label]) => `<option value="${v}"${state.liveStatus === v ? ' selected' : ''}>${label}</option>`).join('')}
         </select>
         <select class="select" id="tkStatus" style="width:128px">
-          ${[['', t('tasks.allRecordStatus')], ['recording', t('common.recording')], ['stopped', t('tasks.stopped')], ['queued', t('common.queued')], ['waiting', t('common.waiting')], ['completed', t('common.completed')], ['error', t('common.error')], ['idle', t('common.idle')]]
+          ${[['', t('tasks.allRecordStatus')], ['recording', t('common.recording')], ['stopping', t('common.stopping')], ['paused', t('common.paused')], ['queued', t('common.queued')], ['waiting', t('common.waiting')], ['completed', t('common.completed')], ['stopped', t('tasks.stopped')], ['error', t('common.error')]]
             .map(([v, label]) => `<option value="${v}"${state.status === v ? ' selected' : ''}>${label}</option>`).join('')}
         </select>
         <select class="select" id="tkSort" style="width:138px">
@@ -317,6 +317,7 @@ function liveStatusCell(item) {
 function recStatusCell(item) {
   const recording = ['recording', 'stopping', 'merging'].includes(item.status);
   if (recording) return '<span class="pulse"><b></b>' + t('common.recording') + '</span>';
+  if (item.sessionHold) return '<span class="chip bili" title="' + t('tasks.sessionHeldTip') + '"><i class="dot"></i>' + t('tasks.sessionHeld') + '</span>';
   if (item.monitorOnly) return '<span class="chip bili" title="' + t('tasks.monitorOnlyTip') + '"><i class="dot"></i>' + t('common.monitorOnly') + '</span>';
   if (item.manualHeld || item.status === 'stopped') return '<span class="chip off" title="' + t('tasks.stoppedTip') + '"><i class="dot"></i>' + t('tasks.stopped') + '</span>';
   if (item.status === 'error') return '<span class="chip err"><i class="dot"></i>' + t('tasks.abnormal') + '</span>';
@@ -330,16 +331,13 @@ function isRecording(item) {
 
 /**
  * 「本场」按钮（只录/只停这一次，不改任何配置）的显示状态：
- * - 显示条件：任务不会被系统自动续录 —— 不开播自动录制（autoRecord 关闭）或仅监控任务；
- *   自动录制的普通任务停掉后会被下一轮轮询立刻重新拉起，「本场」按钮没有意义。
- * - 按钮内容只看实际状态：正在录制 → 「停止本场」；直播中且未录制 → 「录制本场」。
+ * - 任何任务都适用：正在录制 → 「停止本场」；直播中且未录制 → 「录制本场」。
+ *   自动录制任务点「停止本场」= 本场挂起（sessionHold）：本场不再被轮询自动拉起，下播自动解除，
+ *   下次开播照旧按系统配置自动录制；点「录制本场」只录本场、不改 autoRecord。
  * 返回 'stop-once' | 'record-once' | null（未直播且未录制时不给本场按钮）。
  */
 export function sessionAction(item) {
-  const recording = isRecording(item);
-  const oneShot = !item.autoRecord || item.monitorOnly === true;
-  if (!oneShot) return null;
-  if (recording) return 'stop-once';
+  if (isRecording(item)) return 'stop-once';
   return item.liveStatus === 'live' ? 'record-once' : null;
 }
 

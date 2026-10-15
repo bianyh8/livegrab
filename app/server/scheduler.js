@@ -18,7 +18,7 @@ const LITE = (t) => ({
   status: t.status, statusMessage: t.statusMessage, queueReason: t.queueReason,
   bytes: t.totalBytes || 0, elapsedSec: 0, retryCount: t.retryCount || 0,
   startedAt: t.startedAt, sessionId: t.sessionId || null, autoRecord: t.autoRecord,
-  monitorOnly: t.monitorOnly, manualHeld: t.manualHeld, liveStatus: t.liveStatus || (t.status === 'recording' ? 'live' : 'unknown'),
+  monitorOnly: t.monitorOnly, manualHeld: t.manualHeld, sessionHold: !!t.sessionHold, liveStatus: t.liveStatus || (t.status === 'recording' ? 'live' : 'unknown'),
 });
 
 export class Scheduler {
@@ -557,6 +557,8 @@ export class Scheduler {
     if (!task) throw new HttpError('NOT_FOUND', '任务不存在', 404);
     const isMonitor = task.monitorOnly === true;
     if (['recording', 'stopping'].includes(task.status)) return { already: true, task };
+    // 任何「开始」（含本场）都解除本场挂起
+    task.sessionHold = false;
     if (isMonitor) {
       // 仅监控任务点「开始录制」：只录本场一次，不改变"仅监控/不自动录制"的设置，本场结束回到仅监控
       task.manualHeld = false;
@@ -570,6 +572,7 @@ export class Scheduler {
     }
     // 直链任务不需要开播检测
     if (task.platform === 'direct') {
+      task.sessionHold = false; // 直链任务同样解除本场挂起
       if (!oneShot) task.autoRecord = true; // 录制本场：不改 autoRecord
       return { result: await this._startRecording(task, { reason }) };
     }
@@ -604,10 +607,12 @@ export class Scheduler {
       task.autoRecord = false;
       task.manualHeld = true;
     }
+    // 本场挂起：自动录制任务点「停止本场」后，本场（仍在直播期间）不再被轮询自动拉起，等下播自动解除；下次开播照旧自动录制
+    if (reason === 'user' && oneShot && !task.monitorOnly && task.autoRecord) task.sessionHold = true;
     const rec = this.recorders.get(id) || this.detached.get(id);
     if (!rec) {
       task.status = 'stopped';
-      task.statusMessage = task.monitorOnly ? '已停止本场一次性录制' : '已停止 · 未录制，等手动开始';
+      task.statusMessage = task.monitorOnly ? '已停止本场一次性录制' : (task.sessionHold ? '已停止本场 · 下播前不再自动录制（下次开播照旧自动录）' : '已停止 · 未录制，等手动开始');
       await this.store.saveTask(task);
       this._manualStopLiveRefresh(task).catch(() => {});
       return { stopped: true, already: true };
@@ -619,11 +624,16 @@ export class Scheduler {
     const payload = await rec.stop(reason);
     if (this.recorders.has(id) || this.detached.has(id)) {
       await this._onFinished(task, payload);
+      if (task.sessionHold) {
+        task.statusMessage = '已停止本场 · 下播前不再自动录制（下次开播照旧自动录）';
+        await this.store.saveTask(task);
+        this.onEvent({ type: 'task', task });
+      }
     } else if (reason === 'user') {
       // 收尾已被自动最终化抢先执行（recorder 已移除），手动停止仍统一收敛为"已停止"
       // 停止本场（oneShot）：保持 completed，不显示"等手动开始"
       task.status = oneShot ? 'completed' : 'stopped';
-      task.statusMessage = oneShot ? '本场录制已结束' : '已手动停止，等待你手动开始';
+      task.statusMessage = task.sessionHold ? '已停止本场 · 下播前不再自动录制（下次开播照旧自动录）' : (oneShot ? '本场录制已结束' : '已手动停止，等待你手动开始');
       task.currentFile = null;
       task.endedAt = nowIso();
       await this.store.saveTask(task);
@@ -752,7 +762,7 @@ export class Scheduler {
         ? (info.liveStatus === 'live' ? '已手动停止 · 直播中未录制，等你手动开始' : '已手动停止 · 未开播，等你手动开始')
         : (info.liveStatus === 'live' ? '正在直播' : '未开播');
       task.failCount = 0;
-      if (!task.manualHeld && info.liveStatus === 'live' && !task.monitorOnly && task.autoRecord && !['recording', 'stopping', 'paused'].includes(task.status)) {
+      if (!task.manualHeld && !task.sessionHold && info.liveStatus === 'live' && !task.monitorOnly && task.autoRecord && !['recording', 'stopping', 'paused'].includes(task.status)) {
         const r = await this._startRecording(task);
         return { info, started: r };
       }
@@ -918,11 +928,19 @@ export class Scheduler {
             await this.store.saveTask(task);
             this.onEvent({ type: 'task', task });
           } else if (task.autoRecord && task.status !== 'recording' && task.status !== 'paused') {
-            task.statusMessage = `检测到开播，${task.startDelaySec || 0} 秒后开始`;
-            await this.store.saveTask(task);
-            this.onEvent({ type: 'task', task });
-            if (task.startDelaySec) await sleep(Math.min(30, Number(task.startDelaySec)) * 1000);
-            await this._startRecording(task);
+            if (task.sessionHold) {
+              // 本场挂起：停止本场后本场不再自动拉起，等下播自动解除
+              if (task.status !== 'waiting') task.status = 'waiting';
+              task.statusMessage = '本场已停止 · 下播前不再自动录制（下次开播照旧自动录）';
+              await this.store.saveTask(task);
+              this.onEvent({ type: 'task', task });
+            } else {
+              task.statusMessage = `检测到开播，${task.startDelaySec || 0} 秒后开始`;
+              await this.store.saveTask(task);
+              this.onEvent({ type: 'task', task });
+              if (task.startDelaySec) await sleep(Math.min(30, Number(task.startDelaySec)) * 1000);
+              await this._startRecording(task);
+            }
           } else if (task.status !== 'recording' && task.status !== 'stopping') {
             // 手动关掉自动录制后，正在直播就保持"未录制"，等用户点开始
             task.status = 'waiting';
@@ -931,6 +949,13 @@ export class Scheduler {
             this.onEvent({ type: 'task', task });
           }
         } else {
+          // 主播下播：解除本场挂起（本场结束，下次开播照旧自动录制）
+          if (task.sessionHold) {
+            task.sessionHold = false;
+            task.statusMessage = '本场已结束 · 下次开播照旧自动录制';
+            await this.store.saveTask(task);
+            this.onEvent({ type: 'task', task });
+          }
           // 正在录制时检测到主播下播：正常收尾当前分段（reason=offline），不报"录制异常结束"；
           // autoRecord 保持开启，下次开播自动续录。已是 stopping 说明正在收尾，不重复触发。
           if (task.status === 'recording') {

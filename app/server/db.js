@@ -128,6 +128,7 @@ CREATE TABLE IF NOT EXISTS tasks (
   auto_record         INTEGER,
   monitor_only        INTEGER,
   manual_held         INTEGER,
+  session_hold        INTEGER,            -- 本场挂起：停止本场后下播前不再自动拉起，下播清除
   poll_interval_sec   INTEGER,
   start_delay_sec     INTEGER,
   stop_delay_sec      INTEGER,
@@ -362,6 +363,12 @@ export function openDb(dbPath) {
 
   // 每次打开都执行幂等 DDL（M3）：正常 v2 库缺表/半损坏时可自愈；全新/重建路径由它建表
   db.exec(DDL);
+  // 幂等补列迁移：旧 v2 库（schema_version 仍是 2）新增列用 ALTER 补齐。
+  // 注意：不能靠提升 SCHEMA_VERSION 来做，openDb 对版本不匹配是「整库作废重建」，会删光用户数据。
+  try {
+    const taskCols = db.prepare("SELECT name FROM pragma_table_info('tasks')").all().map((c) => c.name);
+    if (!taskCols.includes('session_hold')) db.exec('ALTER TABLE tasks ADD COLUMN session_hold INTEGER');
+  } catch { /* 幂等：这次没成功下次打开再补 */ }
   applyPragmas(db);
   if (isRebuild) {
     setMeta(db, 'schema_version', SCHEMA_VERSION);

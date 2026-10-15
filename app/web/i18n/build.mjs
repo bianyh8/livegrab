@@ -18,6 +18,9 @@ const ADD = {
   // common 级（跨页同名文案）
   'common.recorded': '已录完',
   'common.playback': '回放',
+  'common.paused': '已暂停',
+  'tasks.sessionHeld': '本场已停',
+  'tasks.sessionHeldTip': '已停止本场 · 下播前不再自动录制，下次开播照旧自动录制',
   'common.unknownAnchor': '未知主播',
   'common.monitorOnly': '仅监控',
   'common.waitSlot': '等待并发空位',

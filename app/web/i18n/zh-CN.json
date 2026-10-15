@@ -771,5 +771,8 @@
   "files.dateSep": "至",
   "settings.tabStore": "存储",
   "tasks.verbStart": "启动",
-  "settings.pfImportButton": "导入"
+  "settings.pfImportButton": "导入",
+  "common.paused": "已暂停",
+  "tasks.sessionHeld": "本场已停",
+  "tasks.sessionHeldTip": "已停止本场 · 下播前不再自动录制，下次开播照旧自动录制"
 }
