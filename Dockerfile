@@ -47,7 +47,7 @@ COPY README.md ./README.md
 # 漏掉这行会导致容器内版本显示 0.0.0、版本比对永远误报「可更新」。
 COPY app/package.json ./package.json
 
-# 构建时注入 commit（由 docker compose / deploy/update.sh 通过 --build-arg BUILD_COMMIT 传入），
+# 构建时注入 commit（由 docker compose 的 build.args 传入，手动构建时 --build-arg BUILD_COMMIT=xxx），
 # 写入 .build-info.json，供「系统更新」在容器内（无 .git）精确比对自身代码版本，避免误报更新。
 # 未传入则 commit 为空，更新检测回退到版本号比对（此时 package.json 的 version 必须准确）。
 ARG BUILD_COMMIT=""

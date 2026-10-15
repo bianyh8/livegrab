@@ -114,7 +114,6 @@ docker compose up -d
   ```bash
   cd livegrab && git pull && docker compose up -d --build
   ```
-- **群晖 NAS 定时更新**：用仓库里的 `deploy/update.sh`（同步宿主机仓库、`./config/src` 与镜像，有更新才重启）。
 - `./config/src` 由容器管理：能写该目录 ≈ 能在容器内执行代码，请按配置目录的密级对待；代码目录损坏时会自动重克，也可手动 `rm -rf ./config/src` 后重启容器恢复。
 
 ### 不想克隆也能直接构建
@@ -170,7 +169,7 @@ app/
   docs/          # 接口契约等文档
 ui/              # UI 设计原型与说明（不进 Docker 镜像）
 Dockerfile / docker-compose.yml / .dockerignore
-deploy/          # entrypoint.sh（容器入口：clone/回退/启动）、update.sh（群晖定时更新）
+deploy/          # entrypoint.sh（容器入口：clone/回退/启动）
 start-local.cmd  # 本地一键启动
 ```
 
