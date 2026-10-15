@@ -165,6 +165,7 @@ export class Recorder extends EventEmitter {
 ```
 - 按大小轮转：每 2s 检查当前分段文件大小，超过 `segmentSizeMB` 则 `q` 收尾并 `startNumber+1` 重启，分段序号连续。
 - 断流重连：进程非正常退出且未在停止流程中 → 指数退避 2/4/8/16/30s，最多 `settings.reconnectMax` 次，序号续接。
+- 平台拒绝（403/401/429，风控/限流）：单独走长冷却 15/30/60/120/120s，跳过下播探活、复用当前流地址不重新解析（重试突发会加重封禁，实测抖音 CDN 约 1 分钟冷却后自行恢复）；耗尽后以 `code:'PULL_BLOCKED'` 报错。
 - 所有日志通过 `ctx.logger` 输出并带 `taskId`。
 
 ### 4.4 naming.js（Lead 已实现，前端与 recorder 只读其返回值）

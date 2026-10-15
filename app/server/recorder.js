@@ -8,6 +8,23 @@ import { buildOutputPattern, buildContext, pickProfile, renderName, reserveName,
 import { nowIso, ensureDir, safeJoin, sleep } from './util.js';
 
 const BACKOFF = [2000, 4000, 8000, 16000, 30000];
+// 403/401/429 是平台侧明确拒绝（风控/限流/签名失效），不是网络抖动。
+// 这类失败越重试越糟：实测抖音 CDN 对「秒级重新解析 + 立即再拉」的突发 pattern
+// 会临时封禁拉流（20:21–20:27 连续 3 轮 ×5 次全部 403，安静约 1 分钟后自行恢复）。
+// 因此拉长间隔（15s→2min）给平台侧留冷却时间，并复用当前地址——流地址有效期以天计，
+// 重新解析只会增加接口压力、拖慢恢复。
+const BLOCKED_BACKOFF = [15000, 30000, 60000, 120000, 120000];
+
+/** ffmpeg stderr 是否为「平台侧拒绝拉流」（风控/限流/签名失效），区别于普通断流 */
+export function isPullBlocked(tail) {
+  return /Forbidden|access denied|Too Many Requests|Unauthorized|returned\s+40[139]\b/i.test(String(tail || ''));
+}
+
+/** 重连等待时长：blocked 走长冷却，普通断流走短退避 */
+export function reconnectDelay({ blocked = false, attempt = 1 } = {}) {
+  const table = blocked ? BLOCKED_BACKOFF : BACKOFF;
+  return table[Math.min(Math.max(1, Number(attempt) || 1) - 1, table.length - 1)];
+}
 
 export class Recorder extends EventEmitter {
   constructor({ task, settings, naming, logger, resolveStream, mediaMod = media, probeOffline = null, metaDir = null }) {
@@ -133,6 +150,7 @@ export class Recorder extends EventEmitter {
 
   async _spawn(startNumber) {
     const t = this.task;
+    this.lastStderrError = null; // 每次拉取前清空：避免上一次的错误行误判本次的失败类型
     // 上一次 ffmpeg 运行留下的 seg 列表文件：重连/轮转会再生成新的，旧的用完即删（数据目录不再残留 csv）
     await this._cleanSegList();
     if (this.metaDir) await ensureDir(this.metaDir);
@@ -278,8 +296,11 @@ export class Recorder extends EventEmitter {
   }
 
   async _handleUnexpectedExit(code, signal) {
-    // 主播已下播导致的流中断：正常收尾（reason=offline），不进入断流重连、不报"录制异常结束"
-    if (this.probeOffline) {
+    const tail = this.lastStderrError || this._stderrTail.slice(-2).join(' | ');
+    const blocked = isPullBlocked(tail);
+    // 主播已下播导致的流中断：正常收尾（reason=offline），不进入断流重连、不报"录制异常结束"。
+    // 403/401/429 是平台侧明确拒绝（风控/限流），不是下播：跳过探活，避免风控期间再加接口压力。
+    if (!blocked && this.probeOffline) {
       try {
         const offline = await this.probeOffline();
         if (offline === true) {
@@ -292,27 +313,31 @@ export class Recorder extends EventEmitter {
     }
     const max = Number(this.task.reconnectMax ?? this.settings.reconnectMax) || 5;
     this.reconnectAttempt += 1;
-    const tail = this.lastStderrError || this._stderrTail.slice(-2).join(' | ');
     if (this.reconnectAttempt > max) {
       this.emit('error', {
-        code: 'RECONNECT_EXCEEDED',
-        message: `连续 ${max} 次断流，已停止重连（ffmpeg exit=${code}${signal ? ` signal=${signal}` : ''}）${tail ? `：${tail}` : ''}`,
+        code: blocked ? 'PULL_BLOCKED' : 'RECONNECT_EXCEEDED',
+        message: `${blocked ? '拉流持续被平台拒绝（疑似风控/限流）' : `连续 ${max} 次断流`}，已停止重连（ffmpeg exit=${code}${signal ? ` signal=${signal}` : ''}）${tail ? `：${tail}` : ''}`,
         retryable: false,
       });
       await this._finalize('error');
       return;
     }
-    const delay = BACKOFF[Math.min(this.reconnectAttempt - 1, BACKOFF.length - 1)];
-    this.emit('reconnect', { attempt: this.reconnectAttempt, delayMs: delay, error: tail || `ffmpeg exit=${code}` });
-    this.logger.warn(`断流，${Math.round(delay / 1000)} 秒后第 ${this.reconnectAttempt}/${max} 次重连`, this._meta());
+    const delay = reconnectDelay({ blocked, attempt: this.reconnectAttempt });
+    this.emit('reconnect', { attempt: this.reconnectAttempt, delayMs: delay, error: tail || `ffmpeg exit=${code}`, blocked });
+    this.logger.warn(blocked
+      ? `拉流被平台拒绝（疑似风控/限流），${Math.round(delay / 1000)} 秒后第 ${this.reconnectAttempt}/${max} 次重试（复用当前地址，不重新解析）`
+      : `断流，${Math.round(delay / 1000)} 秒后第 ${this.reconnectAttempt}/${max} 次重连`, this._meta());
     await sleep(delay);
     if (this.stopping || this.paused) return;
     try {
-      const stream = await this.resolveStream(
-        { ...this.task, qualityFallback: this.settings.qualityFallback },
-        { settings: this.settings, logger: this.logger },
-      );
-      if (stream?.url) { this.streamUrl = stream.url; this.headers = stream.headers || this.headers; }
+      // 403 场景复用当前地址：重新解析只会增加接口压力，且地址本身有效（实测同一地址可连续拉数小时）
+      if (!blocked) {
+        const stream = await this.resolveStream(
+          { ...this.task, qualityFallback: this.settings.qualityFallback },
+          { settings: this.settings, logger: this.logger },
+        );
+        if (stream?.url) { this.streamUrl = stream.url; this.headers = stream.headers || this.headers; }
+      }
       this.logger.info(`重连成功，继续拉流（第 ${this.reconnectAttempt}/${max} 次 · 流地址 ${this.streamUrl || '(未知 URL)'}）`, this._meta());
       const segs = await this.scanSegments();
       const next = segs.length ? segs[segs.length - 1].index + 1 : this.startNumber;

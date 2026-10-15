@@ -458,7 +458,11 @@ export class Scheduler {
     recorder.on('segment-close', (seg) => { this._onSegmentClose(task, session, seg).catch(() => {}); });
     recorder.on('reconnect', async (info) => {
       task.reconnectCount = (task.reconnectCount || 0) + 1;
-      task.statusMessage = `断流重连 ${info.attempt}/${Number(task.reconnectMax ?? settings.reconnectMax) || 5}`;
+      const limit = Number(task.reconnectMax ?? settings.reconnectMax) || 5;
+      // 403/风控场景给出明确文案：用户能看到「不是断流，是平台在限流，正在冷却重试」
+      task.statusMessage = info.blocked
+        ? `拉流被平台拒绝（疑似风控/限流），${info.attempt}/${limit} 次重试`
+        : `断流重连 ${info.attempt}/${limit}`;
       this.logger.warn(`第 ${info.attempt} 次重连（等待 ${Math.round(info.delayMs / 1000)}s）：${info.error || ''}`, { taskId: task.id, taskName: task.anchorName });
       this.onEvent({ type: 'task', task });
     });

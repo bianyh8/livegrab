@@ -31,6 +31,14 @@ function payload(n) {
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 async function record() {
+  // 模拟平台侧拒绝拉流（FAKE_FAIL_HTTP=403/401/429）：立即以真实 ffmpeg 的报错格式退出，
+  // 用于验证「拉流被拒 → 长冷却重试」的重连策略（仅影响录制路径，不影响转封装/回放）
+  const failHttp = process.env.FAKE_FAIL_HTTP;
+  if (failHttp) {
+    const msg = { '403': 'Server returned 403 Forbidden (access denied)', '401': 'Server returned 401 Unauthorized', '429': 'Server returned 429 Too Many Requests' }[failHttp] || `Server returned ${failHttp}`;
+    process.stderr.write(`[http @ 0x0055d3e2a1b2c0] ${msg}\n`);
+    process.exit(1);
+  }
   const startNumber = Number(val('-segment_start_number') || 1);
   const segTime = Number(val('-segment_time') || 3600);
   const listPath = val('-segment_list');

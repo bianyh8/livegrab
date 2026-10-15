@@ -18,6 +18,7 @@ import { Scheduler } from '../server/scheduler.js';
 import { Auth, parseCookies } from '../server/auth.js';
 import { PlayManager } from '../server/play.js';
 import * as resolvers from '../server/resolvers/index.js';
+import { isPullBlocked, reconnectDelay } from '../server/recorder.js';
 import { byteLength, parseRange, safeJoin, formatBytes, formatDuration, HttpError, uid } from '../server/util.js';
 import * as fakeMedia from './fake-media.mjs';
 
@@ -523,6 +524,40 @@ async function testRecordChain() {
 
 // ============ 5. 并发排队（D16） ============
 // ============ 4b. 并发重复启动保护 ============
+async function testPullBlockedBackoff() {
+  suite('拉流被平台拒绝（403/风控）的冷却重试策略');
+  // 纯函数：错误分类（不误判 URL 参数里的数字）与退避时长
+  ok(isPullBlocked('http://pull-hls-l26.douyincdn.com/third/x.m3u8?sign=abc: Server returned 403 Forbidden (access denied)'), '403 Forbidden 判定为平台拒绝');
+  ok(isPullBlocked('Server returned 401 Unauthorized'), '401 判定为平台拒绝');
+  ok(isPullBlocked('Server returned 429 Too Many Requests'), '429（限流）判定为平台拒绝');
+  ok(!isPullBlocked('Connection refused'), '连接拒绝不算平台拒绝');
+  ok(!isPullBlocked('Operation timed out'), '超时不算平台拒绝');
+  ok(!isPullBlocked('Server returned 404 Not Found'), '404 不算平台拒绝');
+  ok(!isPullBlocked('http://x/y.m3u8?expire=6ada0124&sign=403fabc'), 'URL 参数里含 403 不误判');
+  eq(reconnectDelay({ blocked: false, attempt: 1 }), 2000, '普通断流第 1 次重连等 2s');
+  eq(reconnectDelay({ blocked: true, attempt: 1 }), 15000, '被拒第 1 次冷却 15s');
+  eq(reconnectDelay({ blocked: true, attempt: 3 }), 60000, '被拒第 3 次冷却 60s');
+  eq(reconnectDelay({ blocked: true, attempt: 5 }), 120000, '被拒第 5 次冷却 120s');
+  eq(reconnectDelay({ blocked: true, attempt: 99 }), 120000, '被拒超出表长封顶 120s');
+
+  // 行为：403 后 3 秒内不得出现第二次拉取（普通断流 2s 就会重试；被拒则冷却 ≥15s）
+  const e = await makeEngine('blocked', { FAKE_FAIL_HTTP: '403' });
+  const task = await e.scheduler.createTask({ url: 'https://example.com/live.m3u8', platform: 'direct', anchorName: '风控测试' });
+  await e.scheduler.tick();
+  const entered = await waitFor(() => (e.scheduler.recorders.get(task.id)?.reconnectAttempt || 0) >= 1, 8000, '首次失败进入重连锁');
+  ok(entered, 'ffmpeg 报 403 后进入重连');
+  const rec = e.scheduler.recorders.get(task.id);
+  ok(isPullBlocked(rec.lastStderrError), 'stderr 被识别为平台拒绝', String(rec.lastStderrError || '').slice(0, 60));
+  await sleep(3000);
+  eq(rec.reconnectAttempt, 1, '403 冷却期内不重试（普通断流此时已第 2 次）');
+  const blockedEvt = e.events.filter((x) => x.type === 'task' && /拉流被平台拒绝/.test(x.task?.statusMessage || ''));
+  ok(blockedEvt.length > 0, '任务状态显示风控/限流提示', blockedEvt[0]?.task?.statusMessage);
+  task.autoRecord = false;
+  await e.store.saveTask(task);
+  await e.scheduler.stopTask(task.id);
+  delete process.env.FAKE_FAIL_HTTP; // 不影响后续套件
+}
+
 async function testConcurrentStart() {
   suite('并发启动保护（真实事故：两个 ffmpeg 写同一分段文件）');
   const e = await makeEngine('race', { FAKE_SEGMENT_MS: '200', FAKE_SEGMENTS_TOTAL: '2', FAKE_SEGMENT_MB: '0.1', FAKE_DURATION: '5' });
@@ -883,7 +918,7 @@ async function testHttp() {
   console.log(`LiveGrab 测试开始（临时目录 ${tmpRoot}）`);
   await rmrf(tmpRoot);
   await fsp.mkdir(tmpRoot, { recursive: true });
-  const suites = [testUtil, testNaming, testStore, testResolvers, testAuth, testRecordChain, testConcurrentStart, testRepeatSessionNaming, testTodayStats, testQueue, testHttp];
+  const suites = [testUtil, testNaming, testStore, testResolvers, testAuth, testRecordChain, testPullBlockedBackoff, testConcurrentStart, testRepeatSessionNaming, testTodayStats, testQueue, testHttp];
   for (const s of suites) {
     try { await s(); } catch (e) {
       failed++;
