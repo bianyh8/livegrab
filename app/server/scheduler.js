@@ -9,7 +9,7 @@ import {
   resolveRoom, resolveStream, getPlatform, platformList, detectPlatform, roomIdFrom, probeLive,
 } from './resolvers/index.js';
 import { buildRoomUrl } from './resolvers/room-url.js';
-import { uid, nowIso, HttpError, formatBytes, formatDuration, dateKey, formatDate, formatTime, sleep } from './util.js';
+import { uid, nowIso, HttpError, formatBytes, formatDuration, dateKey, formatDate, formatTime } from './util.js';
 
 const LITE = (t) => ({
   id: t.id, name: t.anchorName || t.platformAnchorName || t.title || t.roomId,
@@ -37,7 +37,8 @@ export class Scheduler {
     this.engine = { ffmpegAvailable: false, ffmpegVersion: null };
     this.startedAt = Date.now();
     this._persistTimer = null;
-    this._ticking = false;   // tick 运行中互斥：防止探测慢/开播延时导致的重叠轮询
+    this._ticking = false;   // tick 运行中互斥：防止探测慢导致的重叠轮询
+    this._pendingStarts = new Map(); // 开播延时待启动定时器（taskId → {timer, rec}），延时改为非阻塞
     this._probe = probeLive; // 开播探测入口（测试可注入假实现，避免打真实平台接口）
   }
 
@@ -66,6 +67,49 @@ export class Scheduler {
   stopPolling() { if (this.pollTimer) { clearInterval(this.pollTimer); this.pollTimer = null; } }
 
   platformOf(id) { return getPlatform(id) || { id, name: id, tier: 'planned', cap: 1 }; }
+
+  /**
+   * 「开播延时」非阻塞化：把延时后的自动开录交给定时器，tick 不再 sleep 阻塞整轮。
+   * 到点触发时复核：延时期间状态被改（手动停止/开始/暂停/挂起/下播）就放弃本次自动开录。
+   */
+  _scheduleStart(id, delaySec) {
+    if (this._pendingStarts.has(id)) return; // 已有待启动，不重复排
+    const t = this.store.getTask(id);
+    if (!t) return;
+    const rec = {
+      status: t.status, liveStatus: t.liveStatus, autoRecord: t.autoRecord,
+      manualHeld: t.manualHeld, sessionHold: t.sessionHold, monitorOnly: t.monitorOnly,
+    };
+    const timer = setTimeout(() => {
+      this._pendingStarts.delete(id);
+      this._fireScheduledStart(id, rec).catch((e) => this.logger.error(`延时开录失败(${id})：${e.message}`));
+    }, Math.max(0, delaySec) * 1000);
+    if (timer.unref) timer.unref(); // 不阻止进程退出
+    this._pendingStarts.set(id, { timer, rec });
+  }
+
+  _cancelPendingStart(id) {
+    const p = this._pendingStarts.get(id);
+    if (p) { clearTimeout(p.timer); this._pendingStarts.delete(id); }
+  }
+
+  async _fireScheduledStart(id, rec) {
+    const task = this.store.getTask(id);
+    if (!task) return;
+    // 延时期间任何关键状态变化 → 放弃本次自动开录（等下一轮轮询重新决策）
+    const changed = task.status !== rec.status || task.liveStatus !== rec.liveStatus
+      || task.autoRecord !== rec.autoRecord || task.manualHeld !== rec.manualHeld
+      || task.sessionHold !== rec.sessionHold || task.monitorOnly !== rec.monitorOnly;
+    if (changed || ['recording', 'stopping', 'paused'].includes(task.status)) return;
+    // 到点再快速复核一次还在播，避免延时期间已下播还误起
+    try {
+      const info = await this._probe(task.sourceUrl || `${task.platform}:${task.roomId}`, {
+        platform: task.platform, settings: this.store.settings, logger: this.logger,
+      });
+      if (info.liveStatus !== 'live') return;
+    } catch { return; }
+    await this._startRecording(task);
+  }
 
   /**
    * 轮询间隔（秒）：任务级自定义（overrides.pollIntervalSec）优先，未自定义的跟随全局设置
@@ -318,6 +362,7 @@ export class Scheduler {
   async deleteTask(id, { force = false } = {}) {
     const task = this.store.getTask(id);
     if (!task) throw new HttpError('NOT_FOUND', '任务不存在', 404);
+    this._cancelPendingStart(id); // 删除：撤掉自动延时开录
     if (['recording', 'stopping', 'paused'].includes(task.status)) {
       if (!force) throw new HttpError('TASK_RUNNING', '任务正在录制/暂停中，请先停止（或加 force=1 先停止再删除）', 409);
       await this.stopTask(id, { reason: 'delete' });
@@ -555,6 +600,7 @@ export class Scheduler {
   async startTask(id, { reason = 'manual', oneShot = false } = {}) {
     const task = this.store.getTask(id);
     if (!task) throw new HttpError('NOT_FOUND', '任务不存在', 404);
+    this._cancelPendingStart(id); // 手动开始：撤掉可能挂着的自动延时开录
     const isMonitor = task.monitorOnly === true;
     if (['recording', 'stopping'].includes(task.status)) return { already: true, task };
     // 任何「开始」（含本场）都解除本场挂起
@@ -601,6 +647,7 @@ export class Scheduler {
   async stopTask(id, { reason = 'user', oneShot = false } = {}) {
     const task = this.store.getTask(id);
     if (!task) throw new HttpError('NOT_FOUND', '任务不存在', 404);
+    this._cancelPendingStart(id); // 停止：撤掉自动延时开录
     // 手动停止（正常任务）：关闭自动录制、等手动重新开始，但直播状态监控照常刷新；仅监控任务停掉的是当场一次性录制，回到"仅监控"
     // 「停止本场」（oneShot）：只停这一场录制，不改变 autoRecord/manualHeld 配置，下次照旧按系统配置运行
     if (reason === 'user' && !task.monitorOnly && !oneShot) {
@@ -665,6 +712,7 @@ export class Scheduler {
   async pauseTask(id) {
     const task = this.store.getTask(id);
     if (!task) throw new HttpError('NOT_FOUND', '任务不存在', 404);
+    this._cancelPendingStart(id); // 暂停：撤掉自动延时开录
     const rec = this.recorders.get(id);
     if (!rec) throw new HttpError('NOT_RECORDING', '任务当前没有在录制', 409);
     await rec.pause();
@@ -685,6 +733,7 @@ export class Scheduler {
   async resumeTask(id) {
     const task = this.store.getTask(id);
     if (!task) throw new HttpError('NOT_FOUND', '任务不存在', 404);
+    this._cancelPendingStart(id); // 恢复：撤掉自动延时开录（恢复即立即开录）
     const rec = this.detached.get(id);
     if (!rec) {
       // 暂停后进程已释放：直接重新开始，序号会续接
@@ -938,8 +987,9 @@ export class Scheduler {
               task.statusMessage = `检测到开播，${task.startDelaySec || 0} 秒后开始`;
               await this.store.saveTask(task);
               this.onEvent({ type: 'task', task });
-              if (task.startDelaySec) await sleep(Math.min(30, Number(task.startDelaySec)) * 1000);
-              await this._startRecording(task);
+              const delay = Math.min(30, Number(task.startDelaySec) || 0);
+              if (delay > 0) this._scheduleStart(task.id, delay); // 非阻塞：定时器到点再起录
+              else await this._startRecording(task);               // 无延时：立即起录
             }
           } else if (task.status !== 'recording' && task.status !== 'stopping') {
             // 手动关掉自动录制后，正在直播就保持"未录制"，等用户点开始

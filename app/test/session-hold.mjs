@@ -162,4 +162,54 @@ console.log('=== 7. 前端 sessionAction：本场按钮覆盖自动录制任务 
 
 console.log('\n================ 结果 ================');
 console.log(`PASS ${pass} ｜ FAIL ${fail}`);
+console.log('=== 8. 开播延时非阻塞：tick 不卡住，定时器到点起录，且延时期间状态变化则放弃 ===');
+{
+  // 8.1 基本：延时 0.3s，tick 立即返回（started=0），0.7s 后 started=1
+  const task = mkTask({ id: 'd1', status: 'waiting', liveStatus: 'live', autoRecord: true, monitorOnly: false, startDelaySec: 0.3 });
+  const { s, task: t, calls } = makeScheduler({ task });
+  const t0 = Date.now();
+  await s.tick();
+  const tickMs = Date.now() - t0;
+  check('tick 不阻塞（<200ms 返回）', tickMs < 200, `${tickMs}ms`);
+  check('tick 返回时还没开始录（延时中）', calls.started === 0, `started ${calls.started}`);
+  check('已排定时器', s._pendingStarts.has('d1'), `pending ${s._pendingStarts.size}`);
+  await sleep(800);
+  check('到点后自动开录 1 次', calls.started === 1, `started ${calls.started}`);
+  check('待启动表已清空', !s._pendingStarts.has('d1'));
+}
+
+{
+  // 8.2 重复 tick 不重复排定时器（仍是 1 次起录）
+  const task = mkTask({ id: 'd2', status: 'waiting', liveStatus: 'live', autoRecord: true, monitorOnly: false, startDelaySec: 0.3 });
+  const { s, calls } = makeScheduler({ task });
+  await s.tick();
+  await s.tick(); // 第二次：不该再排
+  check('重复 tick 只保留 1 个待启动', s._pendingStarts.size === 1, `${s._pendingStarts.size}`);
+  await sleep(800);
+  check('最终只起录 1 次', calls.started === 1, `started ${calls.started}`);
+}
+
+{
+  // 8.3 延时期间下播（状态变化）→ 放弃自动开录
+  const task = mkTask({ id: 'd3', status: 'waiting', liveStatus: 'live', autoRecord: true, monitorOnly: false, startDelaySec: 0.3 });
+  const { s, task: t, calls } = makeScheduler({ task, probe: () => ({ liveStatus: 'live' }) });
+  await s.tick();
+  t.liveStatus = 'offline'; // 模拟延时期间下播
+  await sleep(800);
+  check('下播后不再自动开录', calls.started === 0, `started ${calls.started}`);
+}
+
+{
+  // 8.4 延时期间手动停止 → 撤掉待启动
+  const task = mkTask({ id: 'd4', status: 'waiting', liveStatus: 'live', autoRecord: true, monitorOnly: false, startDelaySec: 0.3 });
+  const { s, task: t, calls } = makeScheduler({ task });
+  await s.tick();
+  await s.stopTask('d4', { reason: 'user' });
+  check('手动停止后待启动被撤掉', !s._pendingStarts.has('d4'));
+  await sleep(800);
+  check('不再自动开录', calls.started === 0, `started ${calls.started}`);
+}
+
+console.log('\n================ 结果 ================');
+console.log(`PASS ${pass} ｜ FAIL ${fail}`);
 process.exit(fail ? 1 : 0);
