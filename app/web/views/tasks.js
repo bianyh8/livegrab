@@ -637,6 +637,7 @@ async function openTaskDialog(ctx, id) {
     profiles,
     // 轮询 / 重连（重连不再有"跟随全局"，默认带全局值）
     pollIntervalSec: Number(task ? (task.pollIntervalSec || 60) : ((settings && settings.pollIntervalSec) || 60)),
+    pollGlobal: Number((settings && settings.pollIntervalSec) || 60), // 全局「全局轮询检测」值，用于判断是否跟随全局
     reconnectMax: Number(task && task.reconnectMax != null ? task.reconnectMax : reconnectGlobal),
     reconnectGlobal,
     startDelaySec: Number(task ? (task.startDelaySec || 5) : ((settings && settings.startDelaySec) || 5)),
@@ -1001,7 +1002,14 @@ async function submit(d, dialog, btn, ctx) {
   payload.autoMerge = false; // 已删除「分段文件处理」选项，默认保留独立分段
   payload.autoRecord = d.autoRecord;
   payload.monitorOnly = d.monitorOnly;
-  payload.pollIntervalSec = Number(d.pollIntervalSec) || 60;
+  // 轮询间隔：默认跟随全局（弹窗默认值即全局值，改全局后未自定义的任务自动生效）；
+  // 选了与全局不同的值才写成任务级自定义，从自定义改回全局值则显式置 null 恢复跟随全局
+  const curPollOv = Number(d.task && d.task.overrides && d.task.overrides.pollIntervalSec) || 0;
+  const newPoll = Number(d.pollIntervalSec) || 0;
+  if (newPoll) {
+    if (newPoll === Number(d.pollGlobal)) { if (curPollOv) payload.overrides.pollIntervalSec = null; }
+    else payload.overrides.pollIntervalSec = newPoll;
+  }
   // 重连：默认带全局值；仅当与任务当前生效值不同才提交（跟随全局的任务保持跟随）
   const curR = Number(d.task && d.task.reconnectMax != null ? d.task.reconnectMax : d.reconnectGlobal) || 5;
   const newR = Number(d.reconnectMax) || 5;

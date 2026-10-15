@@ -322,7 +322,10 @@ async function main() {
     const merged = await store.updateSettings(body);
     if (body.logLevel) logger.setLevel(body.logLevel);
     if (body.logRetentionDays) { logger.setRetention(body.logRetentionDays); await logger.purge(); }
-    logger.info(`设置已更新：${Object.keys(body).join(' / ') || '（空）'}`);
+    // 全局设置改了 → 立刻把各任务的生效参数（清晰度/分段/轮询间隔…）重算落盘，
+    // 未单独自定义的任务当场跟随新全局值（否则界面仍显示旧值，看着像设置不生效）
+    const n = await scheduler.syncEffectiveAll();
+    logger.info(`设置已更新：${Object.keys(body).join(' / ') || '（空）'}${n ? `（${n} 个任务生效参数已跟随更新）` : ''}`);
     broadcast('settings', settingsView());
     return settingsView();
   });

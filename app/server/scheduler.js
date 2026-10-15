@@ -37,6 +37,8 @@ export class Scheduler {
     this.engine = { ffmpegAvailable: false, ffmpegVersion: null };
     this.startedAt = Date.now();
     this._persistTimer = null;
+    this._ticking = false;   // tick 运行中互斥：防止探测慢/开播延时导致的重叠轮询
+    this._probe = probeLive; // 开播探测入口（测试可注入假实现，避免打真实平台接口）
   }
 
   async init() {
@@ -66,6 +68,17 @@ export class Scheduler {
   platformOf(id) { return getPlatform(id) || { id, name: id, tier: 'planned', cap: 1 }; }
 
   /**
+   * 轮询间隔（秒）：任务级自定义（overrides.pollIntervalSec）优先，未自定义的跟随全局设置
+   * （系统设置 → 平台 → 全局轮询检测），默认 60 秒。每次实时计算，所以改全局设置
+   * 对「已存在且未单独设置间隔」的任务立即生效（旧实现只在建任务时抄一次，改全局无效）。
+   */
+  pollIntervalOf(task) {
+    const ov = (task && task.overrides) || {};
+    const v = Number(ov.pollIntervalSec) || Number(this.store.settings.pollIntervalSec) || 60;
+    return Math.max(10, v);
+  }
+
+  /**
    * 任务生效参数：任务的 overrides 里没写的项才跟随全局设置（D11「跟随全局/自定义」）。
    * 每次开录前重新计算，所以改全局设置对下一场生效。
    */
@@ -92,7 +105,7 @@ export class Scheduler {
    */
   _overridesFrom(input = {}) {
     const ovIn = (input.overrides && typeof input.overrides === 'object') ? { ...input.overrides } : {};
-    for (const k of ['quality', 'segmentMode', 'namingProfileId', 'customText']) {
+    for (const k of ['quality', 'segmentMode', 'namingProfileId', 'customText', 'pollIntervalSec']) {
       if (input[k] !== undefined) ovIn[k] = input[k];
     }
     const out = {};
@@ -100,6 +113,9 @@ export class Scheduler {
     if (ovIn.segmentMode) out.segmentMode = ovIn.segmentMode;
     if (ovIn.namingProfileId) out.namingProfileId = ovIn.namingProfileId;
     if (ovIn.customText) out.customText = ovIn.customText;
+    // 轮询间隔：显式给了正数才算任务级自定义；null/'' 视为跟随全局（不写入 overrides）
+    const poll = Number(ovIn.pollIntervalSec);
+    if (Number.isFinite(poll) && poll > 0) out.pollIntervalSec = Math.max(10, poll);
     return out;
   }
 
@@ -115,7 +131,27 @@ export class Scheduler {
     task.autoMerge = e.autoMerge;
     task.namingProfileId = e.namingProfileId;
     task.customText = e.customText;
+    task.pollIntervalSec = this.pollIntervalOf(task); // 轮询间隔：任务级自定义优先，否则跟随全局
     return task;
+  }
+
+  /**
+   * 全局设置变化后调用：重算所有任务的生效参数并落盘，返回实际发生变化的任务数。
+   * 前端列表/编辑弹窗读的是扁平字段（quality/segmentMode/pollIntervalSec…），
+   * 不把这些字段同步成新的全局值，界面就一直显示旧值、看起来像「系统设置没生效」。
+   */
+  async syncEffectiveAll() {
+    const keys = ['quality', 'segmentMode', 'segmentMinutes', 'segmentSizeMB', 'container',
+      'remuxToMp4', 'autoMerge', 'namingProfileId', 'customText', 'pollIntervalSec'];
+    const snapOf = (t) => JSON.stringify(keys.map((k) => t[k] ?? null));
+    let changed = 0;
+    for (const t of this.store.tasks) {
+      const before = snapOf(t);
+      this.applyEffective(t);
+      if (snapOf(t) !== before) { await this.store.saveTask(t); changed++; }
+    }
+    if (changed) this.onEvent({ type: 'task' }); // 通知前端刷新任务列表
+    return changed;
   }
 
   activeCount() {
@@ -212,16 +248,20 @@ export class Scheduler {
     const task = this.store.getTask(id);
     if (!task) throw new HttpError('NOT_FOUND', '任务不存在', 404);
     const locked = ['recording', 'stopping'].includes(task.status);
+    // 录制中改动需「下一场生效」的键；轮询间隔不在其中（录制中本就不轮询，改了下一轮自然生效）
     const lockKeys = ['quality', 'segmentMode', 'namingProfileId', 'customText'];
+    const overrideKeys = [...lockKeys, 'pollIntervalSec'];
 
     // 先合并 overrides：null / 空串 = 恢复跟随全局
     const overrides = { ...(task.overrides || {}) };
     const incoming = (patch.overrides && typeof patch.overrides === 'object') ? { ...patch.overrides } : {};
-    for (const k of lockKeys) if (patch[k] !== undefined) incoming[k] = patch[k];
-    let overrideChanged = false;
-    for (const k of lockKeys) {
+    for (const k of overrideKeys) if (patch[k] !== undefined) incoming[k] = patch[k];
+    let overrideChanged = false; // 锁定键变化 → 录制中回 409「下一场生效」
+    let overridesDirty = false;  // overrides 需要落库
+    for (const k of overrideKeys) {
       if (incoming[k] === undefined) continue;
-      overrideChanged = true;
+      overridesDirty = true;
+      if (lockKeys.includes(k)) overrideChanged = true;
       if (incoming[k] === null || incoming[k] === '') delete overrides[k];
       else overrides[k] = incoming[k];
     }
@@ -235,14 +275,14 @@ export class Scheduler {
       this.onEvent({ type: 'task', task });
       return Promise.reject(err);
     }
-    if (overrideChanged) task.overrides = overrides;
+    if (overridesDirty) task.overrides = overrides;
 
     // 前端新建/编辑统一用 url 字段表示直播地址
     if (patch.url !== undefined) { patch.sourceUrl = patch.url; delete patch.url; }
     const allowed = [
       'anchorName', 'title', 'platform', 'sourceUrl', 'reconnectMax', 'segmentMinutes', 'segmentSizeMB',
       'container', 'remuxToMp4', 'keepSource', 'autoMerge', 'autoRecord', 'monitorOnly',
-      'pollIntervalSec', 'startDelaySec', 'stopDelaySec', 'roomId', 'nameLocked', 'shortId',
+      'startDelaySec', 'stopDelaySec', 'roomId', 'nameLocked', 'shortId',
     ];
     const oldSourceUrl = task.sourceUrl;
     for (const k of allowed) if (patch[k] !== undefined) task[k] = patch[k];
@@ -361,7 +401,7 @@ export class Scheduler {
       // 下播检测：ffmpeg 意外退出时先探一次直播状态，主播已下播就直接正常收尾，不进入断流重连
       probeOffline: async () => {
         try {
-          const info = await probeLive(task.sourceUrl || `${task.platform}:${task.roomId}`, {
+          const info = await this._probe(task.sourceUrl || `${task.platform}:${task.roomId}`, {
             platform: task.platform, settings, logger: this.logger,
           });
           return info.liveStatus === 'offline';
@@ -494,7 +534,7 @@ export class Scheduler {
     task.currentFile = null;
     task.totalBytes = session?.bytes || task.totalBytes || 0;
     task.totalDurationSec = session?.durationSec || task.totalDurationSec || 0;
-    task.nextPollAt = Date.now() + Math.max(30, Number(task.pollIntervalSec) || 60) * 1000;
+    task.nextPollAt = Date.now() + Math.max(30, this.pollIntervalOf(task)) * 1000;
     await this.store.saveTask(task);
     this.logger.info(`录制结束（${reason}）：${task.anchorName || task.roomId}，共 ${task.segmentIndex || session?.segments?.length || 0} 段 / ${formatBytes(task.totalBytes)}`, { taskId: task.id, taskName: task.anchorName });
     if (reason === 'error') {
@@ -690,7 +730,7 @@ export class Scheduler {
       ? (info.liveStatus === 'live' ? '已手动停止 · 直播中未录制，等你手动开始' : '已手动停止 · 未开播，等你手动开始')
       : (info.liveStatus === 'live' ? '正在直播' : '未开播');
     task.failCount = 0;
-    task.nextPollAt = Date.now() + Math.max(10, Number(task.pollIntervalSec) || 60) * 1000;
+    task.nextPollAt = Date.now() + Math.max(10, this.pollIntervalOf(task)) * 1000;
     await this.store.saveTask(task);
     this.onEvent({ type: 'task', task });
     return { id, info };
@@ -716,7 +756,7 @@ export class Scheduler {
         const r = await this._startRecording(task);
         return { info, started: r };
       }
-      task.nextPollAt = Date.now() + Math.max(10, Number(task.pollIntervalSec) || 60) * 1000;
+      task.nextPollAt = Date.now() + Math.max(10, this.pollIntervalOf(task)) * 1000;
       await this.store.saveTask(task);
       this.onEvent({ type: 'task', task });
       return { info };
@@ -771,7 +811,17 @@ export class Scheduler {
   }
 
   // ---------- 轮询与排队 ----------
+  /**
+   * 轮询入口：加运行中互斥。探测慢或命中「开播延时」sleep 时，5 秒定时器会再次触发 tick，
+   * 无互斥就会重叠轮询（同一任务被重复探测、实际频率远超设置值）。
+   */
   async tick() {
+    if (this._ticking) return;
+    this._ticking = true;
+    try { await this._tickOnce(); } finally { this._ticking = false; }
+  }
+
+  async _tickOnce() {
     const now = Date.now();
     const settings = this.store.settings;
     let polledAny = false; // 本轮是否有直播间实际进入轮询，避免无任务可轮询时空打「开始/结束」
@@ -801,7 +851,7 @@ export class Scheduler {
 
         let info;
         try {
-          info = await probeLive(task.sourceUrl || `${task.platform}:${task.roomId}`, {
+          info = await this._probe(task.sourceUrl || `${task.platform}:${task.roomId}`, {
             platform: task.platform, settings, logger: this.logger,
           });
         } catch (e) {
@@ -818,7 +868,7 @@ export class Scheduler {
             task.nextPollAt = now + 10 * 60 * 1000;
             this.logger.error(`任务转入错误（连续失败 ${task.failCount} 次）：${e.message}`, { taskId: task.id, taskName: task.anchorName });
           } else {
-            const backoff = Math.min(10 * 60, Math.max(30, task.pollIntervalSec || 60) * 2 ** (task.failCount - 1));
+            const backoff = Math.min(10 * 60, Math.max(30, this.pollIntervalOf(task)) * 2 ** (task.failCount - 1));
             task.nextPollAt = now + backoff * 1000;
             task.statusMessage = `解析失败 ${task.failCount}/${limit}，${Math.round(backoff)} 秒后重试`;
           }
@@ -829,6 +879,9 @@ export class Scheduler {
 
         task.failCount = 0;
         task.failNotified = false;
+        // 本轮探测成功即按「任务生效间隔」安排下一次轮询。此前只有未开播分支更新 nextPollAt，
+        // 直播中的直播间每个 tick（5 秒）都会被重新探测 —— 完全不按系统设置的时间运行。
+        task.nextPollAt = now + this.pollIntervalOf(task) * 1000;
         // 轮询只刷新直播状态；主播信息仅在「编辑界面点解析 / 创建任务 / 开始录制」时刷新，
         // 避免每次轮询重写主播名与标题（减少流量与资源消耗，且不覆盖用户自定义名称）。
         const wasLive = task.liveStatus === 'live';
@@ -852,7 +905,6 @@ export class Scheduler {
           task.statusMessage = live
             ? '已手动停止 · 直播中未录制，点「开始录制」'
             : '已手动停止 · 未开播，等你手动开始';
-          task.nextPollAt = now + Math.max(20, Number(task.pollIntervalSec) || 60) * 1000;
           await this.store.saveTask(task);
           this.onEvent({ type: 'task', task });
           continue;
@@ -891,7 +943,6 @@ export class Scheduler {
           } else {
             task.statusMessage = task.monitorOnly ? '未开播 · 仅监控' : '未直播，等待开播';
           }
-          task.nextPollAt = now + Math.max(20, Number(task.pollIntervalSec) || 60) * 1000;
           await this.store.saveTask(task);
           this.onEvent({ type: 'task', task });
         }
