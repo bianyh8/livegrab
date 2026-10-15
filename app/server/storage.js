@@ -361,9 +361,28 @@ export class Storage {
     return { movedToTrash: moved.length, bytes, trashIds: moved, useTrash };
   }
 
-  listTrash() {
-    const total = this.store.trash.reduce((a, b) => a + b.bytes, 0);
-    return { items: this.store.trash, total, bytes: total, count: this.store.trash.length };
+  /* 回收站列表：支持后端分页。
+   * opts.pageSize 缺省/为 0 → 返回全量（兼容「全部还原」按 ids 拉取）。
+   * 返回 { items, total, page, pageSize, pages, bytes, count, retentionDays }，保留 count 供测试。 */
+  /**
+   * 返回 { items, total, page, pageSize, pages, bytes, count, retentionDays }。
+   * 传入 page/pageSize 时按页切片；不传则返回全量（兼容测试与「全部还原」等场景）。
+   * 保留 count 供测试；retentionDays 来自设置项（回收站保留天数）。
+   */
+  listTrash(opts = {}) {
+    const all = this.store.trash;
+    const total = all.length;
+    const bytes = all.reduce((a, b) => a + b.bytes, 0);
+    const retentionDays = Number(this.store.settings && this.store.settings.retentionDays) || 0;
+    const rawPs = Number(opts.pageSize) || 0;
+    if (rawPs > 0) {
+      const pageSize = Math.min(1000, Math.max(1, rawPs));
+      const pages = Math.max(1, Math.ceil(total / pageSize));
+      const page = Math.max(1, Math.min(pages, Number(opts.page) || 1));
+      const start = (page - 1) * pageSize;
+      return { items: all.slice(start, start + pageSize), total, page, pageSize, pages, bytes, count: total, retentionDays };
+    }
+    return { items: all, total, page: 1, pageSize: total, pages: 1, bytes, count: total, retentionDays };
   }
 
   async restoreTrash(ids = []) {

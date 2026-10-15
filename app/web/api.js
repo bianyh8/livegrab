@@ -117,7 +117,7 @@ export const api = {
 
   platforms: () => request('GET', '/api/platforms'),
   status: () => request('GET', '/api/status'),
-  tasks: () => request('GET', '/api/tasks'),
+  tasks: (params) => request('GET', '/api/tasks' + qs(params)),
   task: (id) => request('GET', '/api/tasks/' + encodeURIComponent(id)),
   createTask: (payload) => request('POST', '/api/tasks', payload),
   patchTask: (id, payload) => request('PATCH', '/api/tasks/' + encodeURIComponent(id), payload),
@@ -158,7 +158,7 @@ export const api = {
   releasePlay: (playId) => request('DELETE', '/api/play/' + encodeURIComponent(playId)),
   playStreamUrl: (playId) => `/api/play/${encodeURIComponent(playId)}/stream`,
 
-  trash: () => request('GET', '/api/trash'),
+  trash: (params) => request('GET', '/api/trash' + qs(params)),
   trashRestore: (ids) => request('POST', '/api/trash/restore', { ids }),
   trashEmpty: () => request('POST', '/api/trash/empty', {}),
   trashPurge: (ids) => request('POST', '/api/trash/purge', { ids }),

@@ -92,8 +92,13 @@ async function tick(ctx, initial) {
       } catch { state.enabledSet = {}; }
       state.enabledInit = true;
     }
-    const r = await api.tasks();
+    const r = await api.tasks({
+      page: state.page, pageSize: PAGE_SIZE, sort: state.sort, sortDir: state.sortDir,
+      q: state.q, platform: state.platform, status: state.status, liveStatus: state.liveStatus,
+    });
     state.tasks = (r && r.items) || [];
+    state.total = Number((r && r.total) || state.tasks.length);
+    state.pages = Math.max(1, Number((r && r.pages) || 1));
     if (state.openNew) { state.openNew = false; openTaskDialog(ctx, null); }
     paint(ctx, initial);
   } catch (e) {
@@ -105,51 +110,29 @@ async function tick(ctx, initial) {
   }
 }
 
-/* ---------- 过滤 / 排序 ---------- */
+/* ---------- 过滤 / 排序 ----------
+   注意：过滤与排序已迁移到后端（/api/tasks 支持 q/platform/liveStatus/status/sort/sortDir 参数），
+   前端仅持有当前页数据并直接渲染，不再本地 slice。 */
 
-function filtered() {
-  const q = state.q.trim().toLowerCase();
-  let list = state.tasks.filter((t) => {
-    if (state.platform && t.platform !== state.platform) return false;
-    if (state.liveStatus && t.liveStatus !== state.liveStatus) return false;
-    if (state.status && t.status !== state.status) return false;
-    if (q) {
-      const hay = [t.anchorName, t.name, t.title, t.roomId, t.sourceUrl, t.qualityLabel].join(' ').toLowerCase();
-      if (!hay.includes(q)) return false;
-    }
-    return true;
-  });
-  const by = {
-    created: (a, b) => ts(b.createdAt) - ts(a.createdAt),
-    duration: (a, b) => (Number(b.totalDurationSec) || Number(b.live && b.live.elapsedSec) || 0) - (Number(a.totalDurationSec) || Number(a.live && a.live.elapsedSec) || 0),
-    size: (a, b) => (Number(b.totalBytes) || Number(b.live && b.live.bytes) || 0) - (Number(a.totalBytes) || Number(a.live && a.live.bytes) || 0),
-    status: (a, b) => String(a.status).localeCompare(String(b.status)),
-  };
-  if (state.sort === 'custom') { /* 保持用户自定义顺序（store 数组顺序） */ }
-  else {
-    // 现有比较器均为"新/大在前"（倒序）；选「顺序」时取反为升序
-    const dir = state.sortDir === 'asc' ? -1 : 1;
-    const cmp = by[state.sort] || by.created;
-    list = list.slice().sort((a, b) => dir * cmp(a, b));
-  }
-  return list;
-}
-
-function ts(v) { const d = new Date(v || 0); return isNaN(d.getTime()) ? 0 : d.getTime(); }
-
-/* 自定义排序：上移/下移，重排 store 顺序并持久化 */
+/* 自定义排序：上移/下移。后端分页后仅持有当前页数据，
+   需先拉取全量顺序（不带分页参数），在完整序列上交换相邻项后再整体提交。 */
 async function moveTask(id, dir) {
-  const i = state.tasks.findIndex((t) => t.id === id);
+  let all = [];
+  try {
+    const r = await api.tasks({ sort: 'custom' });
+    all = (r && r.items) || [];
+  } catch { all = []; }
+  const i = all.findIndex((t) => t.id === id);
   if (i < 0) return;
   const j = i + dir;
-  if (j < 0 || j >= state.tasks.length) return;
-  const item = state.tasks[i];
-  state.tasks.splice(i, 1);
-  state.tasks.splice(j, 0, item);
+  if (j < 0 || j >= all.length) return;
+  const item = all[i];
+  all.splice(i, 1);
+  all.splice(j, 0, item);
   state.hash = '';
-  try { await api.tasksReorder(state.tasks.map((x) => x.id)); }
+  try { await api.tasksReorder(all.map((x) => x.id)); }
   catch (e) { toast(e.message || t('tasks.sortSaveFail'), 'err'); }
-  paint(boundCtx, true);
+  tick(boundCtx, true);
 }
 
 /* 去掉主播名里的 emoji/符号与变体选择符（例如 ❄️雪衣容 → 雪衣容） */
@@ -171,14 +154,13 @@ function platName(id) {
 function paint(ctx, force) {
   const root = boundRoot;
   if (!root) return;
-  const list = filtered();
-  state.pages = Math.max(1, Math.ceil(list.length / PAGE_SIZE));
   if (state.page > state.pages) state.page = state.pages;
-  const pageList = list.slice((state.page - 1) * PAGE_SIZE, state.page * PAGE_SIZE);
+  const list = state.tasks;
+  const pageList = list;
   const hash = JSON.stringify(list.map((t) => [
     t.id, t.status, t.queueReason, t.retryCount, t.statusMessage, t.qualityLabel,
     t.live && t.live.elapsedSec, t.live && t.live.bytes, t.live && t.live.segmentIndex, t.updatedAt,
-  ])) + '|' + state.q + '|' + state.platform + '|' + state.liveStatus + '|' + state.status + '|' + state.sort + '|' + state.sortDir + '|' + Array.from(state.selected).join(',') + '|p' + state.page;
+  ])) + '|' + state.q + '|' + state.platform + '|' + state.liveStatus + '|' + state.status + '|' + state.sort + '|' + state.sortDir + '|' + Array.from(state.selected).join(',') + '|p' + state.page + '|tot' + state.total;
   if (!force && hash === state.hash) { syncBatchBar(); return; }
   state.hash = hash;
 
@@ -228,14 +210,29 @@ function paint(ctx, force) {
       </div>
       <div class="hintline" style="margin:0 0 12px 2px">${t('tasks.batchHint')}${state.sort === 'custom' ? t('tasks.customSortHint') : t('tasks.customSortTip')}</div>
       <div id="tkTable">${table(pageList)}</div>
-      ${pagerHTML('tkPager', state.page, state.pages, list.length)}
+      ${pagerHTML('tkPager', state.page, state.pages, state.total)}
     </div>`;
 
   bind(ctx);
 }
 
-/* 查询条件摘要（折叠头显示当前生效条件，无条件时显示"全部"） */
-function filterSummary() {
+/* 拉取符合当前筛选的全量任务（不带分页参数时后端返回全量）：
+   用于跨页全选、批量删除统计与 CSV 导出。 */
+async function fetchAllTasks() {
+  try {
+    const r = await api.tasks({
+      sort: state.sort, sortDir: state.sortDir,
+      q: state.q, platform: state.platform, status: state.status, liveStatus: state.liveStatus,
+    });
+    return (r && r.items) || [];
+  } catch { return []; }
+}
+async function fetchAllIds() {
+  const all = await fetchAllTasks();
+  return all.map((t) => t.id);
+}
+
+/* 查询条件摘要（折叠头显示当前生效条件，无条件时显示"全部"） */function filterSummary() {
   const parts = [];
   if (String(state.q || '').trim()) parts.push(t('tasks.searchPh') + '：' + String(state.q).trim());
   if (state.platform) { const p = state.platforms.find((x) => x.id === state.platform); if (p) parts.push(p.name); }
@@ -297,7 +294,7 @@ function row(item) {
     <td data-label="${t('tasks.colQuality')}"><span class="chip">${esc(qualityLabelOf(item))}</span></td>
     ${state.sort === 'custom' ? `<td data-label="${t('tasks.colSort')}">
       <div class="mvrow">
-        <span class="rnk">${esc(String(state.tasks.indexOf(item) + 1))}</span>
+        <span class="rnk">${esc(String((state.page - 1) * PAGE_SIZE + state.tasks.indexOf(item) + 1))}</span>
         <button class="mvbtn" data-mv="up" data-id="${esc(item.id)}" title="${t('tasks.moveUp')}">↑</button>
         <button class="mvbtn" data-mv="down" data-id="${esc(item.id)}" title="${t('tasks.moveDown')}">↓</button>
       </div>
@@ -387,7 +384,7 @@ function bind(ctx) {
     q.oninput = () => {
       state.q = q.value;
       clearTimeout(timer);
-      timer = setTimeout(() => { state.page = 1; state.hash = ''; paint(ctx, true); }, 200);
+      timer = setTimeout(() => { state.page = 1; state.hash = ''; tick(ctx, true); }, 200);
     };
   }
   const fToggle = root.querySelector('#tkFilterToggle');
@@ -395,7 +392,7 @@ function bind(ctx) {
   const bindSel = (id, key) => {
     const node = root.querySelector(id);
     if (!node) return;
-    node.onchange = () => { state[key] = node.value; state.page = 1; state.hash = ''; paint(ctx, true); };
+    node.onchange = () => { state[key] = node.value; state.page = 1; state.hash = ''; tick(ctx, true); };
   };
   bindSel('#tkPlat', 'platform');
   bindSel('#tkLive', 'liveStatus');
@@ -405,10 +402,13 @@ function bind(ctx) {
 
   const all = root.querySelector('#tkAll');
   if (all) all.onchange = () => {
-    const list = filtered();
-    list.forEach((t) => { all.checked ? state.selected.add(t.id) : state.selected.delete(t.id); });
-    state.hash = '';
-    paint(ctx, true);
+    // 后端分页后「全选」应选中符合当前筛选的全部任务（跨页），需拉全量 id
+    void (async () => {
+      const ids = await fetchAllIds();
+      ids.forEach((id) => { all.checked ? state.selected.add(id) : state.selected.delete(id); });
+      state.hash = '';
+      paint(ctx, true);
+    })();
   };
 
   root.querySelectorAll('[data-pick]').forEach((cb) => {
@@ -423,15 +423,17 @@ function bind(ctx) {
     if (e) e.stopPropagation(); // 按钮位于查询条件折叠头内，避免冒泡触发折叠切换
     openTaskDialog(ctx, null);
   };
-  root.querySelector('#tkExport').onclick = () => exportCsv();
+  root.querySelector('#tkExport').onclick = () => { void exportCsv(); };
 
   const selAll = root.querySelector('#tkSelAll');
   if (selAll) selAll.onclick = () => {
-    const list = filtered();
-    const allSel = list.length > 0 && list.every((t) => state.selected.has(t.id));
-    list.forEach((t) => { allSel ? state.selected.delete(t.id) : state.selected.add(t.id); });
-    state.hash = '';
-    paint(ctx, true);
+    void (async () => {
+      const ids = await fetchAllIds();
+      const allSel = ids.length > 0 && ids.every((id) => state.selected.has(id));
+      ids.forEach((id) => { allSel ? state.selected.delete(id) : state.selected.add(id); });
+      state.hash = '';
+      paint(ctx, true);
+    })();
   };
 
   root.querySelectorAll('[data-act]').forEach((btn) => {
@@ -474,7 +476,8 @@ function bind(ctx) {
   root.querySelectorAll('[data-batch]').forEach((btn) => {
     btn.onclick = () => batch(ctx, btn.dataset.batch);
   });
-  bindPager(root, 'tkPager', state, () => { state.hash = ''; paint(ctx, true); });
+  // 翻页需重新向后端请求对应页数据
+  bindPager(root, 'tkPager', state, () => { state.hash = ''; tick(ctx, true); });
 
   syncBatchBar();
 }
@@ -493,7 +496,9 @@ async function batch(ctx, action) {
   if (ids.length > 50) { toast(t('tasks.batchLimit'), 'warn'); return; }
 
   if (action === 'delete') {
-    const picked = state.tasks.filter((t) => ids.includes(t.id));
+    // 选中可能跨页，统计需基于全量数据而非当前页
+    const all = await fetchAllTasks();
+    const picked = all.filter((t) => ids.includes(t.id));
     const withFiles = picked.filter((t) => t.sessionId).length;
     const files = picked.reduce((n, t) => n + ((t.segments && t.segments.length) || (t.live && t.live.segmentIndex) || 1), 0);
     const bytes = picked.reduce((n, t) => n + (Number(t.totalBytes) || Number(t.live && t.live.bytes) || 0), 0);
@@ -566,8 +571,9 @@ function removeTask(task, ctx) {
   });
 }
 
-function exportCsv() {
-  const list = filtered();
+async function exportCsv() {
+  // 后端分页后导出需拉取符合当前筛选的全量数据
+  const list = await fetchAllTasks();
   if (!list.length) { toast(t('tasks.noExport'), 'warn'); return; }
   const head = [t('tasks.csvId'), t('tasks.csvAnchor'), t('tasks.csvTitle'), t('settings.pfColPlatform'), t('tasks.csvRoom'), t('tasks.colQuality'), t('tasks.csvSegment'), t('tasks.csvStatus'), t('tasks.csvDuration'), t('tasks.csvSize'), t('tasks.csvCreated')];
   const rows = list.map((t) => [

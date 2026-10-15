@@ -277,7 +277,10 @@ async function main() {
     return resolveRoom(body.url || body.roomId || '', { platform: body.platform, settings: store.settings, logger });
   });
 
-  route('GET', '/api/tasks', async (req) => ({ items: scheduler.listTasks({ status: req.query.status, platform: req.query.platform, q: req.query.q }) }));
+  route('GET', '/api/tasks', async (req) => scheduler.listTasks({
+    status: req.query.status, platform: req.query.platform, liveStatus: req.query.liveStatus, q: req.query.q,
+    page: req.query.page, pageSize: req.query.pageSize, sort: req.query.sort, sortDir: req.query.sortDir,
+  }));
   route('POST', '/api/tasks', async (req) => {
     const body = await readBody(req);
     const task = await scheduler.createTask(body);
@@ -380,24 +383,59 @@ async function main() {
   // ---- 文件库 ----
   route('GET', '/api/files', async (req) => {
     const q = req.query;
-    let sessions = store.sessions.map(sessionView);
-    if (q.platform) sessions = sessions.filter((s) => s.platform === q.platform);
-    if (q.date) sessions = sessions.filter((s) => (s.startedAt || '').slice(0, 10) === q.date);
-    if (q.taskId) sessions = sessions.filter((s) => s.taskId === q.taskId);
-    if (q.status) sessions = sessions.filter((s) => s.status === q.status);
-    if (q.q) {
-      const s = String(q.q).toLowerCase();
-      sessions = sessions.filter((x) => `${x.streamer} ${x.title} ${x.dir}`.toLowerCase().includes(s)
-        || (x.segments || []).some((f) => f.name.toLowerCase().includes(s)));
+    // all=1：返回符合筛选的全量（不分页），供前端跨页全选 / 批量删除统计 / 导出使用
+    const wantAll = q.all === '1' || q.all === 'true';
+    const page = Math.max(1, Number(q.page) || 1);
+    const pageSize = wantAll ? Number.MAX_SAFE_INTEGER : Math.min(500, Math.max(1, Number(q.pageSize) || 10));
+
+    // 拍平：每个会话 → 单个文件行（分段 + 转封装/合并副本 + mp4/m4a），按 id/路径去重
+    // （与前端原 allFiles() 口径一致；s 携带 sessionView 以保留播放所需的 segments/id）
+    const rows = [];
+    for (const s of store.sessions) {
+      const sv = sessionView(s);
+      const seen = new Set(); const seenPath = new Set();
+      const push = (f, tag) => { if (f && f.id && !seen.has(f.id) && !seenPath.has(f.path)) { seen.add(f.id); seenPath.add(f.path); rows.push({ f, s: sv, tag }); } };
+      (sv.segments || []).forEach((x) => push(x, null));
+      (sv.extras || []).forEach((x) => push(x, x.kind === 'm4a' ? 'M4A' : x.kind === 'merged' ? '合并' : 'MP4'));
+      if (sv.mp4) push(sv.mp4, 'MP4');
+      if (sv.merged) push(sv.merged, '合并');
     }
-    const total = sessions.length;
-    const offset = Number(q.offset || 0);
-    const limit = Math.min(500, Number(q.limit || 100));
-    const items = sessions.slice(offset, offset + limit);
+
+    // 过滤（与前端原 filtered() 口径一致）
+    const fil = {
+      q: String(q.q || '').trim().toLowerCase(),
+      platform: q.platform || '',
+      dateFrom: q.dateFrom || q.date || '',
+      dateTo: q.dateTo || q.date || '',
+      ext: String(q.ext || '').toLowerCase(),
+    };
+    const filtered = rows.filter(({ f, s, tag }) => {
+      if (fil.platform && s.platform !== fil.platform) return false;
+      const day = String(s.startedAt || '').slice(0, 10);
+      if (fil.dateFrom && day < fil.dateFrom) return false;
+      if (fil.dateTo && day > fil.dateTo) return false;
+      if (fil.ext) {
+        const e = String(f.ext || tag || '').toLowerCase();
+        if (e !== fil.ext && !(fil.ext === 'mp4' && (e === 'mp4' || e === 'm4a'))) return false;
+      }
+      if (fil.q) {
+        const hay = [f.name, f.relPath, s.streamer, s.title, s.taskId].join(' ').toLowerCase();
+        if (!hay.includes(fil.q)) return false;
+      }
+      return true;
+    });
+
+    const total = filtered.length;
+    const pages = Math.max(1, Math.ceil(total / pageSize));
+    const start = (page - 1) * pageSize;
+    const items = filtered.slice(start, start + pageSize);
+    const bytes = filtered.reduce((n, { f }) => n + (Number(f.bytes) || 0), 0);
+
     const allFiles = store.allFiles();
     const trash = storage.listTrash();
+    const platforms = [...new Set(store.sessions.map((s) => s.platform).filter(Boolean))];
     return {
-      total, items, offset, limit,
+      total, items, page, pageSize, pages, platforms, bytes,
       summary: {
         missing: allFiles.filter((f) => f.status === 'missing').length,
         unregistered: store.external.length,
@@ -457,7 +495,7 @@ async function main() {
   route('GET', '/api/files/:id/stream', async (req, res) => streamFile(req, res, false));
 
   // ---- 回收站 ----
-  route('GET', '/api/trash', async () => storage.listTrash());
+  route('GET', '/api/trash', async (req) => storage.listTrash({ page: req.query.page, pageSize: req.query.pageSize }));
   route('POST', '/api/trash/restore', async (req) => {
     const body = await readBody(req);
     const ids = body.ids || [];

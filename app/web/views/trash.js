@@ -8,7 +8,7 @@ import { t } from '../i18n.js';
 
 export const page = 'trash';
 
-const state = { items: [], bytes: 0, retentionDays: 7, page: 1, pages: 1, hash: '', pending: false, bound: false };
+const state = { items: [], total: 0, bytes: 0, retentionDays: 7, page: 1, pages: 1, hash: '', pending: false, bound: false };
 
 /* 分页：默认每页 10 条（任务/文件/回收站统一） */
 const PAGE_SIZE = 10;
@@ -49,10 +49,12 @@ async function tick(ctx, initial) {
   if (state.pending) return;
   state.pending = true;
   try {
-    const r = await api.trash();
+    const r = await api.trash({ page: state.page, pageSize: PAGE_SIZE });
     state.items = (r && (r.items || [])) || [];
+    state.total = Number((r && r.total != null ? r.total : state.items.length) || 0);
+    state.pages = Math.max(1, Number((r && r.pages) || 1));
     state.bytes = Number((r && (r.bytes != null ? r.bytes : r.total)) || 0);
-    if (r && r.count != null) state.retentionDays = Number(r.retentionDays || state.retentionDays);
+    if (r && r.retentionDays != null) state.retentionDays = Number(r.retentionDays || state.retentionDays);
     paint(ctx, initial);
   } catch (e) {
     if (initial) boundRoot.innerHTML = `<div class="card"><div class="empty">${t('trash.loadFail', esc(e.message || t('common.unknownError')))}</div></div>`;
@@ -64,28 +66,26 @@ async function tick(ctx, initial) {
 function paint(ctx, force) {
   const root = boundRoot;
   if (!root) return;
-  const hash = JSON.stringify([state.items.map((t) => [t.id, t.name, t.bytes]), state.bytes]);
+  const hash = JSON.stringify([state.items.map((t) => [t.id, t.name, t.bytes]), state.total, 'p' + state.page]);
   if (!force && hash === state.hash) return;
   state.hash = hash;
 
-  const items = state.items;
-  state.pages = Math.max(1, Math.ceil(items.length / PAGE_SIZE));
+  const items = state.items; // 后端分页：当前页数据
   if (state.page > state.pages) state.page = state.pages;
-  const pageItems = items.slice((state.page - 1) * PAGE_SIZE, state.page * PAGE_SIZE);
   root.innerHTML = `
     <div class="card">
       <div class="card-h">
         <h3>${t('nav.trash')}</h3>
-        <span class="hint">${items.length} ${t('trash.itemUnit')} · ${esc(formatBytes(state.bytes))}</span>
+        <span class="hint">${state.total} ${t('trash.itemUnit')} · ${esc(formatBytes(state.bytes))}</span>
         <div class="spacer"></div>
-        <button class="btn sm" id="trRestoreAll"${items.length ? '' : ' disabled'}>${t('trash.restoreAll')}</button>
-        <button class="btn sm danger" id="trEmpty"${items.length ? '' : ' disabled'}>${t('trash.purgeAll')}</button>
+        <button class="btn sm" id="trRestoreAll"${state.total ? '' : ' disabled'}>${t('trash.restoreAll')}</button>
+        <button class="btn sm danger" id="trEmpty"${state.total ? '' : ' disabled'}>${t('trash.purgeAll')}</button>
       </div>
       <div class="card-b">
-        ${items.length
+        ${state.total
           ? `<div class="hintline" style="margin:0 0 12px">${t('trash.retentionHint', Number(state.retentionDays) || 7)}</div>
-             ${pageItems.map((t) => trashLine(t, ctx)).join('')}
-             ${pagerHTML('trPager', state.page, state.pages, items.length)}`
+             ${items.map((t) => trashLine(t, ctx)).join('')}
+             ${pagerHTML('trPager', state.page, state.pages, state.total)}`
           : emptyBox(t('trash.empty'))}
       </div>
     </div>`;
@@ -127,24 +127,31 @@ function bind(ctx) {
   if (!root) return;
   const ra = root.querySelector('#trRestoreAll');
   if (ra) ra.onclick = () => {
-    const ids = state.items.map((t) => t.id);
-    if (!ids.length) { toast(t('trash.empty'), 'warn'); return; }
-    confirmDialog({
-      title: t('trash.restoreAll'), ok: t('trash.restore'),
-      text: t('trash.restoreAllText', ids.length, t('trash.itemUnit')),
-      onOk: async () => {
-        try { const r = await api.trashRestore(ids); toast(t('trash.restoredN', Number(r && r.restored) || ids.length)); state.hash = ''; await tick(ctx, true); }
-        catch (e) { toast(e.message || t('trash.restoreFail'), 'err'); }
-      },
-    });
+    void (async () => {
+      // 全部还原需覆盖所有页：拉全量（不带分页参数）
+      let ids = [];
+      try {
+        const r = await api.trash();
+        ids = ((r && r.items) || []).map((x) => x.id);
+      } catch { ids = []; }
+      if (!ids.length) { toast(t('trash.empty'), 'warn'); return; }
+      confirmDialog({
+        title: t('trash.restoreAll'), ok: t('trash.restore'),
+        text: t('trash.restoreAllText', ids.length, t('trash.itemUnit')),
+        onOk: async () => {
+          try { const r = await api.trashRestore(ids); toast(t('trash.restoredN', Number(r && r.restored) || ids.length)); state.hash = ''; state.page = 1; await tick(ctx, true); }
+          catch (e) { toast(e.message || t('trash.restoreFail'), 'err'); }
+        },
+      });
+    })();
   };
   const em = root.querySelector('#trEmpty');
   if (em) em.onclick = () => {
     confirmDialog({
       title: t('trash.purgeAll'), danger: true, ok: t('trash.purge'),
-      text: t('trash.purgeAllText', state.items.length, t('trash.itemUnit'), esc(formatBytes(state.bytes))),
+      text: t('trash.purgeAllText', state.total, t('trash.itemUnit'), esc(formatBytes(state.bytes))),
       onOk: async () => {
-        try { await api.trashEmpty(); toast(t('trash.purgedAll')); state.hash = ''; await tick(ctx, true); }
+        try { await api.trashEmpty(); toast(t('trash.purgedAll')); state.hash = ''; state.page = 1; await tick(ctx, true); }
         catch (e) { toast(e.message || t('trash.purgeFail'), 'err'); }
       },
     });
@@ -169,5 +176,6 @@ function bind(ctx) {
       });
     };
   });
-  bindPager(root, 'trPager', state, () => { state.hash = ''; paint(ctx, true); });
+  // 翻页需重新向后端请求对应页数据
+  bindPager(root, 'trPager', state, () => { state.hash = ''; tick(ctx, true); });
 }

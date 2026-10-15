@@ -1055,15 +1055,40 @@ export class Scheduler {
     };
   }
 
+  /* 任务列表：支持后端分页 + 排序 + 过滤。
+   * 无分页参数（pageSize 缺省/为 0）时返回全量（兼容总览页 /api/status 之外的 dashboard 调用）。
+   * 返回 { items, total, page, pageSize, pages }，前端据此渲染分页器。 */
   listTasks(filter = {}) {
     let items = this.store.tasks.map((t) => this.serializeTask(t));
     if (filter.status) items = items.filter((t) => t.status === filter.status);
     if (filter.platform) items = items.filter((t) => t.platform === filter.platform);
+    if (filter.liveStatus) items = items.filter((t) => t.liveStatus === filter.liveStatus);
     if (filter.q) {
       const s = String(filter.q).toLowerCase();
       items = items.filter((t) => `${t.anchorName} ${t.title} ${t.roomId}`.toLowerCase().includes(s));
     }
-    return items;
+    if (filter.sort && filter.sort !== 'custom') {
+      const toTs = (v) => { const d = new Date(v || 0); return isNaN(d.getTime()) ? 0 : d.getTime(); };
+      const dir = filter.sortDir === 'asc' ? -1 : 1;
+      const by = {
+        created: (a, b) => toTs(b.createdAt) - toTs(a.createdAt),
+        duration: (a, b) => (Number(b.totalDurationSec) || Number(b.live && b.live.elapsedSec) || 0) - (Number(a.totalDurationSec) || Number(a.live && a.live.elapsedSec) || 0),
+        size: (a, b) => (Number(b.totalBytes) || Number(b.live && b.live.bytes) || 0) - (Number(a.totalBytes) || Number(a.live && a.live.bytes) || 0),
+        status: (a, b) => String(a.status).localeCompare(String(b.status)),
+      };
+      const cmp = by[filter.sort] || by.created;
+      items = items.slice().sort((a, b) => dir * cmp(a, b));
+    }
+    const total = items.length;
+    const rawPs = Number(filter.pageSize) || 0;
+    if (rawPs > 0) {
+      const pageSize = Math.min(1000, Math.max(1, rawPs));
+      const pages = Math.max(1, Math.ceil(total / pageSize));
+      const page = Math.max(1, Math.min(pages, Number(filter.page) || 1));
+      const start = (page - 1) * pageSize;
+      return { items: items.slice(start, start + pageSize), total, page, pageSize, pages };
+    }
+    return { items, total, page: 1, pageSize: total, pages: 1 };
   }
 
   /**

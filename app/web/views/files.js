@@ -10,7 +10,10 @@ import {
 } from '../ui.js';
 
 const state = {
-  sessions: [],
+  rows: [],        // 当前页文件行（后端已拍平/过滤/分页）：{ f, s, tag }
+  total: 0,
+  bytes: 0,
+  platforms: [],
   q: '',
   platform: '',
   dateFrom: '',
@@ -103,8 +106,17 @@ async function tick(ctx, initial) {
   if (state.pending) return;
   state.pending = true;
   try {
-    const r = await api.files({ view: 'platform', q: state.filters.q });
-    state.sessions = (r && r.items) || [];
+    const r = await api.files({
+      view: 'platform',
+      page: state.page, pageSize: PAGE_SIZE,
+      q: state.filters.q, platform: state.filters.platform,
+      dateFrom: state.filters.dateFrom, dateTo: state.filters.dateTo, ext: state.filters.ext,
+    });
+    state.rows = (r && r.items) || [];
+    state.total = Number((r && r.total) || 0);
+    state.pages = Math.max(1, Number((r && r.pages) || 1));
+    state.bytes = Number((r && r.bytes) || 0);
+    if (r && Array.isArray(r.platforms)) state.platforms = r.platforms;
     paint(ctx, initial);
   } catch (e) {
     if (initial) boundRoot.innerHTML = `<div class="card"><div class="empty">${t('files.loadFailed', esc(e.message || t('common.unknownError')))}</div></div>`;
@@ -113,64 +125,35 @@ async function tick(ctx, initial) {
   }
 }
 
-/* 把「整场」拍平成「单个文件」行：分段 + 转封装/合并副本 + mp4/m4a；
-   按 id 去重（同一成品可能同时挂在 extras 与 mp4），再按路径去重（历史 bug 可能把同一物理文件登记成多个条目） */
-function allFiles() {
-  const out = [];
-  for (const s of state.sessions) {
-    const seen = new Set();
-    const seenPath = new Set();
-    const push = (f, tag) => { if (f && f.id && !seen.has(f.id) && !seenPath.has(f.path)) { seen.add(f.id); seenPath.add(f.path); out.push({ f, s, tag }); } };
-    (s.segments || []).forEach((x) => push(x, null));
-    (s.extras || []).forEach((x) => push(x, x.kind === 'm4a' ? 'M4A' : x.kind === 'merged' ? '合并' : 'MP4'));
-    if (s.mp4) push(s.mp4, 'MP4');
-    if (s.merged) push(s.merged, '合并');
-  }
-  return out;
-}
-
-function filtered() {
-  const fil = state.filters;
-  const q = fil.q.trim().toLowerCase();
-  return allFiles().filter(({ f, s, tag }) => {
-    if (fil.platform && s.platform !== fil.platform) return false;
-    // 日期按场次开始日期做闭区间过滤：仅起始 / 仅结束 / 都填均生效
-    const day = String(s.startedAt || '').slice(0, 10);
-    if (fil.dateFrom && day < fil.dateFrom) return false;
-    if (fil.dateTo && day > fil.dateTo) return false;
-    if (fil.ext) {
-      const e = String(f.ext || tag || '').toLowerCase();
-      if (e !== fil.ext && !(fil.ext === 'mp4' && (e === 'mp4' || e === 'm4a'))) return false;
-    }
-    if (q) {
-      const hay = [f.name, f.relPath, s.streamer, s.title, s.taskId].join(' ').toLowerCase();
-      if (!hay.includes(q)) return false;
-    }
-    return true;
-  });
+/* 拉取符合当前筛选的全量文件行（all=1 不分页）：
+   用于跨页全选与批量删除统计。 */
+async function fetchAllRows() {
+  try {
+    const r = await api.files({
+      view: 'platform', all: 1,
+      q: state.filters.q, platform: state.filters.platform,
+      dateFrom: state.filters.dateFrom, dateTo: state.filters.dateTo, ext: state.filters.ext,
+    });
+    return (r && r.items) || [];
+  } catch { return []; }
 }
 
 function paint(ctx, force) {
   const root = boundRoot;
   if (!root) return;
-  const list = filtered();
-  state.pages = Math.max(1, Math.ceil(list.length / PAGE_SIZE));
+  const list = state.rows; // 后端分页：当前页数据
   if (state.page > state.pages) state.page = state.pages;
-  const pageList = list.slice((state.page - 1) * PAGE_SIZE, state.page * PAGE_SIZE);
   const allSel = list.length > 0 && list.every(({ f }) => state.picked.has(f.id));
-  const platforms = [...new Set(state.sessions.map((s) => s.platform).filter(Boolean))];
   const hash = JSON.stringify([list.map(({ f, s }) => [f.id, f.status, s.platform, s.streamer, s.startedAt]),
-    state.q, state.platform, state.dateFrom, state.dateTo, state.ext, Array.from(state.picked), 'p' + state.page]);
+    state.q, state.platform, state.dateFrom, state.dateTo, state.ext, Array.from(state.picked), 'p' + state.page, state.total]);
   if (!force && hash === state.hash) return;
   state.hash = hash;
-
-  const totalBytes = state.sessions.reduce((n, s) => n + (s.bytes || 0), 0);
 
   root.innerHTML = `
     <div class="card">
       <div class="card-h">
         <h3>${t('files.libraryTitle')}</h3>
-        <span class="hint">${esc(t('files.videoCount', list.length))} · ${esc(formatBytes(totalBytes))}</span>
+        <span class="hint">${esc(t('files.videoCount', state.total))} · ${esc(formatBytes(state.bytes))}</span>
         <div class="spacer"></div>
         <button class="btn sm ghost" id="flRefresh">${t('common.refresh')}</button>
       </div>
@@ -178,7 +161,7 @@ function paint(ctx, force) {
         <input class="input" id="flQ" style="width:180px" placeholder="${t('files.searchPlaceholder')}" value="${esc(state.q)}" />
         <select class="select" id="flPlat" style="width:120px">
           <option value="">${t('common.allPlatforms')}</option>
-          ${platforms.map((p) => `<option value="${esc(p)}"${state.platform === p ? ' selected' : ''}>${esc(platNameOf(p))}</option>`).join('')}
+          ${state.platforms.map((p) => `<option value="${esc(p)}"${state.platform === p ? ' selected' : ''}>${esc(platNameOf(p))}</option>`).join('')}
         </select>
         <input type="date" class="input" id="flDateFrom" style="width:150px" title="${t('files.dateFrom')}" value="${esc(state.dateFrom)}" />
         <span style="color:var(--txt-3);font-size:12px">${t('files.dateSep')}</span>
@@ -194,9 +177,9 @@ function paint(ctx, force) {
         <button class="btn sm danger" id="flDelPicked"${state.picked.size ? '' : ' disabled'}>${t('files.deleteSelected')}</button>
       </div>
       <div style="padding:0 16px 16px" id="flBody">
-        ${pageList.length ? pageList.map(filenameRow).join('') : emptyBox(t('files.noFilteredFiles'))}
+        ${list.length ? list.map(filenameRow).join('') : emptyBox(t('files.noFilteredFiles'))}
       </div>
-      ${pagerHTML('flPager', state.page, state.pages, list.length)}
+      ${pagerHTML('flPager', state.page, state.pages, state.total)}
     </div>`;
 
   bind(ctx);
@@ -274,10 +257,11 @@ function bind(ctx) {
   if (ext) ext.onchange = () => { state.ext = ext.value; };
 
   const queryBtn = root.querySelector('#flQuery');
-  if (queryBtn) queryBtn.onclick = () => { commitFilters(); paint(ctx, true); };
+  if (queryBtn) queryBtn.onclick = () => { commitFilters(); tick(ctx, true); };
   const clearBtn = root.querySelector('#flClear');
-  if (clearBtn) clearBtn.onclick = () => { clearAllFilters(true); paint(ctx, true); };
-  bindPager(root, 'flPager', state, () => { state.hash = ''; paint(ctx, true); });
+  if (clearBtn) clearBtn.onclick = () => { clearAllFilters(true); tick(ctx, true); };
+  // 翻页需重新向后端请求对应页数据
+  bindPager(root, 'flPager', state, () => { state.hash = ''; tick(ctx, true); });
 
   root.querySelectorAll('[data-pick-file]').forEach((cb) => {
     cb.onchange = () => {
@@ -289,18 +273,21 @@ function bind(ctx) {
   });
   const selAll = root.querySelector('#flSelAll');
   if (selAll) selAll.onchange = () => {
-    const list = filtered();
-    if (selAll.checked) list.forEach(({ f }) => state.picked.add(f.id));
-    else list.forEach(({ f }) => state.picked.delete(f.id));
-    state.hash = '';
-    paint(ctx, true);
+    // 后端分页后「全选」应选中符合当前筛选的全部文件（跨页），需拉全量
+    void (async () => {
+      const rows = await fetchAllRows();
+      if (selAll.checked) rows.forEach(({ f }) => state.picked.add(f.id));
+      else rows.forEach(({ f }) => state.picked.delete(f.id));
+      state.hash = '';
+      paint(ctx, true);
+    })();
   };
 
   const ref = root.querySelector('#flRefresh');
   if (ref) ref.onclick = () => { state.hash = ''; tick(ctx, true); };
 
   const del = root.querySelector('#flDelPicked');
-  if (del) del.onclick = () => deleteFiles(Array.from(state.picked), ctx);
+  if (del) del.onclick = () => { void deleteFiles(Array.from(state.picked), ctx); };
 
   root.querySelectorAll('[data-file-act]').forEach((btn) => {
     btn.onclick = async () => {
@@ -335,13 +322,9 @@ function bind(ctx) {
 }
 
 function findFile(id) {
-  for (const s of state.sessions) {
-    let out = null;
-    (s.segments || []).forEach((x) => { if (x.id === id) out = { f: x, s }; });
-    (s.extras || []).forEach((x) => { if (x.id === id) out = { f: x, s, tag: x.kind === 'm4a' ? 'M4A' : x.kind === 'merged' ? '合并' : 'MP4' }; });
-    if (s.mp4 && s.mp4.id === id) out = { f: s.mp4, s, tag: 'MP4' };
-    if (s.merged && s.merged.id === id) out = { f: s.merged, s, tag: '合并' };
-    if (out) return out;
+  // 仅当前页数据；跨页场景（批量删除统计）由 fetchAllRows 另行拉取
+  for (const row of state.rows) {
+    if (row.f.id === id) return row;
   }
   return null;
 }
@@ -360,9 +343,11 @@ function filePlayer(f, s, tag) {
   };
 }
 
-function deleteFiles(ids, ctx) {
+async function deleteFiles(ids, ctx) {
   if (!ids.length) return;
-  const rows = ids.map((id) => findFile(id)).filter(Boolean);
+  // 选中可能跨页，统计需基于全量数据而非当前页
+  const all = await fetchAllRows();
+  const rows = ids.map((id) => all.find((r) => r.f.id === id)).filter(Boolean);
   let bytes = 0;
   rows.forEach(({ f }) => { bytes += Number(f.bytes) || 0; });
   trashEnabled().then((toTrash) => {
