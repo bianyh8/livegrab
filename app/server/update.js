@@ -1,0 +1,372 @@
+/* LiveGrab · server/update.js —— 更新管理器
+   职责：① 读取本地版本信息（package.json version + git commit/分支/提交时间）；
+   ② 从 GitHub API（bianyh8/livegrab）拉取最新版本与提交，做对比；
+   ③ 「立即更新」后台任务：git fetch + git pull（环境支持时），否则给出手动更新指引；
+   ④ 内存态更新进度与日志（前端轮询 /api/update/status 获取）。
+   设计约定：容器内（无 .git / 无 git）不做伪更新，明确提示手动步骤；本模块零第三方依赖。 */
+
+import { execFile } from 'node:child_process';
+import fs from 'node:fs';
+import fsp from 'node:fs/promises';
+import path from 'node:path';
+
+const REPO = process.env.LIVEGRAB_REPO || 'bianyh8/livegrab';
+const BRANCH = process.env.LIVEGRAB_BRANCH || 'main';
+const API = `https://api.github.com/repos/${REPO}`;
+const UA = 'LiveGrab-update-manager';
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const run = (cmd, args, opts = {}) =>
+  new Promise((resolve) => {
+    execFile(cmd, args, { timeout: opts.timeout || 60000, maxBuffer: 8 * 1024 * 1024, ...opts },
+      (err, stdout, stderr) => {
+        if (err) resolve({ ok: false, code: err.code || err.message, out: String(stdout || '').trim(), err: String(stderr || '').trim() });
+        else resolve({ ok: true, out: String(stdout || '').trim(), err: String(stderr || '').trim() });
+      });
+  });
+
+/** 从 ~/.git-credentials 提取 github.com 的 token（本地开发兜底；容器内无此文件自然返回空） */
+function readGitCredentialsToken() {
+  try {
+    const home = process.env.HOME || process.env.USERPROFILE || '';
+    const raw = fs.readFileSync(path.join(home, '.git-credentials'), 'utf8');
+    const m = raw.match(/https:\/\/([^:]+):([^@\s]+)@github\.com/);
+    return m ? m[2] : '';
+  } catch { return ''; }
+}
+
+export class UpdateManager {
+  constructor({ appDir, logger, token } = {}) {
+    this.appDir = appDir || process.cwd();
+    this.logger = logger || null;
+    // Token 优先级：显式传入 > 环境变量 LIVEGRAB_GITHUB_TOKEN > 本地 ~/.git-credentials 兜底
+    this.token = token || process.env.LIVEGRAB_GITHUB_TOKEN || readGitCredentialsToken();
+    this._apiHeaders = { 'User-Agent': UA, 'Accept': 'application/vnd.github+json' };
+    if (this.token) this._apiHeaders['Authorization'] = `token ${this.token}`;
+    this.state = {
+      env: null,            // { gitAvailable, gitRoot, dockerAvailable, inContainer }
+      local: null,          // { version, commit, branch, commitAt, tag }
+      latest: null,         // { version, tag, commit, commitAt, commitMsg, publishedAt, releaseUrl, releaseNotes }
+      checkedAt: 0,
+      checking: false,
+      running: false,       // 更新任务进行中
+      phase: 'idle',        // idle|fetch|pull|install|done|error
+      progress: 0,          // 0-100
+      task: '',             // 当前构建/更新任务描述
+      startedAt: 0,
+      log: [],              // [{ts, level, msg}]
+    };
+  }
+
+  /* ---------- 内部工具 ---------- */
+
+  _log(level, msg) {
+    const line = { ts: Date.now(), level, msg };
+    this.state.log.push(line);
+    if (this.state.log.length > 200) this.state.log.splice(0, this.state.log.length - 200);
+    if (this.logger) {
+      const lv = level === 'OK' ? 'info' : level === 'ERR' ? 'error' : level === 'WARN' ? 'warn' : 'info';
+      this.logger[lv](`[更新] ${msg}`);
+    }
+    return line;
+  }
+
+  _phase(phase, progress, task = '') {
+    this.state.phase = phase;
+    if (progress != null) this.state.progress = progress;
+    if (task) this.state.task = task;
+  }
+
+  /** 返回 git 认证参数（临时注入，不改仓库 config）。私有仓库无本地凭据时用 token 走 extraheader。 */
+  _gitAuthArgs() {
+    if (!this.token) return [];
+    const b64 = Buffer.from(`x-access-token:${this.token}`).toString('base64');
+    return ['-c', `http.extraheader=Authorization: Basic ${b64}`];
+  }
+
+  async _findGitRoot(dir) {
+    let cur = path.resolve(dir);
+    for (let i = 0; i < 8; i++) {
+      try {
+        await fsp.access(path.join(cur, '.git'));
+        return cur;
+      } catch { /* 继续向上 */ }
+      const parent = path.dirname(cur);
+      if (parent === cur) break;
+      cur = parent;
+    }
+    return null;
+  }
+
+  /* ---------- 环境与本地信息 ---------- */
+
+  async detectEnv() {
+    const gitBin = await run('which', ['git']).then((r) => (r.ok ? r.out.trim() : ''));
+    const dockerBin = await run('which', ['docker']).then((r) => (r.ok ? r.out.trim() : ''));
+    const inContainer = await fsp.access('/.dockerenv').then(() => true).catch(() => false);
+    const gitRoot = gitBin ? await this._findGitRoot(this.appDir) : null;
+    this.state.env = {
+      gitAvailable: !!gitBin && !!gitRoot,
+      gitBin: gitBin || '',
+      gitRoot: gitRoot || '',
+      dockerAvailable: !!dockerBin,
+      inContainer,
+    };
+    return this.state.env;
+  }
+
+  async localInfo() {
+    // version 取自 package.json（运行目录的父级或自身）
+    let version = '0.0.0';
+    try {
+      const pkgPath = path.join(this.appDir, 'package.json');
+      const pkg = JSON.parse(await fsp.readFile(pkgPath, 'utf8'));
+      version = pkg.version || version;
+    } catch { /* 忽略 */ }
+
+    let commit = '', branch = '', commitAt = null, tag = '';
+    const env = this.state.env || await this.detectEnv();
+    if (env.gitAvailable && env.gitRoot) {
+      const [sha, br, at, tg] = await Promise.all([
+        run('git', ['rev-parse', '--short=12', 'HEAD'], { cwd: env.gitRoot }),
+        run('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: env.gitRoot }),
+        run('git', ['log', '-1', '--format=%cI', 'HEAD'], { cwd: env.gitRoot }),
+        run('git', ['describe', '--tags', '--exact-match', 'HEAD'], { cwd: env.gitRoot }).then((r) => r.ok ? r.out.trim() : ''),
+      ]);
+      if (sha.ok) commit = sha.out;
+      if (br.ok) branch = br.out;
+      if (at.ok) commitAt = at.out;
+      if (tg.ok) tag = tg.out;
+    }
+    this.state.local = { version, commit, branch: branch || BRANCH, commitAt, tag: tag || `v${version}` };
+    return this.state.local;
+  }
+
+  /* ---------- GitHub 最新版本 ---------- */
+
+  /** 探测仓库可见性 + 拉取远程信息。
+      两段式：先匿名请求（公开仓库无需 token）；若 404 且配置了 token，带 token 重试（私有仓库）。
+      返回 { data, repoPublic, usedToken }。 */
+  async _fetchGroup(headers) {
+    const [rel, tags, main] = await Promise.all([
+      fetch(`${API}/releases/latest`, { headers, signal: AbortSignal.timeout(15000) }).then((r) => (r.ok ? r.json() : null)).catch(() => null),
+      fetch(`${API}/tags?per_page=10`, { headers, signal: AbortSignal.timeout(15000) }).then((r) => (r.ok ? r.json() : null)).catch(() => null),
+      fetch(`${API}/commits/${BRANCH}?per_page=1`, { headers, signal: AbortSignal.timeout(15000) }).then((r) => (r.ok ? r.json() : null)).catch(() => null),
+    ]);
+    return { rel, tags, main };
+  }
+
+  async fetchRemote() {
+    const anonHeaders = { 'User-Agent': UA, 'Accept': 'application/vnd.github+json' };
+    // ① 匿名探测：公开仓库直接可读
+    let group = await this._fetchGroup(anonHeaders);
+    let repoPublic = !!(group.rel || group.tags || group.main);
+    let usedToken = false;
+    // ② 匿名 404 且配置了 token：私有仓库，带认证重试
+    if (!repoPublic && this.token) {
+      group = await this._fetchGroup(this._apiHeaders);
+      usedToken = true;
+      // 带 token 重试仍失败 = 仓库不存在/网络问题；成功 = 私有仓库（repoPublic 保持 false）
+      repoPublic = false;
+    }
+    const { rel, tags, main } = group;
+
+    // 仓库不可见（私有但无 token / 仓库不存在）/ 网络失败 / 无任何 release、tag、commit 时，明确标记无法获取（不伪造版本号）
+    const anyData = rel || tags || main;
+    if (!anyData) {
+      this.state.latest = {
+        unavailable: true,
+        error: 'repo-not-found',
+        repo: REPO,
+        branch: BRANCH,
+        releaseUrl: `https://github.com/${REPO}/releases`,
+        repoPublic: false,
+        // 只有「匿名读不到 + 没配 token」才提示需要 token（私有仓库场景）；配了 token 仍读不到 = 仓库真不存在/网络问题
+        authHint: usedToken ? '' : 'private-repo-needs-token',
+      };
+      return this.state.latest;
+    }
+
+    const tagName = (rel && rel.tag_name) || (tags && tags.length && tags[0].name) || '';
+    const version = String(tagName || '').replace(/^v/i, '');
+    const commit = (rel && rel.target_commitish) || (main && main.sha ? main.sha.slice(0, 12) : '');
+    const commitAt = (main && main.commit && main.commit.committer && main.commit.committer.date) || (rel && rel.published_at) || '';
+    const commitMsg = (main && main.commit && main.commit.message || '').split('\n')[0] || '';
+    const notes = (rel && rel.body) || '';
+
+    this.state.latest = {
+      unavailable: false,
+      repoPublic,
+      usedToken,
+      version: version || '0.0.0',
+      tag: tagName || `v${version || '0.0.0'}`,
+      commit,
+      commitAt,
+      commitMsg,
+      publishedAt: (rel && rel.published_at) || commitAt || '',
+      releaseUrl: (rel && rel.html_url) || `https://github.com/${REPO}/releases`,
+      releaseNotes: notes,
+    };
+    return this.state.latest;
+  }
+
+  /* ---------- 对外：检查更新 ---------- */
+
+  async check(force = false) {
+    const now = Date.now();
+    if (this.state.checking) return { checking: true, ...this.status() };
+    if (!force && this.state.latest && this.state.checkedAt && now - this.state.checkedAt < 5 * 60 * 1000) {
+      return this.status();
+    }
+    this.state.checking = true;
+    try {
+      await this.localInfo();
+      await this.fetchRemote();
+      this.state.checkedAt = Date.now();
+    } catch (e) {
+      this._log('ERR', `检查更新失败：${e.message || e}`);
+      throw e;
+    } finally {
+      this.state.checking = false;
+    }
+    return this.status();
+  }
+
+  /* ---------- 对外：立即更新（后台任务） ---------- */
+
+  async apply() {
+    if (this.state.running) {
+      return { running: true, message: '更新任务正在进行中' };
+    }
+    const env = this.state.env || await this.detectEnv();
+    const local = this.state.local || await this.localInfo();
+
+    this.state.running = true;
+    this.state.phase = 'fetch';
+    this.state.progress = 2;
+    this.state.task = '';
+    this.state.startedAt = Date.now();
+    this.state.log = [];
+    this._log('INFO', '开始检查 GitHub 更新…');
+
+    // 后台执行，不阻塞响应
+    setTimeout(() => { this._runUpdate(env, local).catch(() => {}); }, 0);
+    return { running: true, message: '更新任务已启动' };
+  }
+
+  async _runUpdate(env, local) {
+    try {
+      // ① 拉取远端对比
+      await this.fetchRemote();
+      const latest = this.state.latest;
+      this.state.progress = 8;
+      this._log('INFO', `发现新版本：${latest.tag} (${latest.commit || '?'})`);
+
+      const hasNew = latest.version && latest.version !== local.version;
+      const targetVersion = latest.version || local.version;
+
+      if (!env.gitAvailable) {
+        // 容器/无 git：不能伪更新，给手动指引
+        this._phase('error', 15, '');
+        this._log('WARN', env.inContainer
+          ? '当前运行在容器中，容器内不含 .git，无法在线拉取代码'
+          : '未检测到可用 git 仓库，无法在线拉取代码');
+        this._log('INFO', env.dockerAvailable || env.inContainer
+          ? '请在宿主机执行：docker compose up -d --build'
+          : `请在源码目录手动执行：git pull origin ${BRANCH} && npm install`);
+        this._log('INFO', '更新完成（手动模式）。重启服务后生效。');
+        this._phase('error', 100, '');
+        return;
+      }
+
+      // ② fetch（私有仓库注入认证，避免依赖本机凭据）
+      this._phase('fetch', 20, '拉取远端代码');
+      this._log('INFO', '准备拉取代码…');
+      const fetchR = await run('git', [...this._gitAuthArgs(), 'fetch', 'origin', BRANCH], { cwd: env.gitRoot, timeout: 120000 });
+      if (!fetchR.ok) {
+        this._phase('error', 25, '');
+        this._log('ERR', `代码拉取失败：${fetchR.err || fetchR.out || fetchR.code}`);
+        return;
+      }
+      this._log('OK', '代码拉取成功');
+      this.state.progress = 40;
+
+      // ③ 对比本地与远端 HEAD
+      const [cur, remote] = await Promise.all([
+        run('git', ['rev-parse', 'HEAD'], { cwd: env.gitRoot }),
+        run('git', ['rev-parse', `origin/${BRANCH}`], { cwd: env.gitRoot }),
+      ]);
+      const curSha = cur.ok ? cur.out.trim() : '';
+      const remoteSha = remote.ok ? remote.out.trim() : '';
+      if (curSha && remoteSha && curSha === remoteSha) {
+        this._phase('done', 100, '');
+        this._log('OK', `已是最新代码（${curSha.slice(0, 12)}），无需更新`);
+        return;
+      }
+
+      // ④ 快进拉取
+      this._phase('pull', 55, `拉取最新代码 ${BRANCH}`);
+      this._log('INFO', `正在更新到 ${latest.tag} (${remoteSha.slice(0, 12)})…`);
+      const pullR = await run('git', [...this._gitAuthArgs(), 'pull', '--ff-only', 'origin', BRANCH], { cwd: env.gitRoot, timeout: 120000 });
+      if (!pullR.ok) {
+        this._phase('error', 60, '');
+        this._log('ERR', `代码更新失败（非快进或本地有改动）：${pullR.err || pullR.out || pullR.code}`);
+        this._log('INFO', '请先提交或暂存本地改动后重试，或手动执行 git pull origin ' + BRANCH);
+        return;
+      }
+      this._log('OK', `代码已更新到 ${latest.tag}`);
+      this.state.progress = 75;
+
+      // ⑤ 安装依赖
+      if (env.gitRoot && path.basename(env.gitRoot) === 'app') {
+        this._phase('install', 82, '安装依赖');
+      } else {
+        this._phase('install', 82, '安装依赖（app 目录）');
+      }
+      this._log('INFO', '安装依赖 npm install…');
+      const npmR = await run('npm', ['install'], { cwd: path.join(env.gitRoot, 'app'), timeout: 300000 });
+      if (!npmR.ok && npmR.err) {
+        this._log('WARN', `依赖安装可能有警告：${npmR.err.split('\n')[0]}`);
+      } else {
+        this._log('OK', '依赖安装完成');
+      }
+
+      // ⑥ 完成
+      this._phase('done', 100, '');
+      this._log('OK', '更新完成。请重启服务使新版本生效。');
+      this.state.task = `更新完成 ${latest.tag}`;
+    } catch (e) {
+      this._phase('error', 100, '');
+      this._log('ERR', `更新失败：${e.message || e}`);
+    } finally {
+      this.state.running = false;
+    }
+  }
+
+  /* ---------- 状态输出 ---------- */
+
+  status() {
+    const s = this.state;
+    const now = Date.now();
+    return {
+      env: s.env || null,
+      local: s.local || null,
+      latest: s.latest || null,
+      checkedAt: s.checkedAt || 0,
+      checking: !!s.checking,
+      running: !!s.running,
+      phase: s.phase,
+      progress: s.progress,
+      task: s.task,
+      startedAt: s.startedAt || 0,
+      elapsedSec: s.startedAt ? Math.round((now - s.startedAt) / 1000) : 0,
+      log: s.log,
+      hasUpdate: !!(s.latest && !s.latest.unavailable && s.local && s.latest.version && s.latest.version !== s.local.version),
+      remoteUnavailable: !!(s.latest && s.latest.unavailable),
+      repo: REPO,
+      branch: BRANCH,
+      tokenConfigured: !!this.token,
+      authHint: !!(s.latest && s.latest.authHint) ? s.latest.authHint : '',
+    };
+  }
+}

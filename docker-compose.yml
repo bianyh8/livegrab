@@ -23,6 +23,10 @@ services:
       RECORD_ROOT: "/data"
       # 配置/账号/日志目录（对应下面 /config 挂载）
       CONFIG_DIR: "/config"
+      # 私有仓库自动更新：代码仓库 bianyh8/livegrab 是私有的，
+      # 「系统设置 → 系统更新」从 GitHub 拉取最新版本需要此 Token（GitHub Personal Access Token，需 repo 读权限）。
+      # 在宿主机建 .env 文件写一行 LIVEGRAB_GITHUB_TOKEN=ghp_xxx，或直接填在此处；不配则更新页显示"无法获取远程版本"。
+      LIVEGRAB_GITHUB_TOKEN: "${LIVEGRAB_GITHUB_TOKEN:-}"
       # 需要走代理拉流时取消注释
       # HTTPS_PROXY: "http://host.docker.internal:7890"
 

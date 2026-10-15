@@ -17,6 +17,7 @@
 - **文件库**：成品平铺浏览、搜索筛选、播放、下载、删除；删除默认进回收站（含刮削图片/描述）。
 - **运行日志**：按级别/任务/关键字过滤，最新在前 / 实时追加。
 - **通知**：Webhook 推送（开播、录制结束、磁盘不足等事件）。
+- **系统更新**：「系统设置 → 系统更新」从 GitHub 拉取最新代码，对比本地版本并自动构建部署。
 - **安全**：管理员账号、会话策略、未登录拦截。
 
 ## 支持的平台
@@ -71,8 +72,35 @@ compose 相对 `livegrab/` 目录挂载：
 | `LIVEGRAB_PORT` | `8080` | 宿主机映射端口 |
 | `TZ` | `Asia/Shanghai` | 时区 |
 | `PORT` / `RECORD_ROOT` / `CONFIG_DIR` | `8080` / `/data` / `/config` | 容器内端口与卷路径 |
+| `LIVEGRAB_GITHUB_TOKEN` | （空） | **仅私有仓库**自动更新所需：GitHub Personal Access Token（需 `repo` 读权限）。公开仓库无需配置 |
+| `LIVEGRAB_REPO` | `bianyh8/livegrab` | 更新检查的目标仓库（`owner/repo`），分叉部署时改这里 |
+| `LIVEGRAB_BRANCH` | `main` | 更新检查的目标分支 |
 
 > 需要走代理拉流时，在 compose 里给容器加 `HTTPS_PROXY`（参考文件内注释）。
+
+### 系统更新（公开 / 私有仓库）
+
+「系统设置 → 系统更新」从 GitHub 拉取最新版本对比时，**会自动判断仓库可见性**：
+
+| 仓库类型 | 是否需要 Token | 页面行为 |
+| --- | --- | --- |
+| 公开仓库 | ❌ 不需要 | 匿名读取 GitHub API，开箱即用 |
+| 私有仓库 | ✅ 需要 | 匿名读取失败后自动带 Token 重试 |
+
+代码仓库 `bianyh8/livegrab` 当前是**私有仓库**，容器内需要提供 GitHub Token：
+
+```bash
+# ① 在 livegrab/ 目录建 .env 文件（不要提交到 git），写一行：
+echo "LIVEGRAB_GITHUB_TOKEN=ghp_你的token" > .env
+# ② 重启使环境变量生效
+docker compose up -d
+```
+
+- **Token 获取**：GitHub → Settings → Developer settings → Personal access tokens → Generate new token，勾选 `repo` 权限即可。
+- **Token 仅通过容器环境变量注入**，不写入数据库、不随接口返回、不在页面展示，安全性最高。
+- 本地免 Docker 运行（见下）时，服务会自动读取本机 `~/.git-credentials` 里的 GitHub 凭据，无需额外配置。
+- 页面行为：配置好 token 后「系统更新」页会显示远程最新版本，有新版本时「立即更新」按钮可用（容器内自动执行 git fetch → 更新代码 → 安装依赖；容器内无 git 环境时给出宿主机手动更新指引）。
+- 未配置 token 访问**私有**仓库时，页面会明确提示「私有仓库需要配置 GitHub Token」，不会误报有新版本；**公开**仓库则不会有任何 token 相关提示。
 
 ### 日常更新
 

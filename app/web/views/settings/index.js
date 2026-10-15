@@ -15,6 +15,7 @@ const TABS = [
   { id: 'platform', label: t('settings.tabPlatform') },
   { id: 'notify', label: t('settings.tabNotify') },
   { id: 'security', label: t('settings.tabSecurity') },
+  { id: 'update', label: t('settings.tabUpdate') },
 ];
 
 const state = {
@@ -86,6 +87,7 @@ async function mount(ctx) {
     else if (state.tab === 'naming') mod = await import('./tab-naming.js');
     else if (state.tab === 'platform') mod = await import('./tab-platform.js');
     else if (state.tab === 'notify') mod = await import('./tab-notify.js');
+    else if (state.tab === 'update') mod = await import('./tab-update.js');
     else mod = await import('./tab-security.js');
     activeTab = mod;
     await mod.render(paneHost, ctx, kit);

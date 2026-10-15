@@ -23,3 +23,7 @@ _inline.js
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# ---- 更新页 UI 截图与临时字体（仅设计预览用，不入库）----
+ui/.fonts/
+ui/update-*.png

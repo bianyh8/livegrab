@@ -165,6 +165,10 @@ export const api = {
 
   logs: async (params) => normalizeLogs(await request('GET', '/api/logs' + qs(params))),
   clearLogs: (from, to) => request('POST', '/api/logs/clear', { from: from || '', to: to || '' }),
+
+  updateStatus: () => request('GET', '/api/update/status'),
+  updateCheck: () => request('POST', '/api/update/check', {}),
+  updateApply: () => request('POST', '/api/update/apply', {}),
 };
 
 export default api;

@@ -13,6 +13,7 @@ import { Storage, playModeOf } from './storage.js';
 import { Notifier } from './notify.js';
 import { Scheduler } from './scheduler.js';
 import { PlayManager } from './play.js';
+import { UpdateManager } from './update.js';
 import * as media from './media.js';
 import { resolveRoom, platformList, PLATFORMS } from './resolvers/index.js';
 import { previewNaming, VARIABLES, DEFAULT_OPTIONS, qualityLabel, NAMING_OPTION_CHOICES } from './naming.js';
@@ -158,12 +159,15 @@ async function bootstrap() {
   storage.startCleanupTimer();
   await scheduler.init();
   const version = VERSION;
+  const update = new UpdateManager({ appDir: path.join(APP_DIR), logger });
+  await update.detectEnv().catch(() => {});
+  await update.localInfo().catch(() => {});
   // 版本细节进日志、不进页面：只保留第一行并去掉 "Copyright (c) …" 噪声，例如 "ffmpeg version git-2019-10-22-0b8956b"
   const ffvLine = String(ffv.version || '').split('\n')[0].replace(/\s+/g, ' ').trim();
   const ffvShort = ffvLine.replace(/\s*Copyright\b.*$/i, '').trim() || ffvLine;
   logger.info(`LiveGrab v${version} 启动完成：端口 ${PORT}，录制目录 ${RECORD_ROOT}，配置目录 ${CONFIG_DIR}，时区 ${tzName()}，ffmpeg ${ffv.available ? (ffvShort || 'ok') : '缺失（无法录制）'}`);
   if (!ffv.available) logger.error('未找到 ffmpeg：录制功能不可用。请确认镜像内已安装 ffmpeg，或设置 FFMPEG_PATH。');
-  return { store, logger, auth, storage, notifier, scheduler, play, version, scan };
+  return { store, logger, auth, storage, notifier, scheduler, play, version, scan, update };
 }
 
 function isPrivateIp(ip) {
@@ -174,7 +178,7 @@ function isPrivateIp(ip) {
 
 async function main() {
   const ctx = await bootstrap();
-  const { store, logger, auth, storage, scheduler, play, notifier, version } = ctx;
+  const { store, logger, auth, storage, scheduler, play, notifier, version, update } = ctx;
 
   // ---------- 路由 ----------
   const routes = [];
@@ -475,6 +479,11 @@ async function main() {
     play.stream(req.params.playId, req, res);
     return null; // 已自行处理响应
   });
+
+  // ---- 系统更新 ----
+  route('GET', '/api/update/status', async () => update.status());
+  route('POST', '/api/update/check', async () => update.check(true));
+  route('POST', '/api/update/apply', async () => update.apply());
 
   // ---- 日志 / 通知 ----
   route('GET', '/api/logs', async (req) => {
