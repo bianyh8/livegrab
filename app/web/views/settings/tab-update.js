@@ -191,9 +191,7 @@ function paint(root, st) {
           <div class="card-b">${notesBody}</div>
         </div>
         <div class="card">
-          <div class="card-h"><h3>${t('settings.upLogTitle')}</h3>
-            <span style="margin-left:auto"><select class="select" style="padding:5px 26px 5px 10px;font-size:12px" disabled><option>${t('settings.upLogAll')}</option></select></span>
-          </div>
+          <div class="card-h"><h3>${t('settings.upLogTitle')}</h3></div>
           <div class="card-b up-logbox">${logBody}</div>
         </div>
       </div>

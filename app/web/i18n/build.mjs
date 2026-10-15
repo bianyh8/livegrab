@@ -299,6 +299,8 @@ const REMOVE = [
   'files.unregTitle', 'files.unregCount', 'files.unregTag', 'files.unregHint', 'files.unregEmpty',
   'files.unregImport', 'files.unregImportAll', 'files.unregImported', 'files.unregImportFail',
   'files.unregScan', 'files.unregScanDone', 'files.unregScanFail',
+  // 更新日志卡片移除未实现的「全部日志」筛选占位下拉框
+  'settings.upLogAll',
 ];
 
 /* ---------------- ③ 去重：同文案归一到单一 key ---------------- */
