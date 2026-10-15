@@ -10,6 +10,10 @@ const ICON_REFRESH = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
 const ICON_DOWNLOAD = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M12 3v12M7 10l5 5 5-5"/><path d="M5 21h14"/></svg>';
 
 let pollTimer = null;
+let expectingRestart = false;   // 本地非容器更新将自动重启服务
+let sawRestartPhase = false;    // 后端已进入 restart 阶段
+let lastStatus = null;          // 最近一次成功拿到的状态（轮询失败时用于判断）
+let reloadedAfterRestart = false;
 
 export async function render(root, ctx, kit) {
   root.innerHTML = `<div class="card"><div class="empty">${t('settings.loading')}</div></div>`;
@@ -38,11 +42,30 @@ function startPolling(root) {
   pollTimer = setInterval(async () => {
     try {
       const st = await api.updateStatus();
+      lastStatus = st;
       if (root.isConnected) paint(root, st);
+      if (st.phase === 'restart') sawRestartPhase = true;
+      // 本地非容器部署在更新完成后会自动重启：记录该意图，便于轮询失败（端口释放瞬间）时仍能提示「重启中」
+      if (lastStatus && lastStatus.env && lastStatus.env.gitAvailable && !lastStatus.env.inContainer && st.running) {
+        expectingRestart = true;
+      }
+      // 已检测到重启且服务重新上线（空闲）= 新版本已就绪：自动刷新页面
+      if ((sawRestartPhase || expectingRestart) && !st.running && !st.checking && !reloadedAfterRestart) {
+        reloadedAfterRestart = true;
+        stopPolling();
+        toast(t('settings.upRestarted'));
+        setTimeout(() => location.reload(), 1000);
+        return;
+      }
       // 更新任务结束且空闲后，自动停止轮询
       if (!st.running && !st.checking) stopPolling();
-    } catch { /* 忽略瞬时错误 */ }
-  }, 2000);
+    } catch {
+      // 轮询失败（服务正在释放端口/重启）：若处于将自重启状态，展示「重启中」而非报错
+      if ((expectingRestart || sawRestartPhase) && !reloadedAfterRestart && root.isConnected) {
+        paintRestarting(root);
+      }
+    }
+  }, 1500);
 }
 
 function stopPolling() {
@@ -60,6 +83,8 @@ function paint(root, st) {
   const running = !!st.running || !!st.checking;
   const hasUpdate = !!st.hasUpdate;
   const remoteUnavailable = !!st.remoteUnavailable;
+  const isRestart = st.phase === 'restart';
+  if (isRestart) sawRestartPhase = true;
   const curVer = verNum(local);
   const curChip = `<span class="chip on"><i class="dot"></i>${t('settings.upDeployed')}</span>`;
   const latestVer = remoteUnavailable
@@ -93,6 +118,7 @@ function paint(root, st) {
           <span>${t('settings.upElapsed')} <b style="color:var(--txt-2)">${esc(fmtDur(st.elapsedSec || 0))}</b></span>
           <span>${t('settings.upEstimate')} <b style="color:var(--txt-2)">${esc(estimateLabel(st.phase))}</b></span>
         </div>
+        ${isRestart ? `<div class="up-restart-note"><i class="up-spin"></i><span>${t('settings.upRestartingBanner')}</span></div>` : ''}
       </div>
     </div>` : '';
 
@@ -123,6 +149,7 @@ function paint(root, st) {
 
   root.innerHTML = `
     <div class="stack" style="max-width:1100px">
+      ${isRestart ? `<div class="up-banner restart"><i class="up-spin"></i><span>${t('settings.upRestartingBanner')}</span></div>` : ''}
       <div class="card">
         <div class="card-h"><h3>${t('settings.upTitle')}</h3><span class="hint">${t('settings.upHint')}</span></div>
         <div class="card-b">
@@ -191,16 +218,27 @@ function paint(root, st) {
 
   const applyBtn = root.querySelector('#upApply');
   if (applyBtn) applyBtn.onclick = () => {
+    const env = (st && st.env) || (lastStatus && lastStatus.env) || null;
+    const localSelfRestart = !!(env && env.gitAvailable && !env.inContainer);
+    const confirmText = localSelfRestart
+      ? t('settings.upApplyConfirmLocal')
+      : t('settings.upApplyConfirmContainer');
     confirmDialog({
       title: t('settings.upApplyConfirmTitle'),
       danger: true,
       ok: t('settings.upApplyBtn'),
-      text: t('settings.upApplyConfirmText'),
+      text: confirmText,
       onOk: async () => {
+        // 新一轮更新：重置重启相关标记
+        expectingRestart = false;
+        sawRestartPhase = false;
+        reloadedAfterRestart = false;
         try {
           const r = await api.updateApply();
-          if (r && r.running) toast(t('settings.upApplyStarted'));
-          else if (r && r.busy) toast(t('settings.upApplyBusy'), 'warn');
+          if (r && r.running) {
+            toast(t('settings.upApplyStarted'));
+            if (localSelfRestart) expectingRestart = true; // 本地部署将自动重启
+          } else if (r && r.busy) toast(t('settings.upApplyBusy'), 'warn');
           const s = await api.updateStatus();
           paint(root, s);
           startPolling(root);
@@ -217,6 +255,7 @@ function phaseLabel(phase) {
     case 'fetch': return t('settings.upPhaseFetch');
     case 'pull': return t('settings.upPhasePull');
     case 'install': return t('settings.upPhaseInstall');
+    case 'restart': return t('settings.upPhaseRestart');
     case 'done': return t('common.completed');
     case 'error': return t('settings.upPhaseError');
     default: return t('settings.upPhaseIdle');
@@ -227,7 +266,20 @@ function estimateLabel(phase) {
   if (phase === 'install') return '~ 1 分钟';
   if (phase === 'pull') return '~ 30 秒';
   if (phase === 'fetch') return '~ 15 秒';
+  if (phase === 'restart') return '即将完成';
   return '—';
+}
+
+/** 轮询失败（服务正在释放端口/重启）时，展示「自动重启中」全屏提示而非报错。 */
+function paintRestarting(root) {
+  root.innerHTML = `
+    <div class="stack" style="max-width:1100px">
+      <div class="card restart-card">
+        <div class="restart-spinner"></div>
+        <h3>${t('settings.upRestartingTitle')}</h3>
+        <p class="restart-sub">${t('settings.upRestartingSub')}</p>
+      </div>
+    </div>`;
 }
 
 function clampNum(n) {

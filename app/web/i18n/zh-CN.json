@@ -814,9 +814,16 @@
   "settings.upPhasePull": "更新代码",
   "settings.upPhaseInstall": "安装依赖",
   "settings.upPhaseError": "未完成",
+  "settings.upPhaseRestart": "自动重启中",
   "settings.upLocalVer": "本地版本 {0}",
   "settings.upLogEmpty": "暂无更新日志。",
   "settings.upRestartTip": "重启服务后新版本生效。",
   "settings.upLatestChip": "最新",
-  "settings.upPrivateRepoHint": "当前为私有仓库：请设置环境变量 LIVEGRAB_GITHUB_TOKEN（GitHub Personal Access Token）后重启服务，即可自动检测更新。"
+  "settings.upPrivateRepoHint": "当前为私有仓库：请设置环境变量 LIVEGRAB_GITHUB_TOKEN（GitHub Personal Access Token）后重启服务，即可自动检测更新。",
+  "settings.upRestartingBanner": "服务正在自动重启以加载新版本，预计几秒后自动恢复，无需手动操作。",
+  "settings.upRestartingTitle": "服务正在重启",
+  "settings.upRestartingSub": "正在加载新版本，预计几秒后自动恢复。页面会自动刷新，请稍候…",
+  "settings.upRestarted": "服务已重启，新版本已生效",
+  "settings.upApplyConfirmLocal": "将从 GitHub 拉取最新代码并安装依赖。本地部署更新完成后会自动重启服务加载新版本，更新期间请勿关闭页面。",
+  "settings.upApplyConfirmContainer": "将从 GitHub 拉取最新代码。容器部署无法在线重启，更新后需执行 docker compose up -d --build 重建镜像方可生效，更新期间请勿关闭页面。"
 }

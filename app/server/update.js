@@ -360,9 +360,13 @@ export class UpdateManager {
 
       // ⑥ 完成：本地模式优先「拉取后自重启」以加载新版本；无重启钩子时退回手动提示
       if (typeof this.restartHook === 'function') {
-        this._log('OK', '更新完成，正在重启服务以加载新版本…');
+        // 先进入「重启中」阶段：旧进程此刻仍在线、HTTP 可正常响应，给前端轮询一个窗口
+        // 看到明确的「自动重启中」状态（而非停留在上一阶段的进度条），随后才真正优雅退出。
+        this._phase('restart', 92, '正在重启服务');
+        this._log('OK', '代码已更新，正在重启服务以加载新版本…');
+        await sleep(1500);
         try {
-          await this.restartHook();
+          await this.restartHook(); // 优雅停止 + re-exec（此调用会退出当前进程）
         } catch (e) {
           this._log('WARN', `自动重启失败（${e?.message || e}），请手动重启服务使新版本生效`);
         }
