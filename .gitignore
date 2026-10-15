@@ -27,3 +27,6 @@ desktop.ini
 # ---- 更新页 UI 截图与临时字体（仅设计预览用，不入库）----
 ui/.fonts/
 ui/update-*.png
+
+# ---- WorkBuddy 内部数据（记忆/任务等，非项目源码，不入库）----
+.workbuddy/
