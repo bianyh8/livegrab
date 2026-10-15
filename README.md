@@ -2,7 +2,7 @@
 
 自托管的**直播录制管理台**：自动监控直播间，开播即录、按策略分段、按规则命名入库，带完整 Web 管理界面。个人/小团队长期存档直播内容（切片、留档）用。
 
-- **单容器 Web 服务**：浏览器访问 `http://<主机>:8080` 即可，全部操作在页面完成，无需桌面壳。
+- **单容器 Web 服务**：浏览器访问 `http://<主机>:18080` 即可，全部操作在页面完成，无需桌面壳。
 - **唯一 npm 依赖 `better-sqlite3`**（SQLite 存储，构建时 `npm ci` 安装），其余后端逻辑只用 Node 内置模块，ffmpeg 以子进程方式调度，前端为静态 ESM、无前端构建步骤。
 - **免 Docker 也能跑**：本机装了 Node 22+ 与 ffmpeg 可直接运行（见 [本地运行](#本地运行)）。
 
@@ -53,7 +53,7 @@ docker compose up -d --build
 
 **③ 打开页面**
 ```
-http://<主机IP>:8080
+http://<主机IP>:18080
 ```
 首次打开会引导**初始化管理员账号**（设置用户名与密码）。
 
@@ -69,7 +69,7 @@ compose 相对 `livegrab/` 目录挂载：
 
 | 变量 | 默认 | 说明 |
 |---|---|---|
-| `LIVEGRAB_PORT` | `8080` | 宿主机映射端口 |
+| `LIVEGRAB_PORT` | `18080` | 宿主机映射端口 |
 | `TZ` | `Asia/Shanghai` | 时区 |
 | `PORT` / `RECORD_ROOT` / `CONFIG_DIR` | `8080` / `/data` / `/config` | 容器内端口与卷路径 |
 | `LIVEGRAB_GITHUB_TOKEN` | （空） | **仅私有仓库**自动更新所需：GitHub Personal Access Token（需 `repo` 读权限）。公开仓库无需配置 |
@@ -109,13 +109,13 @@ cd livegrab
 git pull
 docker compose up -d --build
 ```
-> `docker compose up` 检测到镜像/配置变化会自动重建，数据在挂载卷里不受影响。改端口用 `LIVEGRAB_PORT=9000 docker compose up -d`，改时区用 `TZ=Asia/Shanghai`。
+> `docker compose up` 检测到镜像/配置变化会自动重建，数据在挂载卷里不受影响。改端口用 `LIVEGRAB_PORT=9000 docker compose up -d`（默认 18080），改时区用 `TZ=Asia/Shanghai`。
 
 ### 不想克隆也能直接构建
 
 ```bash
 docker build -t livegrab:0.1.0 https://github.com/bianyh8/livegrab.git
-docker run -d --name livegrab -p 8080:8080 \
+docker run -d --name livegrab -p 18080:8080 \
   -v "$PWD/data:/data" -v "$PWD/config:/config" \
   -e TZ=Asia/Shanghai --restart unless-stopped \
   livegrab:0.1.0
@@ -165,7 +165,7 @@ start-local.cmd  # 本地一键启动
 ## 健康检查
 
 ```bash
-curl http://<主机>:8080/api/health
+curl http://<主机>:18080/api/health
 ```
 
 ---

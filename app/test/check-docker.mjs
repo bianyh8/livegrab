@@ -78,7 +78,7 @@ check(ignored('ui/index.html') && ignored('ui/_app-dashboard.png'), '.dockerigno
 check(ignored('data/x.ts') && ignored('config/state.json'), '.dockerignore 排除本地 data/config（不会把本机录像打进镜像）');
 
 /* ---------- 4) compose 与 Dockerfile 自洽 ---------- */
-check(/\$\{LIVEGRAB_PORT:-8080\}:8080/.test(compose), 'compose 端口映射到容器 8080，宿主端口可用 LIVEGRAB_PORT 覆盖');
+check(/\$\{LIVEGRAB_PORT:-\d+\}:8080/.test(compose), 'compose 端口映射到容器 8080，宿主端口可用 LIVEGRAB_PORT 覆盖');
 check(/\/data/.test(compose) && /\/config/.test(compose), 'compose 挂载 /data 与 /config');
 check(/TZ:\s*"\$\{TZ:-/.test(compose), 'compose 里的 TZ 可配置（D15）');
 check(/stop_grace_period/.test(compose), 'compose 设置 stop_grace_period（停止时给 ffmpeg 收尾时间）');

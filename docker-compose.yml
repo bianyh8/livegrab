@@ -1,6 +1,6 @@
 # LiveGrab 直播录制台 —— 一条命令起服务
 #   docker compose up -d --build
-#   open http://<主机IP>:8080    首次打开会要求设置管理员密码
+#   open http://<主机IP>:18080    首次打开会要求设置管理员密码
 services:
   livegrab:
     build:
@@ -12,8 +12,8 @@ services:
     init: true
 
     ports:
-      # 左边是宿主机端口，可用 .env 里的 LIVEGRAB_PORT 改
-      - "${LIVEGRAB_PORT:-8080}:8080"
+      # 左边是宿主机端口（默认 18080），可用 .env 里的 LIVEGRAB_PORT 改
+      - "${LIVEGRAB_PORT:-18080}:8080"
 
     environment:
       # D15：时区由 compose 提供，页面上只读展示（改这里后 docker compose up -d 生效）
