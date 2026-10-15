@@ -28,9 +28,9 @@ ENV NODE_ENV=production \
     TZ=Asia/Shanghai \
     LANG=C.UTF-8
 
-# ffmpeg 是唯一的外部依赖（录制/转封装/合并/回放全靠它）
+# ffmpeg 是唯一的外部依赖（录制/转封装/合并/回放全靠它）；git 供容器内「系统更新」在线拉取代码用
 RUN apt-get update \
- && apt-get install -y --no-install-recommends ffmpeg ca-certificates tzdata \
+ && apt-get install -y --no-install-recommends ffmpeg ca-certificates tzdata git \
  && rm -rf /var/lib/apt/lists/* \
  && ffmpeg -version | head -n 1
 
@@ -64,4 +64,10 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
 
 # 收到 SIGTERM 会优雅收尾正在录制的分段（compose 里留了 stop_grace_period）
 STOPSIGNAL SIGTERM
+
+# 入口脚本：首次启动把仓库 clone 到 ${CONFIG_DIR}/src 并切到镜像内置版本，之后从该目录运行；
+# 页面「立即更新」在容器内完成 git pull + npm install + 自重启（架构 B）。详见 deploy/entrypoint.sh 头部注释。
+COPY deploy/entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 CMD ["node", "server/server.js"]

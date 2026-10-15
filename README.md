@@ -49,7 +49,8 @@ cd livegrab
 ```bash
 docker compose up -d --build
 ```
-> 镜像名 `livegrab:0.1.0`，容器名 `livegrab`，`restart: unless-stopped` 自动开机自启。
+> 镜像名 `livegrab:latest`，容器名 `livegrab`，`restart: unless-stopped` 自动开机自启。
+> 首次启动时容器会把代码仓库自动 clone 到 `./config/src`（私有仓库需先配好 `LIVEGRAB_GITHUB_TOKEN`，见下文），日志里可看到 `[entrypoint]` 开头的克隆进度。
 
 **③ 打开页面**
 ```
@@ -64,6 +65,7 @@ compose 相对 `livegrab/` 目录挂载：
 |---|---|---|
 | `./data` → `/data` | 录制成品与分段 | 占空间最大，挂到大容量磁盘 |
 | `./config` → `/config` | 账号哈希、Cookie、任务、场次索引、日志、SQLite 库（livegrab.db） | 长期保留 |
+| `./config/src` | 容器实际运行的代码（git  clone，架构 B） | 由容器管理，勿手改；删除后重启容器会重新克隆 |
 
 ### 环境变量（`docker-compose.yml` 可调）
 
@@ -72,9 +74,10 @@ compose 相对 `livegrab/` 目录挂载：
 | `LIVEGRAB_PORT` | `18080` | 宿主机映射端口 |
 | `TZ` | `Asia/Shanghai` | 时区 |
 | `PORT` / `RECORD_ROOT` / `CONFIG_DIR` | `8080` / `/data` / `/config` | 容器内端口与卷路径 |
-| `LIVEGRAB_GITHUB_TOKEN` | （空） | **仅私有仓库**自动更新所需：GitHub Personal Access Token（需 `repo` 读权限）。公开仓库无需配置 |
-| `LIVEGRAB_REPO` | `bianyh8/livegrab` | 更新检查的目标仓库（`owner/repo`），分叉部署时改这里 |
-| `LIVEGRAB_BRANCH` | `main` | 更新检查的目标分支 |
+| `LIVEGRAB_GITHUB_TOKEN` | （空） | **私有仓库**必备：GitHub Personal Access Token（需 `repo` 读权限）。用于版本检测、首启 clone、页面更新拉码三处 |
+| `LIVEGRAB_REPO` | `bianyh8/livegrab` | 更新检查与 clone 的目标仓库（`owner/repo`），分叉部署时改这里 |
+| `LIVEGRAB_BRANCH` | `main` | 更新检查与 clone 的目标分支 |
+| `LIVEGRAB_GIT_URL` | 由 `LIVEGRAB_REPO` 推导 | 仓库完整 clone URL（非 GitHub 托管时才需要显式设置） |
 
 > 需要走代理拉流时，在 compose 里给容器加 `HTTPS_PROXY`（参考文件内注释）。
 
@@ -99,33 +102,39 @@ docker compose up -d
 - **Token 获取**：GitHub → Settings → Developer settings → Personal access tokens → Generate new token，勾选 `repo` 权限即可。
 - **Token 仅通过容器环境变量注入**，不写入数据库、不随接口返回、不在页面展示，安全性最高。
 - 本地免 Docker 运行（见下）时，服务会自动读取本机 `~/.git-credentials` 里的 GitHub 凭据，无需额外配置。
-- 页面行为：配置好 token 后「系统更新」页会显示远程最新版本，有新版本时「立即更新」按钮可用（容器内自动执行 git fetch → 更新代码 → 安装依赖；容器内无 git 环境时给出宿主机手动更新指引）。
+- 页面行为：配置好 token 后「系统更新」页会显示远程最新版本，有新版本时「立即更新」按钮可用（容器内自动执行 git fetch → 快进拉取 → 安装依赖 → 自动重启，全程约 10~60 秒，页面有进度与重启提示）。
 - 未配置 token 访问**私有**仓库时，页面会明确提示「私有仓库需要配置 GitHub Token」，不会误报有新版本；**公开**仓库则不会有任何 token 相关提示。
 
-### 日常更新
+### 容器里代码从哪来、怎么更新（架构 B）
 
-```bash
-cd livegrab
-git pull
-docker compose up -d --build
-```
-> `docker compose up` 检测到镜像/配置变化会自动重建，数据在挂载卷里不受影响。改端口用 `LIVEGRAB_PORT=9000 docker compose up -d`（默认 18080），改时区用 `TZ=Asia/Shanghai`。
+镜像本身**不包含业务源码**（只含 `node_modules` 基线、ffmpeg、git 和入口脚本）。容器首次启动时，入口脚本 `deploy/entrypoint.sh` 会把仓库 clone 到 `./config/src`、切换到镜像内置版本，之后服务从该目录运行。因此：
+
+- **日常更新 = 页面点「立即更新」**：容器内自己完成 `git pull → npm install → 重启`，不动镜像、不丢录制，宿主机无需干预。
+- **镜像级变更才需要在宿主机重建**（更换 ffmpeg / Node 版本、修改入口脚本本身）：
+  ```bash
+  cd livegrab && git pull && docker compose up -d --build
+  ```
+- **群晖 NAS 定时更新**：用仓库里的 `deploy/update.sh`（同步宿主机仓库、`./config/src` 与镜像，有更新才重启）。
+- `./config/src` 由容器管理：能写该目录 ≈ 能在容器内执行代码，请按配置目录的密级对待；代码目录损坏时会自动重克，也可手动 `rm -rf ./config/src` 后重启容器恢复。
 
 ### 不想克隆也能直接构建
 
 ```bash
-docker build -t livegrab:0.1.0 https://github.com/bianyh8/livegrab.git
+docker build -t livegrab:latest https://github.com/bianyh8/livegrab.git
 docker run -d --name livegrab -p 18080:8080 \
   -v "$PWD/data:/data" -v "$PWD/config:/config" \
-  -e TZ=Asia/Shanghai --restart unless-stopped \
-  livegrab:0.1.0
+  -e TZ=Asia/Shanghai -e LIVEGRAB_GITHUB_TOKEN=ghp_你的token \
+  --restart unless-stopped \
+  livegrab:latest
 ```
-（compose 方式更省事，这个适合想手写 `run` 的情况。）
+（compose 方式更省事，这个适合想手写 `run` 的情况。私有仓库不配 token 也能启动，但首启 clone 会失败并回退镜像内置代码。）
 
 ### 停止 / 排障
 
 - 停止：`docker compose stop`（已配置 `stop_grace_period: 30s`，会先把当前分段收尾再退出）；彻底移除：`docker compose down`。
 - 看日志：`docker compose logs -f --tail=200 livegrab`。
+- 更新页提示「容器内未检测到代码仓库」：首启克隆失败（网络/ token），修好后重启容器即可，页面「立即更新」在此期间不可用。
+- 容器行为异常、怀疑代码目录损坏：`rm -rf ./config/src` 后 `docker compose restart livegrab`，会重新克隆到镜像内置版本。
 
 ---
 
@@ -145,8 +154,10 @@ start-local.cmd        # Windows：双击或命令行运行
 
 ```bash
 cd app
-node test/run.js              # 常规单元测试（含 API / 解析 / 存储）
-node test/check-docker.mjs    # Docker 打包自检（无需装 Docker）：Dockerfile/compose/.dockerignore 静态校验 + 容器形态冒烟 + 依赖校验（唯一第三方依赖 better-sqlite3）
+node test/run.js                # 常规单元测试（含 API / 解析 / 存储）
+node test/update-manager.mjs   # 更新管理器单元测试（mock GitHub，离线）
+node test/update-git-flow.mjs  # 架构 B 容器更新链路集成测试（离线自建 git 场景，无 git 自动跳过）
+node test/check-docker.mjs     # Docker 打包自检（无需装 Docker）：Dockerfile/compose/.dockerignore 静态校验 + 容器形态冒烟 + 依赖校验（唯一第三方依赖 better-sqlite3）
 ```
 
 ## 目录结构
@@ -159,6 +170,7 @@ app/
   docs/          # 接口契约等文档
 ui/              # UI 设计原型与说明（不进 Docker 镜像）
 Dockerfile / docker-compose.yml / .dockerignore
+deploy/          # entrypoint.sh（容器入口：clone/回退/启动）、update.sh（群晖定时更新）
 start-local.cmd  # 本地一键启动
 ```
 

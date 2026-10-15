@@ -39,8 +39,9 @@ export class UpdateManager {
   constructor({ appDir, logger, token, restart } = {}) {
     this.appDir = appDir || process.cwd();
     this.logger = logger || null;
-    // 本地（非容器）更新完成后的自重启钩子：由 server.js 注入优雅停止 + re-exec 逻辑。
-    // 容器/无 git 场景不走此钩子（会提前返回手动重建指引）。
+    // 更新完成后的自重启钩子：由 server.js 注入优雅停止 + re-exec 逻辑。
+    // 本地运行与架构 B 容器（/config/src 自带 .git）都会走到此钩子；
+    // 容器首启克隆失败/镜像过旧（无 git）时提前返回手动重建指引，不走此钩子。
     this.restartHook = (typeof restart === 'function') ? restart : null;
     // Token 优先级：显式传入 > 环境变量 LIVEGRAB_GITHUB_TOKEN > 本地 ~/.git-credentials 兜底
     this.token = token || process.env.LIVEGRAB_GITHUB_TOKEN || readGitCredentialsToken();
@@ -281,6 +282,14 @@ export class UpdateManager {
       const latest = this.state.latest;
       this.state.progress = 8;
 
+      // 远程不可见（网络异常/仓库不可达）：不能当作「已是最新」，给出明确指引
+      if (latest && latest.unavailable) {
+        this._phase('done', 100, '');
+        this._log('WARN', '无法获取远程版本信息（仓库不可见或网络异常），本次更新已取消');
+        this._log('INFO', '请检查网络连接后重试；私有仓库需配置 LIVEGRAB_GITHUB_TOKEN，容器部署还需确认容器能访问外网');
+        return;
+      }
+
       const hasNew = this._computeHasUpdate(local, latest);
 
       // 没有新版本：直接结束，不再误报「发现新版本」（commit 一致即视为最新，即使版本号字符串不同）
@@ -294,12 +303,13 @@ export class UpdateManager {
 
       if (!env.gitAvailable) {
         // 容器/无 git：不能伪更新，给手动指引。这是正常的「需手动重建」状态，不是错误。
+        // 架构 B 下容器正常启动后自带 .git（/config/src），只有首启克隆失败或镜像过旧才会到这里。
         this._phase('done', 15, '需手动重建镜像更新');
         this._log('WARN', env.inContainer
-          ? '当前运行在容器中，容器内不含 .git，无法在线拉取代码'
+          ? '容器内未检测到代码仓库（首次启动克隆失败，或镜像过旧未内置 git）'
           : '未检测到可用 git 仓库，无法在线拉取代码');
-        this._log('INFO', env.dockerAvailable || env.inContainer
-          ? '请在宿主机执行：docker compose up -d --build'
+        this._log('INFO', env.inContainer
+          ? '请检查容器网络；私有仓库需配置 LIVEGRAB_GITHUB_TOKEN。重启容器会重试自动克隆；或在宿主机执行：docker compose up -d --build'
           : `请在源码目录手动执行：git pull origin ${BRANCH} && npm install`);
         this._log('INFO', '已生成手动更新指引。重建并重启容器后生效。');
         this._phase('done', 100, '需手动重建镜像更新');

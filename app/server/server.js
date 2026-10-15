@@ -161,8 +161,10 @@ async function bootstrap() {
   await scheduler.init();
   const version = VERSION;
   const update = new UpdateManager({ appDir: path.join(APP_DIR), logger });
-  // 本地（非容器）更新完成后自重启：优雅停止录制器/持久化/关服务，再 re-exec 自身加载新版本。
-  // 容器/无 git 场景不会走到此钩子（update.js 会提前返回手动重建指引）。
+  // 更新完成后自重启：优雅停止录制器/持久化/关服务，再 re-exec 自身加载新版本。
+  // 本地运行直接生效；架构 B 容器（/config/src 自带 .git）同样走此钩子——
+  // re-exec 的新进程从 /config/src/app 加载新代码，配合 init:true 容器不退出。
+  // 容器首启克隆失败/镜像过旧（无 git）时 update.js 会提前返回手动重建指引，不走此钩子。
   update.restartHook = async () => {
     logger.info('更新完成，正在优雅停止当前实例并重启以加载新版本…');
     scheduler.stopPolling();

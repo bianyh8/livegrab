@@ -156,5 +156,7 @@ fs.rmSync(SIM, { recursive: true, force: true });
 
 console.log(`\n==== 打包自检结果：${bad === 0 ? 'ALL PASS' : `${bad} 项失败`} ====`);
 console.log('提示：本脚本不执行 docker build（本机可能没装 Docker）。真正的镜像构建请在宿主机执行：');
-console.log('      docker compose up -d --build   →   docker compose exec livegrab node test/e2e-ffmpeg.mjs');
+console.log('      docker compose up -d --build');
+console.log('      架构 B 下容器从 /config/src/app 运行，验证运行中代码：');
+console.log('      docker compose exec -w /config/src/app livegrab node test/e2e-ffmpeg.mjs');
 process.exit(bad ? 1 : 0);
