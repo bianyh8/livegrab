@@ -3,7 +3,8 @@
    ② 从 GitHub API（bianyh8/livegrab）拉取最新版本与提交，做对比；
    ③ 「立即更新」后台任务：git fetch + git pull（环境支持时），否则给出手动更新指引；
    ④ 内存态更新进度与日志（前端轮询 /api/update/status 获取）。
-   设计约定：容器内（无 .git / 无 git）不做伪更新，明确提示手动步骤；本模块零第三方依赖。 */
+   设计约定：本地与架构 B 容器（/config/src 自带 .git）走完整的「拉取 → 装依赖 → 自重启」；
+   容器首启克隆失败/镜像过旧（无 .git / 无 git）时不伪更新，明确提示手动步骤；本模块零第三方依赖。 */
 
 import { execFile } from 'node:child_process';
 import fs from 'node:fs';

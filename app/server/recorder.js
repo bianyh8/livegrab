@@ -230,7 +230,7 @@ export class Recorder extends EventEmitter {
     }
   }
 
-  /* ffmpeg 输出写入本身天然位率率不稳，这里按 1.5s 采样「累计已写字节」的增量估算瞬时下行速率 */
+  /* ffmpeg 输出写入本身天然码率不稳，这里按 1.5s 采样「累计已写字节」的增量估算瞬时下行速率 */
   _sampleRate(cur) {
     const now = Date.now();
     const total = this._cumBase + this.currentBytes;

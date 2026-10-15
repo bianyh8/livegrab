@@ -1,5 +1,6 @@
 /* LiveGrab · views/dashboard.js —— 总览
-   4 张统计卡（口径照 D2）＋ 正在录制（分段进度条 + 暂停本段/停止）＋ 排队/等待开播（含 queueReason）。
+   3 张统计卡（任务 / 当日 / 存储与磁盘，口径照 D2）＋ 正在录制（分段进度条 + 全部暂停/停止）。
+   排队/等待开播/仅监控不在总览展示（2026-10-10 起移除任务状态卡，任务详情见任务管理页）。
    数据来自 GET /api/status。最近事件已并入「运行日志」页；磁盘只在统计卡里出现一次（不再有第二张磁盘卡）；
    引擎/ffmpeg 细节也不再在总览展示（见「运行日志」页）。 */
 
@@ -12,7 +13,7 @@ import {
 
 export const page = 'dashboard';
 
-const state = { tasks: [], booted: false, pending: false, lastStatus: null, collapsed: new Set(['rec', 'wait', 'monitor']), idleFilter: '' };
+const state = { tasks: [], booted: false, pending: false, lastStatus: null };
 
 export async function render(root, ctx) {
   root.innerHTML = `<div class="stack"><div class="card"><div class="empty">${_t('dashboard.loading')}</div></div></div>`;
@@ -39,11 +40,6 @@ function tasksOfType(type) {
   return state.tasks.filter((t) => t.status === type);
 }
 
-function open(key) { return !state.collapsed.has(key); }
-function collapseBtn(key, isOpen) {
-  return `<button class="collapse-btn${isOpen ? ' open' : ''}" data-collapse="${key}" title="${_t('dashboard.collapseToggle')}" aria-expanded="${isOpen ? 'true' : 'false'}" style="flex:0 0 auto"></button>`;
-}
-
 function paint(ctx, status) {
   const root = document.getElementById('view');
   if (!root) return;
@@ -56,39 +52,23 @@ function paint(ctx, status) {
   const stats = (status && status.stats) || {};
   const disk = (status && status.disk) || {};
   const recording = (status && status.recording) || [];
-  const waiting = (status && status.waiting) || [];
-  const queue = (status && status.queue) || [];
-  // 等待录制：只显示「需要录制、但尚未开播」的任务，排除仅监控
-  const waitingView = waiting.filter((w) => w.monitorOnly !== true);
-  const queueView = queue.filter((q) => !state.tasks.find((t) => t.id === q.id)?.monitorOnly);
-  // 仅监控：从任务全量里筛出 monitorOnly，展示实时直播状态
+  // 仅监控：从任务全量里筛出 monitorOnly，统计卡展示数量
   const monitorList = state.tasks.filter((t) => t.monitorOnly);
 
   const recCount = num(stats.recordingCount, recording.length);
   const cap = num(stats.concurrencyCap, ctx.limits.maxConcurrency);
-  const queuedCount = num(stats.queuedCount, queue.length);
-  // 等待开播：与顶部状态栏同源（后端 stats.waitingCount），仅计「待录制、未开播」非仅监控任务，排队单独显示
-  const waitCount = num(stats.waitingCount, queueView.length + waitingView.length);
+  const queuedCount = num(stats.queuedCount, (status && status.queue || []).length);
   const usedBytes = Number(disk.usedBytes) || 0;
   const totalBytes = Number(disk.totalBytes) || 0;
   const freeBytes = Number(disk.freeBytes) || Math.max(0, totalBytes - usedBytes);
   const trashBytes = Number(disk.trashBytes) || 0;
   const pstore = (status && status.platformStore) || [];
   const platformTotal = pstore.reduce((a, p) => a + (p.bytes || 0), 0);
-  const pstoreCount = pstore.filter((p) => p.bytes > 0).length;
   const bw = Number(stats.downSpeed) || 0;
   const bwText = bw > 8 * 1024 * 1024 ? `${(bw / (8 * 1024 * 1024)).toFixed(1)} MB/s` : (bw > 0 ? `${Math.round(bw / (8 * 1024))} KB/s` : '0');
-  // 任务状态表：排队 + 等待开播 + 仅监控 合并，按 kind 区分
-  const idle = [
-    ...queueView.map((q) => ({ kind: 'queued', ...q })),
-    ...waitingView.map((w) => ({ kind: 'waiting', ...w })),
-    ...monitorList.map((m) => ({ kind: 'monitor', ...m })),
-  ];
-  const idleFiltered = state.idleFilter ? idle.filter((t) => t.kind === state.idleFilter) : idle;
   const liveCount = state.tasks.filter((t) => t.liveStatus === 'live').length;
   const waitNum = Number(stats.waitingCount) || 0;
   const usePct = recCount && cap ? Math.round((recCount / cap) * 100) : 0;
-  const avgRateText = recCount ? `${((bw / Math.max(1, recCount)) / (8 * 1024 * 1024)).toFixed(1)} MB/s` : '—';
   const totalDurationSec = Number(stats.totalDurationSec) || 0;
 
   root.innerHTML = `
@@ -150,8 +130,6 @@ function todayDuration(sec) {
   if (h > 0) return `${h}<small>${_t('common.hour')}</small> ${m}<small>${_t('common.minute')}</small>`;
   return `${m}<small>${_t('common.minutes')}</small>`;
 }
-
-/* 下载带宽字段 live.speed 由后端实时下发，已改在 app.js 顶部状态栏展示 */
 
 /* 存储分布：左侧环形 + 右侧平台文字，环形中心合计为红色 */
 function platformStoreBlock(pstore) {
@@ -253,124 +231,9 @@ function segLabel(t) {
   return _t('dashboard.segPerMin', segDurText(t.segmentMinutes));
 }
 
-function queueItem(q, ctx) {
-  const name = parseName(q.name);
-  const qtask = state.tasks.find((x) => x.id === q.id) || null;
-  return `
-    <div class="rec-item" style="padding:11px 16px">
-      ${dashThumb(qtask || q, _t('dashboard.queuedTag'))}
-      ${platBadge(name.platform)}
-      <div class="rec-main">
-        <div class="ttl" style="font-size:13px">${esc(name.text)}</div>
-        <div class="meta"><span class="chip wait"><i class="dot"></i>${_t('common.queued')}</span><span>${esc(q.reason || _t('common.waitSlot'))}</span></div>
-      </div>
-      <div class="acts">
-        <button class="btn sm" data-act="detail" data-id="${esc(q.id)}">${_t('common.detail')}</button>
-      </div>
-    </div>`;
-}
-
-/* 总览行缩略图：显示主播头像（经服务端代理，规避平台热链 403）；无头像时回退到占位文案 */
-function dashThumb(t, label) {
-  return `
-    <div class="thumb">
-      <span class="th-ph">${esc(label)}</span>
-      <img class="tk-thumb" loading="lazy" src="/api/tasks/${esc(t.id)}/avatar" alt="" onerror="this.style.display='none'" />
-    </div>`;
-}
-
-function waitItem(t) {
-  const quality = qualityLabelOf(t);
-  const poll = t.pollIntervalSec || 60;
-  return `
-    <div class="rec-item" style="padding:11px 16px">
-      ${dashThumb(t, _t('dashboard.toPlay'))}
-      ${platBadge(t.platform, t.platformName)}
-      <div class="rec-main">
-        <div class="ttl" style="font-size:13px">${esc(t.name || t.anchorName || _t('common.unnamed'))}</div>
-        <div class="meta"><span>${_t('common.pollSec', Number(poll))}</span><span>${esc(quality)}</span>${t.statusMessage ? `<span>${esc(t.statusMessage)}</span>` : ''}</div>
-      </div>
-      <span class="chip wait"><i class="dot"></i>${_t('dashboard.notLive')}</span>
-      <div class="acts">
-        <button class="btn sm" data-act="check" data-id="${esc(t.id)}" title="${_t('common.checkLiveTip')}">${_t('common.checkLive')}</button>
-        <button class="btn sm ghost" data-act="detail" data-id="${esc(t.id)}">${_t('common.detail')}</button>
-      </div>
-    </div>`;
-}
-
-/** 仅监控条目：直播状态 + 快捷操作（直播中→开始录制；未直播→立即检测） */
-function monitorItem(t) {
-  const live = t.liveStatus === 'live';
-  return `
-    <div class="rec-item" style="padding:11px 16px">
-      ${dashThumb(t, '监控')}
-      ${platBadge(t.platform, t.platformName)}
-      <div class="rec-main">
-        <div class="ttl" style="font-size:13px">${esc(t.anchorName || t.name || _t('common.unnamed'))}<span class="chip bili" style="margin-left:6px"><i class="dot"></i>${_t('common.monitorOnly')}</span></div>
-        <div class="meta"><span class="chip ${live ? 'on' : 'off'}"><i class="dot"></i>${live ? _t('dashboard.statLive') : _t('tasks.notLive')}</span><span>${_t('common.room', esc(t.roomId || '—'))}</span>${t.statusMessage ? `<span>${esc(t.statusMessage)}</span>` : ''}</div>
-      </div>
-      <div class="acts">
-        ${live
-          ? `<button class="btn sm ok" data-act="start" data-id="${esc(t.id)}" title="${_t('tasks.monitorOnlyStartTip')}">${_t('tasks.batchStart')}</button>`
-          : `<button class="btn sm" data-act="check" data-id="${esc(t.id)}">${_t('common.checkLive')}</button>`}
-        <button class="btn sm ghost" data-act="detail" data-id="${esc(t.id)}">详情</button>
-      </div>
-    </div>`;
-}
-
-/** 任务状态统一行（排队 / 等待开播 / 仅监控）：头像+平台+主播名+直播状态+立即检测+详情 单行一行 */
-function idleRow(t) {
-  const isMonitor = t.kind === 'monitor';
-  const live = t.liveStatus === 'live';
-  let statusChip;
-  if (t.kind === 'queued') statusChip = `<span class="chip wait"><i class="dot"></i>${_t('common.queued')}</span>`;
-  else if (isMonitor) statusChip = `<span class="chip ${live ? 'on' : 'off'}"><i class="dot"></i>${live ? _t('dashboard.statLive') : _t('tasks.notLive')}</span>`;
-  else statusChip = `<span class="chip wait"><i class="dot"></i>${_t('common.waiting')}</span>`;
-  const name = t.anchorName || String(t.name || '').replace(/^【.+?】/, '') || _t('common.unnamed');
-  const plat = t.platform || parseName(t.name).platform;
-  const platName = PLATMAP[plat] || (t.platformName || _t('common.unknown'));
-  const avLabel = isMonitor ? '监控' : (t.kind === 'queued' ? '排队' : '待播');
-  return `
-    <div class="idle3" title="${esc(name)}">
-      ${dashThumb(t, avLabel)}
-      <span class="idle-plat">${esc(platName)}</span>
-      <span class="idle-anchor">${esc(name)}</span>
-      ${statusChip}
-      <div class="idle-acts">
-        <button class="btn sm" data-act="check" data-id="${esc(t.id)}" title="${_t('common.checkLiveTip')}">${_t('common.checkLive')}</button>
-        <button class="btn sm ghost" data-act="detail" data-id="${esc(t.id)}">详情</button>
-      </div>
-    </div>`;
-}
-
-/** TaskLite.name 形如「【抖音】某某小主播」；缺失平台时回退到平台未知 */
-function parseName(name) {
-  const s = String(name || '未命名任务');
-  const m = s.match(/^【(.+?)】([\s\S]*)$/);
-  if (!m) return { platform: '', text: s };
-  const found = Object.entries(PLATMAP).find(([, v]) => v === m[1]);
-  return { platform: found ? found[0] : '', text: m[2] || s };
-}
-
-const PLATMAP = { douyin: '抖音', bilibili: '哔哩哔哩', kuaishou: '快手', huya: '虎牙', douyu: '斗鱼', xiaohongshu: '小红书', weibo: '微博', acfun: 'AcFun' };
-
 /* ---------- 交互 ---------- */
 
 function bind(root, ctx) {
-  root.querySelectorAll('[data-collapse]').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      const key = btn.dataset.collapse;
-      if (state.collapsed.has(key)) state.collapsed.delete(key);
-      else state.collapsed.add(key);
-      if (state.lastStatus) paint(ctx, state.lastStatus); // 本页重画，不重新拉取
-    });
-  });
-  root.querySelectorAll('[data-idle]').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      state.idleFilter = btn.dataset.idle || '';
-      if (state.lastStatus) paint(ctx, state.lastStatus);
-    });
-  });
   root.querySelectorAll('[data-act]').forEach((btn) => {
     btn.addEventListener('click', async () => {
       const act = btn.dataset.act;

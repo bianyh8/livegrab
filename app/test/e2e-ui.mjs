@@ -157,14 +157,14 @@ await send('Runtime.enable');
 }
 
 const PAGES = [
-  { pg: 'dashboard', needles: ['正在录制', '排队', '磁盘', '验证任务A'], absent: ['最近事件', 'ffmpeg version', 'Copyright', '并发 0/', '时区', 'TZ ', '统计口径'] },
+  { pg: 'dashboard', needles: ['正在录制', '排队', '磁盘'], absent: ['最近事件', 'ffmpeg version', 'Copyright', '并发 0/', '时区', 'TZ ', '统计口径'] },
   { pg: 'tasks', needles: ['验证任务A', '验证任务B', '验证任务C', '仅监控', '直播', '录制状态', '新建'], absent: ['分段策略', '命名规则'] },
-  { pg: 'files', needles: ['文件库', '未登记'] },
-  { pg: 'settings', needles: ['命名规则', '录制与存储', '回收站', '平台账号'], absent: ['时区', '来自容器环境变量 TZ', 'TZ ', '平台并发上限'] },
+  { pg: 'files', needles: ['文件库'] },
+  { pg: 'settings', needles: ['命名规则', '平台账号', '系统更新'], absent: ['时区', '来自容器环境变量 TZ', 'TZ ', '平台并发上限'] },
   { pg: 'logs', needles: ['日志', '调度器就绪', '最新在前'], absent: ['Copyright'] },
-  { pg: 'events', needles: ['最近事件'], absent: ['Copyright'] },
+  { pg: 'trash', needles: ['回收站'], absent: ['Copyright'], minLen: 20 },
 ];
-for (const { pg, needles, absent = [] } of PAGES) {
+for (const { pg, needles, absent = [], minLen = 40 } of PAGES) {
   consoleErrors.length = 0;
   await send('Page.navigate', { url: `${BASE}/#/${pg}` });
   await sleep(2600);
@@ -177,7 +177,7 @@ for (const { pg, needles, absent = [] } of PAGES) {
   const pngPath = path.join(UI, `_app-${pg}.png`);
   if (shot.result?.data) fs.writeFileSync(pngPath, Buffer.from(shot.result.data, 'base64'));
   fs.writeFileSync(path.join(TMP, `view-${pg}.html`), v.view || '', 'utf8');
-  const rendered = (v.view || '').trim().length > 40;
+  const rendered = (v.view || '').trim().length > minLen;
   line(`\n4) ${pg}: 视图文本 ${(v.view || '').length} 字符 / HTML ${v.viewLen} / 截图 ${fs.existsSync(pngPath) ? fs.statSync(pngPath).size : 0} 字节`);
   line(`   登录页已隐藏=${v.loginHidden} 用户=${v.user} 引擎=${v.engineChip} 磁盘=${v.disk} 时区chip=${v.hasTz} 顶栏=${v.topShown ? v.top : '(隐藏)'}`);
   line(`   视图前 120 字: ${(v.view || '').replace(/\n+/g, ' / ').slice(0, 120)}`);
@@ -193,11 +193,22 @@ for (const { pg, needles, absent = [] } of PAGES) {
     check(!inView && !inChrome, `${pg} 不再出现「${n}」（简化显示）`, inView ? '仍出现在视图' : inChrome ? '仍出现在顶栏/侧栏' : '');
   }
   if (pg === 'dashboard') {
-    const n = ((v.view || '').match(/磁盘占用/g) || []).length;
-    check(n === 1, `dashboard 磁盘占用只出现 1 次（去掉重复卡片）`, `实际 ${n} 次`);
+    // 磁盘信息只在「存储统计」卡出现一次（DOM 计数，比文本匹配更稳）
+    const dq = await send('Runtime.evaluate', { expression: `document.querySelectorAll('#view .pkdisk').length`, returnByValue: true });
+    const dn = Number(dq?.result?.result?.value || 0);
+    check(dn === 1, `dashboard 磁盘信息块只出现 1 次（去掉重复卡片）`, `实际 ${dn} 次`);
     check(!/引擎/.test(v.view || ''), 'dashboard 已删除引擎信息卡片');
   }
-    if (pg === 'settings') {
+  if (pg === 'settings') {
+    // 存储页签：回收站设置随「录制与存储」拆分后移到存储页签，切过去核对
+    await send('Runtime.evaluate', { expression: `document.querySelector('#settingsTabs [data-tab="store"]') && document.querySelector('#settingsTabs [data-tab="store"]').click()`, returnByValue: true });
+    await sleep(1200);
+    const stab = await send('Runtime.evaluate', {
+      expression: `JSON.stringify((()=>{const h=document.querySelector('#tabHost')||{};const txt=h.innerText||'';return {txt}})())`,
+      returnByValue: true,
+    });
+    const s = JSON.parse(stab?.result?.result?.value || '{}');
+    check(/回收站/.test(s.txt || ''), '存储页签含「回收站」设置（拆分后随存储页签展示）');
     await send('Runtime.evaluate', { expression: `document.querySelector('#settingsTabs [data-tab="platform"]') && document.querySelector('#settingsTabs [data-tab="platform"]').click()`, returnByValue: true });
     await sleep(1600);
     const ptab = await send('Runtime.evaluate', {
@@ -209,10 +220,6 @@ for (const { pg, needles, absent = [] } of PAGES) {
     check(!p.hasCapsCard, '平台账号页不再重复「平台并发上限」卡片（只保留并发上限列）');
     check(!/原画 1080P60/.test(p.txt || ''), '平台账号清晰度已简化为紧凑显示（不再堆一长串档位 chip）');
     check(!/\bstable\b/.test(p.txt || ''), '平台账号不再显示 stable 等英文代号（已翻译成中文）');
-  }
-  if (pg === 'events') {
-    const navHas = await send('Runtime.evaluate', { expression: `JSON.stringify([...document.querySelectorAll('#nav .nav-item')].some((n)=>n.dataset.page==='events'))`, returnByValue: true });
-    check(JSON.parse(navHas?.result?.result?.value || 'false'), '左侧导航栏含「最近事件」入口');
   }
   const badConsole = consoleErrors.filter((e) => /LiveGrab|Uncaught|not a function|is not defined|undefined is not/.test(e));
   check(badConsole.length === 0, `${pg} 无前端报错`, badConsole.slice(0, 2).join(' | '));

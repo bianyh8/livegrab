@@ -2,7 +2,7 @@
    由 ui/index.html 的 <style> 机械抽取，视觉令牌与原型的唯一来源。
    改视觉请先改 ui/index.html 再重跑抽取，避免两处漂移。 */
 
-/* ================= 璁捐浠ょ墝 ================= */
+/* ================= 设计令牌 ================= */
 :root{
   --bg:#0a0d13; --bg-2:#0e131b; --panel:#141a24; --panel-2:#1a2230; --panel-3:#202a3a;
   --line:#232d3d; --line-2:#2e3a4d;
@@ -29,7 +29,7 @@ body{
 ::-webkit-scrollbar-thumb:hover{background:#3a4761}
 ::-webkit-scrollbar-track{background:transparent}
 
-/* ================= 甯冨眬 ================= */
+/* ================= 布局 ================= */
 .app{display:flex;min-height:100vh}
 .sidebar{
   width:200px;flex:0 0 200px;background:rgba(14,19,27,.92);border-right:1px solid var(--line);
@@ -84,7 +84,7 @@ body{
 .page.active{display:block}
 @keyframes fade{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
 
-/* ================= 鍩虹缁勪欢 ================= */
+/* ================= 基础组件 ================= */
 .btn{
   display:inline-flex;align-items:center;gap:7px;padding:8px 14px;border-radius:var(--r-s);
   border:1px solid var(--line-2);background:var(--panel-2);color:var(--txt);cursor:pointer;
@@ -127,7 +127,7 @@ body{
   width:20px;height:20px;border-radius:6px;display:grid;place-items:center;font-style:normal;
   font-size:10.5px;font-weight:800;color:#0a0d13;flex:0 0 20px;
 }
-/* 骞冲彴寰芥爣锛氱粺涓€鐢?--p1/--p2 娓愬彉锛屾柊澧炲钩鍙板彧闇€鍔犱竴琛?*/
+/* 平台徽标：统一用 --p1/--p2 渐变，新增平台只需加一行 */
 .plat.dy   {--p1:#fe2c55;--p2:#25f4ee}
 .plat.bili {--p1:#fb7299;--p2:#00aeec}
 .plat.xhs  {--p1:#ff2442;--p2:#ff8095}
@@ -173,7 +173,7 @@ select.select.ph{color:var(--txt-3)}
 .sw-row .t{font-size:13px}
 .sw-row .d{font-size:11.5px;color:var(--txt-3)}
 
-/* 缁熻鍗?*/
+/* 统计卡 */
 .stats{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:16px}
 .stat{padding:15px 16px;border-radius:var(--r-l);border:1px solid var(--line);background:linear-gradient(160deg,var(--panel),var(--bg-2));position:relative;overflow:hidden}
 .stat::after{content:"";position:absolute;right:-30px;top:-30px;width:110px;height:110px;border-radius:50%;background:radial-gradient(circle,rgba(254,44,85,.13),transparent 70%)}
@@ -226,7 +226,7 @@ select.select.ph{color:var(--txt-3)}
 .idle-acts .btn{padding:4px 10px}
 @media (max-width:900px){.idle-grid{grid-template-columns:1fr}}
 
-/* ================= 鐧诲綍椤?================= */
+/* ================= 登录页 ================= */
 .login{position:fixed;inset:0;z-index:300;display:grid;grid-template-columns:minmax(0,1.02fr) minmax(430px,.98fr);background:var(--bg)}
 .boot-splash{position:fixed;inset:0;z-index:299;background:var(--bg);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px}
 .boot-logo{width:58px;height:58px;border-radius:16px;display:grid;place-items:center;font-size:28px;font-weight:800;color:#0a0d13;background:linear-gradient(135deg,var(--dy),var(--dy-2));box-shadow:0 14px 40px rgba(254,44,85,.28)}
@@ -281,7 +281,7 @@ select.select.ph{color:var(--txt-3)}
 .user-row .ur{font-size:11px;color:var(--txt-3)}
 @media (max-width:900px){.login{grid-template-columns:1fr}.login-visual{display:none}}
 
-/* 椤电锛堢郴缁熻缃唴閮ㄥ垎鍖猴級 */
+/* 页签（系统设置内部分区） */
 .tabs{display:flex;gap:6px;border-bottom:1px solid var(--line);margin-bottom:18px;flex-wrap:wrap}
 .tab{padding:9px 15px;border-radius:9px 9px 0 0;color:var(--txt-2);cursor:pointer;font-size:13px;
   border:1px solid transparent;border-bottom:0;margin-bottom:-1px;transition:.15s;user-select:none}
@@ -297,7 +297,7 @@ select.select.ph{color:var(--txt-3)}
 .collapse-btn::before{content:"";width:7px;height:7px;border-right:2px solid currentColor;border-bottom:2px solid currentColor;transform:rotate(-45deg);transition:transform .15s}
 .collapse-btn.open::before{transform:rotate(45deg)}
 
-/* 褰曞埗涓潯鐩?*/
+/* 录制中条目 */
 .rec-item{display:flex;gap:13px;align-items:center;padding:13px 16px;border-bottom:1px solid var(--line)}
 .rec-item:last-child{border-bottom:0}
 .thumb{
@@ -336,7 +336,7 @@ select.select.ph{color:var(--txt-3)}
 .seg.done{background:rgba(37,244,238,.55)}
 .seg.cur{background:linear-gradient(90deg,var(--dy),#ff7590);box-shadow:0 0 8px rgba(254,44,85,.5)}
 
-/* 鍥捐〃 */
+/* 图表 */
 .chart{display:flex;align-items:flex-end;gap:4px;height:118px;padding:6px 2px 0}
 .chart i{flex:1;background:linear-gradient(180deg,rgba(254,44,85,.85),rgba(254,44,85,.18));border-radius:4px 4px 2px 2px;position:relative;transition:.2s;min-height:4px}
 .chart i:hover{filter:brightness(1.35)}
@@ -344,7 +344,7 @@ select.select.ph{color:var(--txt-3)}
 .chart-x{display:flex;gap:4px;color:var(--txt-3);font-size:10px;margin-top:8px}
 .chart-x span{flex:1;text-align:center}
 
-/* 鐜舰 */
+/* 环形 */
 .donut{width:132px;height:132px;border-radius:50%;position:relative;margin:0 auto 12px;
   background:conic-gradient(var(--dy) 0 38%,var(--bili-2) 38% 62%,var(--purple) 62% 78%,#2a3444 78% 100%);
   display:grid;place-items:center}
@@ -357,7 +357,7 @@ select.select.ph{color:var(--txt-3)}
 .legend em{width:8px;height:8px;border-radius:3px;font-style:normal}
 .legend b{margin-left:auto;color:var(--txt);font-weight:600}
 
-/* 鏃堕棿绾?*/
+/* 时间轴 */
 .tl{position:relative;padding-left:20px}
 .tl::before{content:"";position:absolute;left:5px;top:6px;bottom:6px;width:1px;background:var(--line-2)}
 .tl-item{position:relative;padding:0 0 14px}
@@ -369,7 +369,7 @@ select.select.ph{color:var(--txt-3)}
 .tl-item .tx{font-size:12.5px}
 .tl-item .tm{font-size:11px;color:var(--txt-3)}
 
-/* 琛ㄦ牸 */
+/* 表格 */
 .toolbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:13px 16px;border-bottom:1px solid var(--line)}
 /* 任务管理查询条件强制一行：不换行，控件可收缩 */
 .toolbar.tq{flex-wrap:nowrap}
@@ -423,7 +423,7 @@ td .sub{font-size:11.5px;color:var(--txt-3);margin-top:3px}
 .cb{width:15px;height:15px;accent-color:var(--dy);cursor:pointer}
 .empty{padding:40px;text-align:center;color:var(--txt-3)}
 
-/* 鍒嗘绛栫暐鍗?*/
+/* 分段策略卡 */
 .opt-grid{display:grid;gap:10px}
 .opt{
   border:1px solid var(--line-2);border-radius:var(--r);padding:12px 14px;cursor:pointer;transition:.16s;
@@ -436,7 +436,7 @@ td .sub{font-size:11.5px;color:var(--txt-3);margin-top:3px}
 .opt .rd{width:15px;height:15px;border-radius:50%;border:2px solid var(--line-2);flex:0 0 15px}
 .opt.sel .rd{border-color:var(--dy);background:radial-gradient(circle,#fff 0 3px,var(--dy) 3.5px)}
 
-/* 娓呮櫚搴﹀崱 */
+/* 清晰度卡 */
 .q-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:9px}
 .q{border:1px solid var(--line-2);border-radius:var(--r);padding:10px 11px;cursor:pointer;background:#0f141c;transition:.16s;position:relative}
 .q:hover{border-color:#3c4b63}
@@ -469,7 +469,7 @@ td .sub{font-size:11.5px;color:var(--txt-3);margin-top:3px}
 .tree .d{color:#8fa9ff}
 .tree .f{color:#8fe9f7}
 
-/* 鏂囦欢鍒楄〃 */
+/* 文件列表 */
 .fl-item{display:flex;align-items:center;gap:13px;padding:12px 16px;border-bottom:1px solid var(--line)}
 .fl-item:last-child{border-bottom:0}
 .fl-item:hover{background:rgba(255,255,255,.022)}
@@ -492,7 +492,7 @@ td .sub{font-size:11.5px;color:var(--txt-3);margin-top:3px}
 .tnode .n{margin-left:auto;font-size:11px;color:var(--txt-3)}
 .tnode.child{padding-left:26px}
 
-/* 鏃ュ織 */
+/* 日志 */
 .lv{font-size:10.5px;font-weight:700;padding:2px 7px;border-radius:5px;letter-spacing:.4px}
 .lv.INFO{background:rgba(91,140,255,.14);color:#9dc0ff}
 .lv.WARN{background:rgba(247,178,59,.14);color:#ffd08a}
@@ -500,7 +500,7 @@ td .sub{font-size:11.5px;color:var(--txt-3);margin-top:3px}
 .logline{font-family:Consolas,monospace;font-size:12px;color:var(--txt-2)}
 .logline .t{color:var(--txt-3)}
 
-/* 妯℃€?*/
+/* 模态 */
 .mask{position:fixed;inset:0;background:rgba(4,6,10,.72);backdrop-filter:blur(4px);display:none;align-items:center;justify-content:center;z-index:150;padding:24px}
 .mask.show{display:flex}
 .modal{
@@ -512,7 +512,7 @@ td .sub{font-size:11.5px;color:var(--txt-3);margin-top:3px}
 .modal-h h3{margin:0;font-size:15px}
 .modal-b{padding:20px}
 .modal-f{display:flex;gap:10px;justify-content:flex-end;padding:14px 20px;border-top:1px solid var(--line);position:sticky;bottom:0;background:var(--panel)}
-/* ---------- 娴忚鍣ㄥ唴缃挱鏀惧櫒 ---------- */
+/* ---------- 浏览器内置播放器 ---------- */
 .player{position:relative;width:100%;aspect-ratio:16/9;max-height:68vh;border-bottom:1px solid var(--line);display:grid;place-items:center;
   background:radial-gradient(120% 130% at 28% 18%,#1a2333,#070a10 70%)}
 .pv-video{position:absolute;inset:0;width:100%;height:100%;background:#000;display:block;object-fit:contain}

@@ -294,7 +294,7 @@ function applyPragmas(db) {
   }
   try {
     if (mode === 'wal') db.pragma('synchronous = NORMAL');
-    else { db.pragma('journal_mode = DELETE'); db.pragma('synchronous = FULL'); } // M4：回退模式必须 FULL，避免掉电损坏
+    else { db.pragma('journal_mode = DELETE'); db.pragma('synchronous = FULL'); } // 回退模式必须 FULL，避免掉电损坏
   } catch { /* 保持默认 */ }
 }
 
@@ -361,7 +361,7 @@ export function openDb(dbPath) {
     db = new Database(dbPath);
   }
 
-  // 每次打开都执行幂等 DDL（M3）：正常 v2 库缺表/半损坏时可自愈；全新/重建路径由它建表
+  // 每次打开都执行幂等 DDL：正常 v2 库缺表/半损坏时可自愈；全新/重建路径由它建表
   db.exec(DDL);
   // 幂等补列迁移：旧 v2 库（schema_version 仍是 2）新增列用 ALTER 补齐。
   // 注意：不能靠提升 SCHEMA_VERSION 来做，openDb 对版本不匹配是「整库作废重建」，会删光用户数据。

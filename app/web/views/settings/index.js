@@ -1,5 +1,5 @@
 /* LiveGrab · views/settings/index.js —— 系统设置入口
-   6 个页签：① 录制 ② 存储 ③ 命名规则 ④ 平台账号 ⑤ 通知 ⑥ 安全与登录。
+   7 个页签：① 录制 ② 存储 ③ 命名规则 ④ 平台账号 ⑤ 通知 ⑥ 安全与登录 ⑦ 系统更新。
    各页签实现放 views/settings/tab-*.js，统一通过 tabkit.js 读写设置。 */
 
 import { esc, toast } from '../../ui.js';

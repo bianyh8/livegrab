@@ -10,7 +10,7 @@ const ICON_REFRESH = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
 const ICON_DOWNLOAD = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M12 3v12M7 10l5 5 5-5"/><path d="M5 21h14"/></svg>';
 
 let pollTimer = null;
-let expectingRestart = false;   // 本地非容器更新将自动重启服务
+let expectingRestart = false;   // 有 git 仓库时更新将自动重启服务（本地与容器架构 B 均适用）
 let sawRestartPhase = false;    // 后端已进入 restart 阶段
 let lastStatus = null;          // 最近一次成功拿到的状态（轮询失败时用于判断）
 let reloadedAfterRestart = false;
@@ -45,8 +45,9 @@ function startPolling(root) {
       lastStatus = st;
       if (root.isConnected) paint(root, st);
       if (st.phase === 'restart') sawRestartPhase = true;
-      // 本地非容器部署在更新完成后会自动重启：记录该意图，便于轮询失败（端口释放瞬间）时仍能提示「重启中」
-      if (lastStatus && lastStatus.env && lastStatus.env.gitAvailable && !lastStatus.env.inContainer && st.running) {
+      // 有 git 仓库（本地源码目录 / 容器架构 B 的 /config/src）更新完成后会自动重启：
+      // 记录该意图，便于轮询失败（端口释放瞬间）时仍能提示「重启中」
+      if (lastStatus && lastStatus.env && lastStatus.env.gitAvailable && st.running) {
         expectingRestart = true;
       }
       // 已检测到重启且服务重新上线（空闲）= 新版本已就绪：自动刷新页面
@@ -217,10 +218,10 @@ function paint(root, st) {
   const applyBtn = root.querySelector('#upApply');
   if (applyBtn) applyBtn.onclick = () => {
     const env = (st && st.env) || (lastStatus && lastStatus.env) || null;
-    const localSelfRestart = !!(env && env.gitAvailable && !env.inContainer);
-    const confirmText = localSelfRestart
-      ? t('settings.upApplyConfirmLocal')
-      : t('settings.upApplyConfirmContainer');
+    const gitSelfUpdate = !!(env && env.gitAvailable);
+    const confirmText = gitSelfUpdate
+      ? t('settings.upApplyConfirmSelf')
+      : t('settings.upApplyConfirmManual');
     confirmDialog({
       title: t('settings.upApplyConfirmTitle'),
       danger: true,
@@ -233,9 +234,9 @@ function paint(root, st) {
         reloadedAfterRestart = false;
         try {
           const r = await api.updateApply();
-          if (r && r.running) {
-            toast(t('settings.upApplyStarted'));
-            if (localSelfRestart) expectingRestart = true; // 本地部署将自动重启
+            if (r && r.running) {
+              toast(t('settings.upApplyStarted'));
+              if (gitSelfUpdate) expectingRestart = true; // 有 git 仓库：将自动重启
           } else if (r && r.busy) toast(t('settings.upApplyBusy'), 'warn');
           const s = await api.updateStatus();
           paint(root, s);

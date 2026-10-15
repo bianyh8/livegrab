@@ -1,4 +1,5 @@
-// 抖音直播解析（多策略兜底：webcast 接口 → 页面 RENDER_DATA → 正则兜底）
+// 抖音直播解析：移动端 reflow/info 取房间元数据（免登录）→ web/enter 权威开播状态与 HLS 流
+// （短号 + ttwid 匿名可用）→ 移动端元数据兜底 → 页面兜底（2026-10 实测已失效，保留）
 import { HttpError } from '../util.js';
 import { httpGet, httpJson, pickSetCookie, cookiesToString, DESKTOP_UA } from './http.js';
 import { abSign } from './douyin-sign.js';
@@ -221,7 +222,7 @@ async function enterRoom(roomId, settings, logger) {
   // ③ web 失败但移动端拿到房间元数据：退回移动端（其状态可能不准，供 resolveRoom 兜底）
   if (mobileRoom) return { room: mobileRoom, cookie: '', source: 'mobile', shortId };
 
-  // ③ 兜底：直接解析直播间页面（2026-10 实测页面已不再内嵌流地址、RENDER_DATA 也已移除）
+  // ④ 兜底：直接解析直播间页面（2026-10 实测页面已不再内嵌流地址、RENDER_DATA 也已移除）
   let pageErr = '';
   try {
     const page = await httpGet(`https://live.douyin.com/${encodeURIComponent(roomId)}`, { headers: headers(cookie, roomId), logger, label: 'douyin.page', retries: 1 });

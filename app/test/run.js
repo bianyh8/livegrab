@@ -19,7 +19,7 @@ import { Auth, parseCookies } from '../server/auth.js';
 import { PlayManager } from '../server/play.js';
 import * as resolvers from '../server/resolvers/index.js';
 import { isPullBlocked, reconnectDelay } from '../server/recorder.js';
-import { byteLength, parseRange, safeJoin, formatBytes, formatDuration, HttpError, uid } from '../server/util.js';
+import { byteLength, parseRange, safeJoin, formatBytes, formatDuration, HttpError, uid, VERSION } from '../server/util.js';
 import * as fakeMedia from './fake-media.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -767,6 +767,9 @@ async function testUtil() {
   ok(parseRange('bytes=2000-3000', 1000) === 'invalid', 'Range 越界');
   ok(parseRange(null, 1000) === null, '无 Range 返回 null');
   eq(parseRange('bytes=0-', 50).end, 49, 'Range 开区间到文件末');
+  // 版本号必须真实来自 app/package.json（曾经在 ESM 里误用 __dirname 被 catch 吞掉，恒返回 0.0.0）
+  const pkg = JSON.parse(fs.readFileSync(path.join(APP_DIR, 'package.json'), 'utf8'));
+  eq(VERSION, pkg.version, 'VERSION 与 app/package.json 一致（非 0.0.0 兜底）');
 }
 
 // ============ 8. HTTP 冒烟 ============

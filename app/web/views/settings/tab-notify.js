@@ -1,5 +1,6 @@
 /* LiveGrab · views/settings/tab-notify.js —— ⑤ 通知
-   Webhook ＋ 6 个事件开关 ＋ 60 秒去重开关（D18）＋ 5/15/45 秒重试开关 ＋ 测试发送。 */
+   Webhook ＋ 4 个事件开关（开播/录制失败/磁盘告警/Cookie 过期）＋ 60 秒去重开关（D18）
+   ＋ 5/15/45 秒重试开关 ＋ 测试发送。 */
 
 import { api } from '../../api.js';
 import { esc, toast, switchEl, bindSwitches } from '../../ui.js';

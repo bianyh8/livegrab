@@ -105,7 +105,7 @@ function treeFor(sessions, view = 'platform') {
     if (sk) {
       const sub = top.childrenMap.get(sk) || { key: sk, name: sk, date: sk, count: 0, bytes: 0, children: [] };
       sub.count += files;
-      sub.bytes += sessionFileBytes(s); // M2：父子口径一致（子级不再用可能未同步的 s.bytes）
+      sub.bytes += sessionFileBytes(s); // 父子口径一致（子级不再用可能未同步的 s.bytes）
       top.childrenMap.set(sk, sub);
     }
     map.set(tk, top);
@@ -530,7 +530,7 @@ async function main() {
     return JSON.parse(await fsp.readFile(f, 'utf8'));
   });
 
-  // // ---- 回放 ----
+  // ---- 回放 ----
   route('POST', '/api/play', async (req) => {
     const body = await readBody(req);
     return play.start(body.fileId);
@@ -813,7 +813,7 @@ async function main() {
       void id;
     }
     for (const [, rec] of scheduler.detached) {
-      try { await rec.stop('shutdown'); } catch { /* ignore */ } // L4：暂停中录制器也 await 收尾，避免写落在已关闭连接上
+      try { await rec.stop('shutdown'); } catch { /* ignore */ } // 暂停中录制器也 await 收尾，避免写落在已关闭连接上
     }
     try { await store.persist(); } catch (e) { logger.error(`优雅退出时 SQLite 持久化失败：${e?.message || e}`); }
     store.close();

@@ -9,7 +9,7 @@ import {
   resolveRoom, resolveStream, getPlatform, platformList, detectPlatform, roomIdFrom, probeLive,
 } from './resolvers/index.js';
 import { buildRoomUrl } from './resolvers/room-url.js';
-import { uid, nowIso, HttpError, formatBytes, formatDuration, dateKey, formatDate, formatTime } from './util.js';
+import { uid, nowIso, HttpError, formatBytes, formatDuration, dateKey, formatDate, formatTime, VERSION } from './util.js';
 
 const LITE = (t) => ({
   id: t.id, name: t.anchorName || t.platformAnchorName || t.title || t.roomId,
@@ -535,7 +535,7 @@ export class Scheduler {
     if (exists) Object.assign(exists, item);
     else session.segments.push(item);
     session.segments.sort((a, b) => a.segmentIndex - b.segmentIndex);
-    session.bytes = this.storage._sessionFileBytes(session); // M3：口径含 extras/merged/mp4（边录边转+keepSource=false 时不欠计）
+    session.bytes = this.storage._sessionFileBytes(session); // 口径含 extras/merged/mp4（边录边转+keepSource=false 时不欠计）
     session.durationSec = this.storage._sessionDurationSec(session);
     task.totalBytes = session.bytes;
     task.totalDurationSec = session.durationSec;
@@ -546,7 +546,7 @@ export class Scheduler {
     // 仅在不自动合并时生效（合并需要源 .ts，先合并再统一转封装）。
     const canRemuxNow = task.remuxToMp4 !== false && !this.store.settings.autoMerge && ['ts', 'flv', 'mkv'].includes(item.ext);
     if (canRemuxNow) this._segmentRemuxNow(task, session, item, seg).catch(() => {});
-    // M1：分段收尾直接行级写穿透过称（不依赖 1500ms 防抖），崩溃/强杀窗口内分段登记立即落库
+    // 分段收尾直接行级写穿透（不依赖 1500ms 防抖），崩溃/强杀窗口内分段登记立即落库
     await this.store.saveSession(session);
     await this.store.saveTask(task);
     this.onEvent({ type: 'task', task });
@@ -572,7 +572,7 @@ export class Scheduler {
     const reason = payload.reason || 'user';
     if (session) {
       session.endedAt = nowIso();
-      session.bytes = this.storage._sessionFileBytes(session); // M3：删源后仍按现存文件口径（不再归零）
+      session.bytes = this.storage._sessionFileBytes(session); // 删源后仍按现存文件口径（不再归零）
       session.durationSec = this.storage._sessionDurationSec(session);
       session.status = reason === 'error' ? 'error' : (session.segments.length ? 'done' : 'partial');
       await this.store.saveSession(session);
@@ -1040,7 +1040,7 @@ export class Scheduler {
     return {
       ...task,
       name: task.anchorName || task.platformAnchorName || task.title || task.roomId,
-      avatar: task.avatarFile || null, // M5：前端读 item.avatar，需与 avatarFile 对齐
+      avatar: task.avatarFile || null, // 前端读 item.avatar，需与 avatarFile 对齐
       overrides: task.overrides || {},
       qualityLabel: task.qualityLabel || qualityLabel(task.qualityActual || task.quality),
       live: {
@@ -1212,7 +1212,7 @@ export class Scheduler {
       recordRoot: this.store.settings.recordRoot,
       engine: {
         available: this.engine.available,
-        version: process.env.LIVEGRAB_VERSION || '0.1.0',
+        version: process.env.LIVEGRAB_VERSION || VERSION,
         // 兼容前端字段名（app.js / dashboard.js 读的是 ffmpegAvailable/ffmpegVersion）
         ffmpegAvailable: this.engine.available,
         ffmpegVersion: this.engine.version,

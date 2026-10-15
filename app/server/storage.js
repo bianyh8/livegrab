@@ -56,7 +56,7 @@ export class Storage {
     this.jobs = new Map();
     this.onEvent = () => {};
     this._cleanupTimer = null;
-    this._remuxInflight = new Map(); // H1：转封装按输出路径互斥（live remux 与 autoRemux 并发写同一文件防护）
+    this._remuxInflight = new Map(); // 转封装按输出路径互斥（live remux 与 autoRemux 并发写同一文件防护）
   }
 
   get root() { return this.store.settings.recordRoot; }
@@ -492,7 +492,7 @@ export class Storage {
     const outExt = audioOnly ? 'm4a' : 'mp4';
     const outPath = file.path.replace(/\.[^.]+$/, '') + `.${outExt}`;
 
-    // H1：同一输出路径 in-flight 互斥 —— live remux 与 autoRemux 可能对同一分段并发转封装。
+    // 同一输出路径 in-flight 互斥 —— live remux 与 autoRemux 可能对同一分段并发转封装。
     // 已在飞则直接复用其结果（同一 Promise），绝不两个 ffmpeg 同时写同一文件（keepSource=false 时成品是唯一副本）。
     const inflight = this._remuxInflight.get(outPath);
     if (inflight) {
@@ -661,7 +661,7 @@ export class Storage {
     await fsp.rm(seg.path, { force: true }).catch(() => {});
     this.logger.info(`转封装后已删除源文件：${seg.name}`, { taskId: session.taskId, taskName: session.streamer });
     session.segments = (session.segments || []).filter((x) => x.id !== seg.id);
-    session.bytes = this._sessionFileBytes(session); // M3：口径含 extras/merged/mp4，删源后不再归零
+    session.bytes = this._sessionFileBytes(session); // 口径含 extras/merged/mp4，删源后不再归零
     session.durationSec = this._sessionDurationSec(session);
     await this.store.saveSession(session);
   }

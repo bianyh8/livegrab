@@ -1,6 +1,6 @@
 // store.js —— 内存模型 + SQLite 唯一持久层（v2 全列架构）
 //
-// 设计口径（见 SQLite-重构方案.md §3）：
+// 设计口径：
 //  · SQLite 是唯一存储：没有 state.json，没有 data_json，不再有 JSON 镜像/回退；
 //  · 内存 state 是运行时模型，API 读内存；所有变更方法「先改内存、再把行写进 SQLite」（行级写穿透，单事务）；
 //  · persist() 作为兜底：把内存全量对账式落库（外部文件、批量状态归一、启动/关停时调用）。
@@ -349,10 +349,10 @@ export class Store {
   // ---------- 初始化 / 加载 ----------
   /** 注入 SQLite 实例并加载内存模型；之后所有读写都以此为准 */
   async init(db) {
-    if (!db) throw new Error('store: 缺少 SQLite 连接（init(db) 的 db 不能为空）'); // M2：缺失连接不再静默吞掉
+    if (!db) throw new Error('store: 缺少 SQLite 连接（init(db) 的 db 不能为空）'); // 缺失连接不再静默吞掉
     await ensureDir(this.configDir);
     this.db = db;
-    this._stmts = {}; // 换连接时清掉旧语句缓存（L2）
+    this._stmts = {}; // 换连接时清掉旧语句缓存
     this.loadFromDb(db);
     this._convergeResidue();
     await this.persist(); // 把默认命名等归一化结果落库
@@ -367,7 +367,7 @@ export class Store {
     // ---- 设置 ----
     const srow = db.prepare('SELECT * FROM settings WHERE id = 1').get();
     if (srow) Object.assign(state.settings, settingsFromRow(srow));
-    // 平台字典以库为准：先清默认值再合并，避免库里已删的键在重启后「复活」（L4）
+    // 平台字典以库为准：先清默认值再合并，避免库里已删的键在重启后「复活」
     state.settings.platformCaps = {};
     state.settings.platformEnabled = {};
     for (const r of db.prepare('SELECT platform, value FROM platform_caps').all()) state.settings.platformCaps[r.platform] = r.value;
@@ -558,9 +558,9 @@ export class Store {
     });
   }
 
-  /** 写穿透过称失败时回滚内存。M4：不做全量深拷贝，各变更点只快照最小实体（settings/tasks/sessions/trash 引用或浅拷贝、单字段 undo）。 */
+  /** 写穿透失败时回滚内存：不做全量深拷贝，各变更点只快照最小实体（settings/tasks/sessions/trash 引用或浅拷贝、单字段 undo）。 */
 
-  /** 单文件行写入：files.path 全局 UNIQUE，同一物理路径被登记为两个 id 时跳过该行并告警，避免拖垮整库事务（H2） */
+  /** 单文件行写入：files.path 全局 UNIQUE，同一物理路径被登记为两个 id 时跳过该行并告警，避免拖垮整库事务 */
   _upsertFileRow(session, f, kindOverride) {
     try {
       this._stmt('file_upsert').run(fileToRow(session, f, kindOverride));
@@ -949,7 +949,7 @@ export class Store {
     };
   }
 
-  /** 关闭底层连接并清空语句缓存（进程退出前调用，收敛 -wal/-shm；L2/L9） */
+  /** 关闭底层连接并清空语句缓存（进程退出前调用，收敛 -wal/-shm） */
   close() {
     this._stmts = {};
     if (this.db) {

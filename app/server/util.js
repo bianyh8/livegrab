@@ -3,8 +3,19 @@ import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { fileURLToPath } from 'node:url';
 
-export const VERSION = '0.1.0';
+// 版本号唯一来源：app/package.json（此前写死 '0.1.0'，发版后各处显示旧版本）。
+// 注意：ESM 没有 __dirname，必须从 import.meta.url 推导（曾因直接写 __dirname
+// 被 ReferenceError 吞进 catch，导致本地运行版本恒显示 0.0.0）。
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+function readPkgVersion() {
+  try {
+    const pkg = JSON.parse(fs.readFileSync(path.join(HERE, '..', 'package.json'), 'utf8'));
+    return pkg.version || '0.0.0';
+  } catch { return '0.0.0'; }
+}
+export const VERSION = readPkgVersion();
 
 export class HttpError extends Error {
   constructor(code, message, status = 400) {
