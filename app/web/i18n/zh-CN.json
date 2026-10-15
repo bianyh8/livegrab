@@ -751,6 +751,7 @@
   "settings.upElapsed": "已用时间",
   "settings.upEstimate": "预计",
   "settings.upLogTitle": "更新日志",
+  "settings.upLogAlsoInLogs": "同步记录到「运行日志」页",
   "settings.upNotesTitle": "更新说明",
   "settings.upNotesMain": "主要更新内容",
   "settings.upNotesFix": "修复内容",

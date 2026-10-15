@@ -222,6 +222,9 @@ ffmpeg -hide_banner -loglevel info -nostats
 6. **多套命名配置**（D12）：`profiles[]` + 绑定（平台/任务/无）。
 7. **并发上限**（D16）：`min(settings.maxConcurrency, settings.platformCaps[platform])`，排队要带原因。
 8. **日志保留**（D14）：`/config/logs/YYYY-MM-DD.log`，保留 14 天，单文件 50 MB 切分，默认 INFO。
+   - **全链路统一进日志文件**：更新流程（`[更新]` 前缀：环境自检/检查对比/拉取/安装/重启）、容器启动引导（`[容器启动]` 前缀：entrypoint.sh 把克隆/回退/预热/依赖检查写入 `${CONFIG_DIR}/.bootstrap-events`，服务启动后读取转写并删除该文件）、db 初始化等 logger 就绪前的启动消息（先入缓冲、就绪后补写）、路由 5xx（带 `METHOD 路径 + IP + errText`）都不再只进 stdout。
+   - **错误详情统一走 `errText(e)`**（util.js）：`message + code/status/errno/syscall/address 标签 + cause 链（≤2 层）+ 堆栈顶部两帧`，压成单行；`HttpError`（预期内的用户可见错误）默认不带堆栈。适用 scheduler/recorder/storage/store/notify/http 助手等全部 error/warn 出口。
+   - 去重防刷屏：更新「环境自检」与「检查对比」结果与上次相同不重复记录。
 9. **通知**（D18）：同类事件按 `taskId+event` 60 秒去重；失败按 5/15/45 秒重试 3 次。
 10. **扫描/一致性**（D19）：索引有而磁盘无 → `missing`；磁盘有而索引无 → 未登记，可导入；都不隐藏。
 11. **鉴权**（D1）：`/config/users.json`（scrypt）+ HMAC 签名 Cookie `lg_session`；首次启动 `mode:'init'` 强制设密码；同一 IP 5 次失败锁 10 分钟。除 `/api/health`、`/api/auth/*` 外所有 `/api/*` 需登录，未登录返回 401 `UNAUTHORIZED`。
@@ -372,7 +375,7 @@ app/test/    run.js fake-ffmpeg.mjs fake-media.mjs e2e-ui.mjs e2e-ffmpeg.mjs e2e
 
 ### 7.4 已验证 / 未验证（诚实边界）
 
-- 已验证：全部后端逻辑（244 项断言，含假 ffmpeg 的完整录制链路）、HTTP 冒烟（真实进程、47 个端点）、真实浏览器端到端（登录页→密码→控制台、退出后错密码提示、6 个页面渲染内容（总览 / 任务 / 文件库 / 设置 / 运行日志 / 回收站，无独立事件页）、设置页内切到「平台账号」页签核对、无前端报错、SSE 未登录 401 / 登录后 `event: status`）、原型 DOM 自检（52 项）。
+- 已验证：全部后端逻辑（255 项断言，含假 ffmpeg 的完整录制链路）、HTTP 冒烟（真实进程、47 个端点）、真实浏览器端到端（登录页→密码→控制台、退出后错密码提示、6 个页面渲染内容（总览 / 任务 / 文件库 / 设置 / 运行日志 / 回收站，无独立事件页）、设置页内切到「平台账号」页签核对、无前端报错、SSE 未登录 401 / 登录后 `event: status`）、原型 DOM 自检（52 项）。
 - 已验证（真实 ffmpeg，41 项）：本地造 3 路直播流 → 真实分段录制（时间/大小轮转、ffprobe 校验时长与编码、命名规则落盘）→ 暂停/恢复序号续接 → 停止收尾与自动转封装 MP4（ffprobe 校验 h264 1280×720）→ 合并整场时长与分段之和相符 → 回放（MP4 Range 206 + TS fMP4 `ftyp/moof/mdat`）→ 重扫描 `added/missing` 为 0 → 回收站往返 → 磁盘保护 → 无头浏览器核对文件库渲染出 MP4 副本且无前端报错。
 - 实测（真实外网，2026-10）：
   - **抖音免登录录制（22 项断言，`app/test/e2e-douyin.mjs`）**：匿名 feed 找在播房间 → `settings.cookies` 为空解析出主播/标题/在线人数/live → 原画档 `FULL_HD1` → 真实调度器录出 `抖音/<主播>/<日期>/<日期>_<主播>_原画_001.ts`（ffprobe：h264 1920×1080）→ 按 15 秒轮转到第 2 段 → 停止后自动转封装 MP4（h264）→ 文件库登记（`platform:'douyin'`、段数 2）。同时验证 `10011` 按未开播处理、全挂时报 `BLOCKED` 且给出 Cookie/直链两条出路。

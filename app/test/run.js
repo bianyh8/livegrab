@@ -19,7 +19,7 @@ import { Auth, parseCookies } from '../server/auth.js';
 import { PlayManager } from '../server/play.js';
 import * as resolvers from '../server/resolvers/index.js';
 import { isPullBlocked, reconnectDelay } from '../server/recorder.js';
-import { byteLength, parseRange, safeJoin, formatBytes, formatDuration, HttpError, uid, VERSION } from '../server/util.js';
+import { byteLength, parseRange, safeJoin, formatBytes, formatDuration, HttpError, uid, VERSION, errText } from '../server/util.js';
 import * as fakeMedia from './fake-media.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -770,6 +770,22 @@ async function testUtil() {
   // 版本号必须真实来自 app/package.json（曾经在 ESM 里误用 __dirname 被 catch 吞掉，恒返回 0.0.0）
   const pkg = JSON.parse(fs.readFileSync(path.join(APP_DIR, 'package.json'), 'utf8'));
   eq(VERSION, pkg.version, 'VERSION 与 app/package.json 一致（非 0.0.0 兜底）');
+  // errText：错误日志详情格式化（message + 关键字段 + cause 链 + 堆栈顶部帧）
+  eq(errText(null), '未知错误', 'errText(null) 安全降级');
+  eq(errText('boom'), 'boom', 'errText(字符串) 原样返回');
+  const plain = new Error('炸了');
+  plain.code = 'EOI';
+  ok(errText(plain).startsWith('炸了（code=EOI）'), 'errText 带 code 标签');
+  ok(errText(plain).includes(' @ at '), 'errText 普通 Error 带堆栈顶部帧');
+  ok(!errText(plain).includes('\n'), 'errText 堆栈压成单行（日志按行存储）');
+  const httpErr = new HttpError('X', '用户可见');
+  eq(errText(httpErr), '用户可见（code=X status=400）', 'errText(HttpError) 只带 code/status、不带堆栈');
+  ok(errText(httpErr, { withStack: true }).includes(' @ at '), 'errText withStack 可强制带堆栈');
+  const wrapped = new Error('外层', { cause: new TypeError('内层') });
+  ok(errText(wrapped).includes('外层'), 'errText 含外层 message');
+  ok(errText(wrapped).includes('cause: 内层'), 'errText 展开 cause 链');
+  const evt = { code: 'SPAWN_FAILED', message: 'ffmpeg 启动失败' };
+  eq(errText(evt), 'ffmpeg 启动失败（code=SPAWN_FAILED）', 'errText 兼容事件载荷对象（recorder error 事件）');
 }
 
 // ============ 8. HTTP 冒烟 ============

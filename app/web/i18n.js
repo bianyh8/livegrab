@@ -516,6 +516,7 @@ const DEFAULT_DICT = {
   "settings.upHint": "从 GitHub 获取最新代码，自动完成更新并重启",
   "settings.upLatest": "最新版本",
   "settings.upLatestChip": "最新",
+  "settings.upLogAlsoInLogs": "同步记录到「运行日志」页",
   "settings.upLogEmpty": "暂无更新日志。",
   "settings.upLogTitle": "更新日志",
   "settings.upNewTip": "发现新版本 {0}，包含功能优化和问题修复。",

@@ -192,7 +192,7 @@ function paint(root, st) {
           <div class="card-b">${notesBody}</div>
         </div>
         <div class="card">
-          <div class="card-h"><h3>${t('settings.upLogTitle')}</h3></div>
+          <div class="card-h"><h3>${t('settings.upLogTitle')}</h3><span class="hint">${t('settings.upLogAlsoInLogs')}</span></div>
           <div class="card-b up-logbox">${logBody}</div>
         </div>
       </div>

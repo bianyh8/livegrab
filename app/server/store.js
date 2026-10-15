@@ -325,6 +325,7 @@ const parseMaybeJson = (v) => {
 export class Store {
   constructor(configDir) {
     this.configDir = configDir;
+    this.logger = null; // server.js 在 logger 就绪后注入：持久层错误（落盘失败/冲突行）进日志文件
     this.state = {
       version: 2,
       settings: JSON.parse(JSON.stringify(DEFAULT_SETTINGS)),
@@ -536,7 +537,11 @@ export class Store {
         for (const e of this.state.trash) this._writeTrashRows(e);
       });
     } catch (e) {
-      console.error(`[store] SQLite 落盘失败：${e.message}`);
+      // 落盘失败必须留痕：此前只 console.error 到 stdout，日志文件/「运行日志」页看不到，
+      // 用户遇到「重启后数据回退」类问题时无从判断是否落盘失败
+      const msg = `SQLite 落盘失败：${e.message}`;
+      if (this.logger) this.logger.error(msg);
+      else console.error(`[store] ${msg}`);
       throw e;
     }
   }
@@ -565,7 +570,9 @@ export class Store {
     try {
       this._stmt('file_upsert').run(fileToRow(session, f, kindOverride));
     } catch (e) {
-      console.warn(`[store] 跳过冲突文件行 ${f?.id || '?'}（path=${f?.path || '?'}）：${e?.message || e}`);
+      const msg = `跳过冲突文件行 ${f?.id || '?'}（path=${f?.path || '?'}）：${e?.message || e}`;
+      if (this.logger) this.logger.warn(msg);
+      else console.warn(`[store] ${msg}`);
     }
   }
 

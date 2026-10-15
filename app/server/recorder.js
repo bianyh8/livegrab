@@ -5,7 +5,7 @@ import path from 'node:path';
 import fsp from 'node:fs/promises';
 import * as media from './media.js';
 import { buildOutputPattern, buildContext, pickProfile, renderName, reserveName, qualityLabel, seqText } from './naming.js';
-import { nowIso, ensureDir, safeJoin, sleep } from './util.js';
+import { nowIso, ensureDir, safeJoin, sleep, errText } from './util.js';
 
 const BACKOFF = [2000, 4000, 8000, 16000, 30000];
 // 403/401/429 是平台侧明确拒绝（风控/限流/签名失效），不是网络抖动。
@@ -177,7 +177,9 @@ export class Recorder extends EventEmitter {
     this.child = this.media.spawnFfmpeg({ args, onStderr: (line) => this._onStderr(line) });
     this.child.on('close', (code, signal) => this._onClose(code, signal));
     this.child.on('error', (e) => {
-      this.logger.error(`ffmpeg 启动失败：${e.message}`, this._meta());
+      // 带上最近一条 ffmpeg stderr（如有）：ENOENT 之外的「启动即失败」，stderr 往往是唯一线索
+      const tail = this.lastStderrError ? `｜ffmpeg stderr：${this.lastStderrError}` : '';
+      this.logger.error(`ffmpeg 启动失败：${errText(e)}${tail}`, this._meta());
       this.emit('error', { code: 'SPAWN_FAILED', message: e.message, retryable: true });
     });
   }
@@ -291,7 +293,7 @@ export class Recorder extends EventEmitter {
     if (this.child) this.child = null;
     if (this.stopping || this.paused || this.rotating) return;
     this._handleUnexpectedExit(code, signal).catch((e) => {
-      this.logger.error(`重连流程异常：${e.message}`, this._meta());
+      this.logger.error(`重连流程异常：${errText(e)}`, this._meta());
     });
   }
 
@@ -343,7 +345,7 @@ export class Recorder extends EventEmitter {
       const next = segs.length ? segs[segs.length - 1].index + 1 : this.startNumber;
       await this._spawn(next);
     } catch (e) {
-      this.logger.warn(`重连解析失败：${e.message}`, this._meta());
+      this.logger.warn(`重连解析失败：${errText(e)}`, this._meta());
       await this._handleUnexpectedExit(code, signal);
     }
   }

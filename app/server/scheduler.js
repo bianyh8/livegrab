@@ -9,7 +9,7 @@ import {
   resolveRoom, resolveStream, getPlatform, platformList, detectPlatform, roomIdFrom, probeLive,
 } from './resolvers/index.js';
 import { buildRoomUrl } from './resolvers/room-url.js';
-import { uid, nowIso, HttpError, formatBytes, formatDuration, dateKey, formatDate, formatTime, VERSION } from './util.js';
+import { uid, nowIso, HttpError, formatBytes, formatDuration, dateKey, formatDate, formatTime, VERSION, errText } from './util.js';
 
 const LITE = (t) => ({
   id: t.id, name: t.anchorName || t.platformAnchorName || t.title || t.roomId,
@@ -61,7 +61,7 @@ export class Scheduler {
 
   startPolling(intervalMs = 5000) {
     if (this.pollTimer) clearInterval(this.pollTimer);
-    this.pollTimer = setInterval(() => { this.tick().catch((e) => this.logger.error(`调度异常：${e.message}`)); }, intervalMs);
+    this.pollTimer = setInterval(() => { this.tick().catch((e) => this.logger.error(`调度异常：${errText(e)}`)); }, intervalMs);
   }
 
   stopPolling() { if (this.pollTimer) { clearInterval(this.pollTimer); this.pollTimer = null; } }
@@ -82,7 +82,7 @@ export class Scheduler {
     };
     const timer = setTimeout(() => {
       this._pendingStarts.delete(id);
-      this._fireScheduledStart(id, rec).catch((e) => this.logger.error(`延时开录失败(${id})：${e.message}`));
+      this._fireScheduledStart(id, rec).catch((e) => this.logger.error(`延时开录失败(${id})：${errText(e)}`));
     }, Math.max(0, delaySec) * 1000);
     if (timer.unref) timer.unref(); // 不阻止进程退出
     this._pendingStarts.set(id, { timer, rec });
@@ -241,7 +241,7 @@ export class Scheduler {
       room = await resolveRoom(raw || `${platform}:${roomId}`, { platform, settings, logger: this.logger });
     } catch (e) {
       if (['NOT_IMPLEMENTED', 'AUTH', 'BLOCKED'].includes(e.code)) throw e;
-      this.logger.warn(`创建任务时解析失败（仍会创建，稍后自动重试）：${e.message}`);
+      this.logger.warn(`创建任务时解析失败（仍会创建，稍后自动重试）：${errText(e)}`);
       room = { anchorName: input.anchorName || '', title: input.title || '', roomId, liveStatus: 'unknown', qualityOptions: p.qualities };
     }
 
@@ -346,7 +346,7 @@ export class Scheduler {
         task.sourceUrl = buildRoomUrl(task.platform, { roomId: task.roomId, shortId: task.shortId || info.shortId || '', rawUrl: patch.sourceUrl });
         this.logger.info(`修改直播地址后已重新解析：${task.anchorName || task.roomId}`, { taskId: id });
       } catch (e) {
-        this.logger.warn(`修改直播地址后重解析失败（保留原信息）：${e.message}`, { taskId: id });
+        this.logger.warn(`修改直播地址后重解析失败（保留原信息）：${errText(e)}`, { taskId: id });
       }
     }
     if (patch.avatar) { // 编辑器点击解析→保存时更新头像落盘；下载失败则保留旧缓存，接口仍回退本地文件
@@ -468,11 +468,11 @@ export class Scheduler {
     });
     recorder.on('error', async (err) => {
       task.lastError = err.message;
-      this.logger.error(`录制错误：${err.message}`, { taskId: task.id, taskName: task.anchorName });
+      this.logger.error(`录制错误：${errText(err)}`, { taskId: task.id, taskName: task.anchorName });
       if (!err.retryable) await this._onFinished(task, { reason: 'error', segments: [], bytes: 0, durationSec: 0 });
       else this.onEvent({ type: 'task', task });
     });
-    recorder.on('finished', (payload) => { this._onFinished(task, payload).catch((e) => this.logger.error(`收尾失败：${e.message}`)); });
+    recorder.on('finished', (payload) => { this._onFinished(task, payload).catch((e) => this.logger.error(`收尾失败：${errText(e)}`)); });
 
     try {
       const started = await recorder.start();
@@ -503,7 +503,7 @@ export class Scheduler {
       task.statusMessage = e.message;
       task.failCount = (task.failCount || 0) + 1;
       await this.store.saveTask(task);
-      this.logger.error(`启动录制失败：${e.message}`, { taskId: task.id, taskName: task.anchorName });
+      this.logger.error(`启动录制失败：${errText(e)}`, { taskId: task.id, taskName: task.anchorName });
       await this.notifier.send('error', '录制启动失败', `${task.anchorName || task.roomId}：${e.message}`, { taskId: task.id, taskName: task.anchorName });
       this.onEvent({ type: 'task', task });
       return { error: e.message };
@@ -560,7 +560,7 @@ export class Scheduler {
       // keepSource 为全局设置（与收尾 autoRemux 一致）：false 时转完即删源 .ts
       if (this.store.settings.keepSource === false) await this.storage._dropSourceSegment(item, session);
     } catch (e) {
-      this.logger.warn(`分段 #${seg.index} 立即转封装失败（源文件保留）：${e.message}`, { taskId: task.id, taskName: task.anchorName });
+      this.logger.warn(`分段 #${seg.index} 立即转封装失败（源文件保留）：${errText(e)}`, { taskId: task.id, taskName: task.anchorName });
     }
   }
 
@@ -596,7 +596,7 @@ export class Scheduler {
       this.storage.autoRemux(session)
         .then(() => this.storage.writeArt(session))
         .then(() => this.onEvent({ type: 'files' }))
-        .catch((e) => this.logger.warn(`自动转封装失败：${e.message}`));
+        .catch((e) => this.logger.warn(`自动转封装失败：${errText(e)}`));
     }
     this.tick().catch(() => {});
   }
@@ -631,7 +631,7 @@ export class Scheduler {
       info = await resolveRoom(task.sourceUrl || `${task.platform}:${task.roomId}`, { platform: task.platform, settings: this.store.settings, logger: this.logger });
       this.logger.info(`手动开始录制：${task.anchorName || task.roomId}（${task.platformName || task.platform}）· 开播检测${info.liveStatus === 'live' ? '：已开播' : '：未开播'}`, { taskId: task.id, taskName: task.anchorName });
     } catch (e) {
-      this.logger.warn(`手动开始前的开播检测失败：${e.message}`, { taskId: task.id });
+      this.logger.warn(`手动开始前的开播检测失败：${errText(e)}`, { taskId: task.id });
     }
     if (info) {
       if (!task.nameLocked) task.anchorName = info.anchorName || task.anchorName;
@@ -929,7 +929,7 @@ export class Scheduler {
             task.status = 'error';
             task.statusMessage = `${p.name} 解析连续失败 ${task.failCount} 次：${e.message}`;
             task.nextPollAt = now + 10 * 60 * 1000;
-            this.logger.error(`任务转入错误（连续失败 ${task.failCount} 次）：${e.message}`, { taskId: task.id, taskName: task.anchorName });
+            this.logger.error(`任务转入错误（连续失败 ${task.failCount} 次）：${errText(e)}`, { taskId: task.id, taskName: task.anchorName });
           } else {
             const backoff = Math.min(10 * 60, Math.max(30, this.pollIntervalOf(task)) * 2 ** (task.failCount - 1));
             task.nextPollAt = now + backoff * 1000;
@@ -1026,7 +1026,7 @@ export class Scheduler {
           this.onEvent({ type: 'task', task });
         }
       } catch (e) {
-        this.logger.error(`任务轮询异常(${task.id})：${e.message}`);
+        this.logger.error(`任务轮询异常(${task.id})：${errText(e)}`);
       }
     }
     if (polledAny) this.logger.info('轮询直播间状态结束');

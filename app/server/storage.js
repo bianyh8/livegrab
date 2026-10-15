@@ -4,7 +4,7 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import * as media from './media.js';
-import { uid, nowIso, ensureDir, formatBytes, mimeByExt, extOf, HttpError, safeJoin, dirSize } from './util.js';
+import { uid, nowIso, ensureDir, formatBytes, mimeByExt, extOf, HttpError, safeJoin, dirSize, errText } from './util.js';
 import { buildMergedName, buildContext, pickProfile } from './naming.js';
 import { PLATFORMS } from './resolvers/index.js';
 
@@ -548,7 +548,7 @@ export class Storage {
         this.logger.info(`转封装完成：${item.name}（${formatBytes(st.size)}）`);
         return item;
       } catch (e) {
-        this.logger.error(`转封装失败：${file.name} — ${e.message}`);
+        this.logger.error(`转封装失败：${file.name} — ${errText(e)}`);
         throw new HttpError('REMUX_FAILED', `转封装失败：${e.message}`, 500);
       } finally {
         this._remuxInflight.delete(outPath);
@@ -604,12 +604,12 @@ export class Storage {
       this._jobDone(job, { fileId: item.id, name: item.name });
       // 合并后按设置自动转封装 MP4
       if (this.store.settings.remuxToMp4) {
-        await this.remux(item.id).catch((e) => this.logger.warn(`合并后转封装失败：${e.message}`));
+        await this.remux(item.id).catch((e) => this.logger.warn(`合并后转封装失败：${errText(e)}`));
       }
       return item;
     } catch (e) {
       await fsp.rm(listFile, { force: true }).catch(() => {});
-      this.logger.error(`合并失败：${e.message}`);
+      this.logger.error(`合并失败：${errText(e)}`);
       this._jobFail(job, e.message);
       throw new HttpError('MERGE_FAILED', `合并失败：${e.message}`, 500);
     }
@@ -623,7 +623,7 @@ export class Storage {
       && !(session.extras || []).some((m) => m.sourceFileId === f.id));
     if (!segs.length) return [];
     if (this.store.settings.autoMerge && segs.length > 1) {
-      await this.mergeSession(session.id).catch((e) => this.logger.warn(`自动合并失败：${e.message}`));
+      await this.mergeSession(session.id).catch((e) => this.logger.warn(`自动合并失败：${errText(e)}`));
       return [];
     }
     const keep = this.store.settings.keepSource !== false; // 系统设置：转 mp4 后是否保留源 .ts
@@ -699,7 +699,7 @@ export class Storage {
       this.logger.info(`已生成刮削：${base}.jpg + ${base}.nfo`, { taskId: session.taskId, taskName: session.streamer });
       return !!img;
     } catch (e) {
-      this.logger.warn(`刮削生成失败：${e.message}`);
+      this.logger.warn(`刮削生成失败：${errText(e)}`);
       return false;
     }
   }
@@ -846,7 +846,7 @@ export class Storage {
             const r = await this.moveToTrash({ sessionIds: [s.id] });
             removedBytes += r.bytes;
             removed++;
-          } catch (e) { this.logger.warn(`保留策略删除失败：${e.message}`); }
+          } catch (e) { this.logger.warn(`保留策略删除失败：${errText(e)}`); }
         }
       }
     }

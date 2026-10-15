@@ -20,7 +20,7 @@ import { resolveRoom, platformList, PLATFORMS } from './resolvers/index.js';
 import { previewNaming, VARIABLES, DEFAULT_OPTIONS, qualityLabel, NAMING_OPTION_CHOICES } from './naming.js';
 import {
   ok, fail, HttpError, readBody, mimeByExt, parseRange, extOf, VERSION,
-  ensureDir, formatBytes, tzName, uid, safeJoin,
+  ensureDir, formatBytes, tzName, uid, safeJoin, errText,
 } from './util.js';
 
 // 播放日志节流：同一文件 10s 内只记一次，避免视频拖动/Range 请求刷屏日志
@@ -121,23 +121,48 @@ function treeFor(sessions, view = 'platform') {
 }
 
 // ---------- 主流程 ----------
+/** 读取并转写容器启动引导事件（deploy/entrypoint.sh 写入的 ${configDir}/.bootstrap-events，
+    格式为「LEVEL 消息」逐行）：克隆/回退/预热/依赖检查原本只进 Docker stdout，转写后
+    也进日志文件与「运行日志」页；读完即删，容器不重启不会重复记录。 */
+async function ingestBootstrapEvents(configDir, logger) {
+  const file = path.join(configDir, '.bootstrap-events');
+  const txt = await fsp.readFile(file, 'utf8').catch(() => '');
+  if (!txt.trim()) { await fsp.rm(file, { force: true }).catch(() => {}); return 0; }
+  let count = 0;
+  for (const line of txt.split('\n')) {
+    const m = /^(INFO|WARN|ERROR|DEBUG)\s+(.+)$/.exec(line.trim());
+    if (!m) continue;
+    logger.log(m[1], `[容器启动] ${m[2]}`);
+    count++;
+  }
+  await fsp.rm(file, { force: true }).catch(() => {});
+  return count;
+}
+
 async function bootstrap() {
+  // logger 就绪前的启动日志（db 初始化等）先入缓冲，就绪后补写进日志文件，保证启动全程可查
+  const early = [];
+  const earlyLog = (level, msg) => early.push({ level, msg });
   // ---------- 持久层：SQLite v2（唯一存储，无 JSON 镜像、无迁移） ----------
   const dbPath = path.join(CONFIG_DIR, 'livegrab.db');
-  const db = openDb(dbPath); // 空库建表；旧版本库（含 v1 data_json 结构）作废重建为空库
+  const db = openDb(dbPath, earlyLog); // 空库建表；旧版本库（含 v1 data_json 结构）作废重建为空库
   const legacyRemoved = await cleanupLegacyFiles(CONFIG_DIR); // 清除 state.json 等旧 JSON 遗留（独立方法，日后可整段删除）
-  if (legacyRemoved.length) console.log(`[db] 旧 JSON 遗留清理：${legacyRemoved.join('、')}`);
+  if (legacyRemoved.length) earlyLog('INFO', `旧 JSON 遗留清理：${legacyRemoved.join('、')}`);
   const store = new Store(CONFIG_DIR);
   // 容器环境变量优先（compose 是唯一来源）
   store.settings.recordRoot = RECORD_ROOT;
   store.settings.configDir = CONFIG_DIR;
   await store.init(db);
-  console.log(`[db] SQLite v2 持久层就绪：${dbPath}（schema_version=${schemaVersion(db)}/${SCHEMA_VERSION}，仅 SQLite）`);
+  earlyLog('INFO', `SQLite v2 持久层就绪：${dbPath}（schema_version=${schemaVersion(db)}/${SCHEMA_VERSION}，仅 SQLite）`);
   const logger = await new Logger({
     dir: path.join(CONFIG_DIR, 'logs'),
     level: store.settings.logLevel || 'INFO',
     retentionDays: store.settings.logRetentionDays || 14,
   }).init();
+  store.logger = logger; // 持久层运行时错误（落盘失败/冲突行）随后进日志文件
+  for (const l of early) logger.log(l.level, l.msg);
+  // 容器首启事件 → 正式日志（前缀 [容器启动]）：克隆结果/回退/预热/依赖检查，重启后仍可查
+  await ingestBootstrapEvents(CONFIG_DIR, logger);
   const auth = await new Auth(CONFIG_DIR).init();
   const storage = new Storage({ store, logger });
   const notifier = new Notifier({ store, logger });
@@ -156,7 +181,7 @@ async function bootstrap() {
   scheduler.engine = { available: ffv.available, version: ffv.version };
   await ensureDir(RECORD_ROOT);
   await ensureDir(play.store.settings.recordRoot);
-  const scan = await storage.scan().catch((e) => { logger.warn(`首次扫描失败：${e.message}`); return null; });
+  const scan = await storage.scan().catch((e) => { logger.warn(`首次扫描失败：${errText(e)}`); return null; });
   storage.startCleanupTimer();
   await scheduler.init();
   const version = VERSION;
@@ -165,8 +190,9 @@ async function bootstrap() {
   // 本地运行直接生效；架构 B 容器（/config/src 自带 .git）同样走此钩子——
   // re-exec 的新进程从 /config/src/app 加载新代码，配合 init:true 容器不退出。
   // 容器首启克隆失败/镜像过旧（无 git）时 update.js 会提前返回手动重建指引，不走此钩子。
-  update.restartHook = async () => {
-    logger.info('更新完成，正在优雅停止当前实例并重启以加载新版本…');
+  update.restartHook = async (info) => {
+    const trans = info && info.to ? `（${info.from ? `v${info.from} → ` : ''}${info.to}）` : '';
+    logger.info(`更新完成${trans}，正在优雅停止当前实例并重启以加载新版本…`);
     scheduler.stopPolling();
     for (const [, rec] of scheduler.recorders) { try { await rec.stop('shutdown'); } catch { /* ignore */ } }
     for (const [, rec] of scheduler.detached) { try { await rec.stop('shutdown'); } catch { /* ignore */ } }
@@ -704,7 +730,7 @@ async function main() {
     }
     /* 流式读取中途失败（文件被删/磁盘错误等）也要落日志，写明路径与具体原因 */
     const guard = (rs) => rs.on('error', (err) => {
-      logger.error(`文件流读取失败：${file.name}｜路径：${file.path}｜原因：${err.message}`, { taskId: hit.session && hit.session.taskId, path: file.path });
+      logger.error(`文件流读取失败：${file.name}｜路径：${file.path}｜原因：${errText(err)}`, { taskId: hit.session && hit.session.taskId, path: file.path });
       try { res.destroy(); } catch { /* ignore */ }
     });
     if (range === 'invalid') {
@@ -773,8 +799,14 @@ async function main() {
       if (data === null || res.writableEnded) return;
       ok(res, data);
     } catch (e) {
-      if (!res.writableEnded) fail(res, e);
-      else logger.error(`响应已开始后出错：${e.message}`);
+      // 5xx 一律进日志文件（带请求上下文 + 堆栈）：此前只 console.error 到 stdout，日志文件与「运行日志」页完全看不到
+      const status = e instanceof HttpError ? e.status : 500;
+      if (!res.writableEnded) {
+        fail(res, e);
+        if (status >= 500) logger.error(`接口未处理异常 ${req.method} ${url.pathname}（${ip}）：${errText(e)}`);
+      } else {
+        logger.error(`响应已开始后出错 ${req.method} ${url.pathname}（${ip}）：${errText(e)}`);
+      }
     } finally {
       if (url.pathname.startsWith('/api/') && Date.now() - started > 3000) {
         logger.warn(`慢请求 ${req.method} ${url.pathname} 用时 ${Date.now() - started}ms`);

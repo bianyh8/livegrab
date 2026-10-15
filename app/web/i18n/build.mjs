@@ -128,7 +128,7 @@ const ADD = {
   'settings.upChecking': '正在检查更新…',
   'settings.upProgressTitle': '更新进度',
   'settings.upTaskLabel': '当前任务：', 'settings.upElapsed': '已用时间', 'settings.upEstimate': '预计',
-  'settings.upLogTitle': '更新日志', 'settings.upNotesTitle': '更新说明', 'settings.upNotesMain': '主要更新内容', 'settings.upNotesFix': '修复内容',
+  'settings.upLogTitle': '更新日志', 'settings.upLogAlsoInLogs': '同步记录到「运行日志」页', 'settings.upNotesTitle': '更新说明', 'settings.upNotesMain': '主要更新内容', 'settings.upNotesFix': '修复内容',
   'settings.upNotesNone': '暂无更新说明。',
   'settings.upApplyConfirmTitle': '确认立即更新？',
   'settings.upApplyConfirmSelf': '将从 GitHub 拉取最新代码并安装依赖，完成后自动重启服务加载新版本（本地与容器部署均支持）。更新期间请勿关闭页面。',

@@ -1,4 +1,6 @@
 // Webhook 通知：事件开关 + 60 秒去重 + 失败重试（D18）
+import { errText } from './util.js';
+
 export class Notifier {
   constructor({ store, logger, fetchImpl = globalThis.fetch }) {
     this.store = store;
@@ -81,7 +83,8 @@ export class Notifier {
         return { ok: true, attempts: i + 1, provider: isFeishu ? 'feishu' : isDiscord ? 'discord' : 'generic' };
       } catch (e) {
         lastErr = e;
-        this.logger.warn(`通知发送失败（第 ${i + 1}/${delays.length} 次）：${e.message}`);
+        // errText 带上错误码（ECONNRESET/ETIMEDOUT 等）：Webhook 不通时能区分网络层与业务层失败
+        this.logger.warn(`通知发送失败（第 ${i + 1}/${delays.length} 次）：${errText(e, { withStack: false })}`);
       }
     }
     this.stats.failed++;

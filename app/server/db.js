@@ -330,7 +330,9 @@ function seedVariables(db) {
  * 空库 → 建全部表；旧版本库（v1 data_json）→ 关闭并删除 db/-wal/-shm 后重建全新空库。
  * 注意：这里不做任何迁移/导入——旧库数据一律作废（用户自行处理旧数据）。
  */
-export function openDb(dbPath) {
+export function openDb(dbPath, onLog = null) {
+  // onLog(level, msg)：logger 就绪前的启动日志出口（server.js 用缓冲收集，就绪后补写进日志文件）
+  const say = (level, msg) => { if (onLog) onLog(level, msg); else if (level === 'WARN') console.warn(msg); else console.log(msg); };
   fs.mkdirSync(path.dirname(dbPath), { recursive: true }); // 首次部署时 config 目录可能还不存在
   let db = new Database(dbPath);
 
@@ -352,8 +354,8 @@ export function openDb(dbPath) {
         throw new Error(`[db] 检测到有效但非 LiveGrab v2 的数据库（含 ${tbl.c} 张表、无 meta.schema_version）：${dbPath}。为避免误删已保留原文件，请人工确认后移除或改名再启动。`);
       }
     }
-    if (ver === 0) console.log('[db] 全新空库，初始化 v2 表结构…');
-    else console.warn(`[db] 检测到旧版/未知数据库（schema_version=${ver} ≠ ${SCHEMA_VERSION}），按设计作废重建为 v2 空库（原文件已删除，不保留旧数据）`);
+    if (ver === 0) say('INFO', '全新空库，初始化 v2 表结构');
+    else say('WARN', `检测到旧版/未知数据库（schema_version=${ver} ≠ ${SCHEMA_VERSION}），按设计作废重建为 v2 空库（原文件已删除，不保留旧数据）`);
     try { db.close(); } catch { /* ignore */ }
     for (const suf of ['', '-wal', '-shm']) {
       try { fs.rmSync(dbPath + suf, { force: true }); } catch { /* ignore */ }

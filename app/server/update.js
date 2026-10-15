@@ -3,6 +3,8 @@
    ② 从 GitHub API（bianyh8/livegrab）拉取最新版本与提交，做对比；
    ③ 「立即更新」后台任务：git fetch + git pull（环境支持时），否则给出手动更新指引；
    ④ 内存态更新进度与日志（前端轮询 /api/update/status 获取）。
+   日志约定：所有更新事件（环境自检/检查对比/拉取/安装/重启）都经 _log 同步写入日志文件
+   （前缀 [更新]，与「运行日志」页同一套 logger）；检查结果相同不重复记，避免刷屏。
    设计约定：本地与架构 B 容器（/config/src 自带 .git）走完整的「拉取 → 装依赖 → 自重启」；
    容器首启克隆失败/镜像过旧（无 .git / 无 git）时不伪更新，明确提示手动步骤；本模块零第三方依赖。 */
 
@@ -61,6 +63,8 @@ export class UpdateManager {
       startedAt: 0,
       log: [],              // [{ts, level, msg}]
     };
+    this._envSig = '';       // 环境自检结果签名（相同则不重复记日志）
+    this._lastCheckSig = ''; // 最近一次已记录检查结果的签名（相同则不重复记日志）
   }
 
   /* ---------- 内部工具 ---------- */
@@ -117,6 +121,14 @@ export class UpdateManager {
       dockerAvailable: !!dockerBin,
       inContainer,
     };
+    // 环境自检结果记入日志（每次启动首次检测时一条）：排查「为什么不能在线更新」的第一手信息
+    const sig = JSON.stringify(this.state.env);
+    if (sig !== this._envSig) {
+      this._envSig = sig;
+      this._log('INFO', this.state.env.gitAvailable
+        ? `更新环境自检：git 可用（仓库 ${this.state.env.gitRoot}${inContainer ? ' · 运行于容器' : ' · 本地运行'}），支持在线更新`
+        : `更新环境自检：未检测到 git 仓库${gitBin ? '' : '（系统无 git）'}${inContainer ? ' · 运行于容器' : ' · 本地运行'}，无法在线拉取代码，更新时将给出手动指引`);
+    }
     return this.state.env;
   }
 
@@ -245,6 +257,20 @@ export class UpdateManager {
       await this.localInfo();
       await this.fetchRemote();
       this.state.checkedAt = Date.now();
+      // 检查结果记入日志（与上次已记录的结果相同则跳过，避免反复打开更新页刷屏）：
+      // 「本地 → 远程」版本链路是排查更新是否生效、版本号是否滞后的依据
+      const latest = this.state.latest;
+      const local = this.state.local;
+      const key = `${local?.version}|${local?.commit}|${latest?.unavailable ? 'unavailable' : latest?.tag}|${latest?.commit || ''}`;
+      if (key !== this._lastCheckSig) {
+        this._lastCheckSig = key;
+        if (latest && latest.unavailable) {
+          this._log('WARN', '检查更新：无法获取远程版本信息（仓库不可见或网络异常）');
+        } else {
+          const hasNew = this._computeHasUpdate(local, latest);
+          this._log('INFO', `检查更新：本地 v${local?.version || '?'}${local?.commit ? ` (${local.commit})` : ''} → 远程 ${latest?.tag || '?'}${latest?.commit ? ` (${latest.commit})` : ''}（${hasNew ? '有更新' : '已是最新'}）`);
+        }
+      }
     } catch (e) {
       this._log('ERR', `检查更新失败：${e.message || e}`);
       throw e;
@@ -323,7 +349,8 @@ export class UpdateManager {
       const fetchR = await run('git', [...this._gitAuthArgs(), 'fetch', 'origin', BRANCH], { cwd: env.gitRoot, timeout: 120000 });
       if (!fetchR.ok) {
         this._phase('error', 25, '');
-        this._log('ERR', `代码拉取失败：${fetchR.err || fetchR.out || fetchR.code}`);
+        const detail = (fetchR.err || fetchR.out || '').split('\n').slice(0, 3).join(' ').trim();
+        this._log('ERR', `代码拉取失败（exit ${fetchR.code}）：${detail || '无输出'}`);
         return;
       }
       this._log('OK', '代码拉取成功');
@@ -348,7 +375,8 @@ export class UpdateManager {
       const pullR = await run('git', [...this._gitAuthArgs(), 'pull', '--ff-only', 'origin', BRANCH], { cwd: env.gitRoot, timeout: 120000 });
       if (!pullR.ok) {
         this._phase('error', 60, '');
-        this._log('ERR', `代码更新失败（非快进或本地有改动）：${pullR.err || pullR.out || pullR.code}`);
+        const detail = (pullR.err || pullR.out || '').split('\n').slice(0, 3).join(' ').trim();
+        this._log('ERR', `代码更新失败（非快进或本地有改动，exit ${pullR.code}）：${detail || '无输出'}`);
         this._log('INFO', '请先提交或暂存本地改动后重试，或手动执行 git pull origin ' + BRANCH);
         return;
       }
@@ -363,8 +391,10 @@ export class UpdateManager {
       }
       this._log('INFO', '安装依赖 npm install…');
       const npmR = await run('npm', ['install'], { cwd: path.join(env.gitRoot, 'app'), timeout: 300000 });
-      if (!npmR.ok && npmR.err) {
-        this._log('WARN', `依赖安装可能有警告：${npmR.err.split('\n')[0]}`);
+      if (!npmR.ok) {
+        // 退出码非 0 也算警告（npm 偶发警告但 exit 0 属正常）：带 stderr 尾部便于定位
+        const detail = (npmR.err || npmR.out || '').split('\n').slice(-3).join(' ').trim();
+        this._log('WARN', `依赖安装未成功（exit ${npmR.code}）：${detail || '无输出'}`);
       } else {
         this._log('OK', '依赖安装完成');
       }
@@ -377,7 +407,7 @@ export class UpdateManager {
         this._log('OK', '代码已更新，正在重启服务以加载新版本…');
         await sleep(1500);
         try {
-          await this.restartHook(); // 优雅停止 + re-exec（此调用会退出当前进程）
+          await this.restartHook({ from: local.version, to: latest.tag }); // 优雅停止 + re-exec（此调用会退出当前进程）
         } catch (e) {
           this._log('WARN', `自动重启失败（${e?.message || e}），请手动重启服务使新版本生效`);
         }

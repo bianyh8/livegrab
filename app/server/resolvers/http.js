@@ -1,5 +1,5 @@
 // 公共 HTTP 助手：超时 + 重试 + 统一 UA
-import { HttpError } from '../util.js';
+import { HttpError, errText } from '../util.js';
 
 export const DESKTOP_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
 
@@ -16,11 +16,13 @@ export async function httpGet(url, { headers = {}, timeoutMs = 12000, retries = 
       return { status: res.status, ok: res.ok, text, headers: res.headers, finalUrl: res.url || url };
     } catch (e) {
       lastErr = e;
-      if (logger && i < retries) logger.debug(`${label || 'HTTP'} 第 ${i + 1} 次请求失败：${e.message}`);
+      if (logger && i < retries) logger.debug(`${label || 'HTTP'} 第 ${i + 1} 次请求失败：${errText(e, { withStack: false })}`);
       await new Promise((r) => setTimeout(r, 400 * (i + 1)));
     }
   }
-  throw new HttpError('NETWORK', `网络请求失败：${lastErr?.message || 'unknown'}`, 502);
+  // 带 URL/标签与重试次数：此前只有「网络请求失败：fetch failed」，无法判断是哪个接口、错因（DNS/超时/拒连）
+  const where = label ? `${label} ${url}` : url;
+  throw new HttpError('NETWORK', `网络请求失败（${where}，已重试 ${retries} 次）：${errText(lastErr, { withStack: false })}`, 502);
 }
 
 export async function httpJson(url, opts = {}) {

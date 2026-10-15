@@ -25,6 +25,44 @@ export class HttpError extends Error {
   }
 }
 
+/**
+ * 错误详情格式化：message + 关键字段（code/status/errno/syscall/address）+ cause 链 + 堆栈顶部两帧。
+ * 目的：让日志里的 ERROR 可诊断——此前各处只记 e.message，丢堆栈与根因，线上问题无法定位。
+ * - HttpError 是「预期的用户可见错误」（文案已含指引），默认不带堆栈，避免刷噪声；
+ *   传 { withStack: true } 可强制带；非 Error 对象（字符串/普通对象）安全降级。
+ * - cause 链最多展开两层：fetch 失败类错误的真正根因（ENOTFOUND/ECONNREFUSED/TIMEOUT）都在 cause 里。
+ * - 堆栈只取前两帧并压成单行（` @ at a (f:1:1) ← at b (f:2:2)`），日志按行存储、前端表格渲染。
+ */
+export function errText(e, { withStack } = {}) {
+  if (e == null) return '未知错误';
+  if (typeof e === 'string') return e;
+  const wantStack = withStack ?? !(e instanceof HttpError);
+  const tags = [];
+  if (e.code) tags.push(`code=${e.code}`);
+  if (e.status) tags.push(`status=${e.status}`);
+  if (e.errno) tags.push(`errno=${e.errno}`);
+  if (e.syscall) tags.push(`syscall=${e.syscall}`);
+  if (e.address) tags.push(`address=${e.address}${e.port ? `:${e.port}` : ''}`);
+  const head = (e.message || String(e)) + (tags.length ? `（${tags.join(' ')}）` : '');
+  if (!wantStack) return head;
+  let out = head;
+  // cause 链（最多两层，不带各自堆栈）：网络错误的根因码是定位关键
+  const causes = [];
+  let cur = e.cause;
+  let depth = 0;
+  while (cur && depth < 2 && cur !== e) {
+    const ct = [];
+    if (cur.code) ct.push(`code=${cur.code}`);
+    if (cur.errno) ct.push(`errno=${cur.errno}`);
+    causes.push((cur.message || String(cur)) + (ct.length ? `（${ct.join(' ')}）` : ''));
+    cur = cur.cause;
+    depth++;
+  }
+  if (causes.length) out += `｜cause: ${causes.join(' ← ')}`;
+  const stack = e.stack ? String(e.stack).split('\n').slice(1, 3).map((s) => s.trim()).filter(Boolean).join(' ← ') : '';
+  return stack ? `${out} @ ${stack}` : out;
+}
+
 export const uid = (p = 'x') =>
   `${p}_${Date.now().toString(36)}${crypto.randomBytes(3).toString('hex')}`;
 
@@ -218,11 +256,11 @@ export function sendJson(res, status, payload) {
 }
 
 export function ok(res, data, status = 200) { sendJson(res, status, { ok: true, data }); }
+/** 5xx 由调用方（路由包装器）记入日志文件（带请求上下文），这里只负责响应，不再重复 console.error */
 export function fail(res, error) {
   const status = error instanceof HttpError ? error.status : 500;
   const code = error instanceof HttpError ? error.code : 'INTERNAL';
   const message = error?.message || '内部错误';
-  if (status >= 500) console.error('[error]', error);
   sendJson(res, status, { ok: false, error: { code, message } });
 }
 

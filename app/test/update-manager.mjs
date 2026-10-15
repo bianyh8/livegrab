@@ -160,6 +160,40 @@ console.log('== G. 网络异常（fetch 直接抛错） ==');
   check(m.state.latest.unavailable === true, 'fetch 抛错 → unavailable=true');
 }
 
+console.log('== H. 更新日志统一写入 logger（环境自检/检查对比/级别映射/去重） ==');
+{
+  mockGitHub({ ...FAKE_PUBLIC, repoPublic: true, repoPrivate: false });
+  const lines = [];
+  const fakeLogger = {
+    debug: (m) => lines.push(['DEBUG', m]),
+    info: (m) => lines.push(['INFO', m]),
+    warn: (m) => lines.push(['WARN', m]),
+    error: (m) => lines.push(['ERROR', m]),
+  };
+  const m = new UpdateManager({ appDir: TMP, logger: fakeLogger });
+  // ① 环境自检：首次 detectEnv 记一条（有没有 git 依运行环境，断言格式）
+  await m.detectEnv();
+  const envLines = lines.filter(([, msg]) => /更新环境自检/.test(msg));
+  check(envLines.length === 1, 'detectEnv 首次检测记录环境自检日志', JSON.stringify(envLines));
+  check(/git 可用|未检测到 git 仓库/.test(envLines[0]?.[1] || ''), '环境自检日志含 git 可用性判定');
+  // ② 重复 detectEnv（环境未变）不重复记
+  await m.detectEnv();
+  check(lines.filter(([, msg]) => /更新环境自检/.test(msg)).length === 1, '环境未变化时不重复记录自检日志');
+  // ③ check 成功：记录「本地 → 远程」对比（有更新）
+  await m.check(true);
+  const cmp = lines.filter(([, msg]) => /检查更新：本地/.test(msg));
+  check(cmp.length === 1, 'check 记录版本对比日志', JSON.stringify(cmp));
+  check(/v0\.1\.0.*→.*v0\.2\.0.*（有更新）/.test(cmp[0]?.[1] || ''), '对比日志含本地/远程版本与结论');
+  // ④ 强制再查（结果相同）：去重，不刷屏
+  await m.check(true);
+  check(lines.filter(([, msg]) => /检查更新：本地/.test(msg)).length === 1, '检查结果相同不重复记录');
+  // ⑤ _log 级别映射：OK→info、ERR→error、WARN→warn
+  m._log('OK', 'x'); m._log('ERR', 'y'); m._log('WARN', 'z');
+  const last3 = lines.slice(-3);
+  check(last3[0][0] === 'INFO' && last3[1][0] === 'ERROR' && last3[2][0] === 'WARN', '_log 级别映射 OK/ERR/WARN → info/error/warn');
+  check(last3.every(([, msg]) => msg.startsWith('[更新] ')), 'logger 中的更新日志带 [更新] 前缀');
+}
+
 global.fetch = realFetch;
 console.log(bad === 0 ? '\n全部通过 ✅' : `\n${bad} 项失败 ❌`);
 process.exit(bad === 0 ? 0 : 1);
