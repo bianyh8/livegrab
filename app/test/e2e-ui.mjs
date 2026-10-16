@@ -333,6 +333,31 @@ for (const { pg, needles, absent = [], minLen = 40 } of PAGES) {
     check(!p.hasCapsCard, '平台账号页不再重复「平台并发上限」卡片（只保留并发上限列）');
     check(!/原画 1080P60/.test(p.txt || ''), '平台账号清晰度已简化为紧凑显示（不再堆一长串档位 chip）');
     check(!/\bstable\b/.test(p.txt || ''), '平台账号不再显示 stable 等英文代号（已翻译成中文）');
+
+    // 系统更新页签：模块顺序应为 更新源配置（置顶）→ 更新管理 → 左「更新说明」/ 右「更新日志」
+    await send('Runtime.evaluate', { expression: `document.querySelector('#settingsTabs [data-tab="update"]') && document.querySelector('#settingsTabs [data-tab="update"]').click()`, returnByValue: true });
+    let u = {};
+    for (let i = 0; i < 30; i++) { // 收敛等待：更新页签异步渲染（先拉 updateStatus/check，可能较慢）
+      const utab = await send('Runtime.evaluate', {
+        expression: `JSON.stringify((() => {
+          const host = document.querySelector('#tabHost');
+          if (!host) return { err: 'no tabHost' };
+          const heads = [...host.querySelectorAll('.card h3')];
+          const titles = heads.map((h) => (h.innerText || '').trim());
+          const idx = (kw) => titles.findIndex((s) => s.includes(kw));
+          const leftOf = (kw) => { const h = heads.find((x) => (x.innerText || '').includes(kw)); return h ? Math.round(h.getBoundingClientRect().left) : -1; };
+          return { titles, iCfg: idx('更新源配置'), iMgmt: idx('更新管理'), iNotes: idx('更新说明'), iLog: idx('更新日志'), notesLeft: leftOf('更新说明'), logLeft: leftOf('更新日志') };
+        })())`,
+        returnByValue: true,
+      });
+      u = JSON.parse(utab?.result?.result?.value || '{}');
+      if (u.iCfg === 0 && u.iMgmt === 1 && u.iNotes > 1 && u.iLog > 1) break;
+      await sleep(300);
+    }
+    line(`   更新页模块顺序: ${JSON.stringify(u.titles)}`);
+    check(u.iCfg === 0 && u.iMgmt === 1, '更新页模块顺序：更新源配置置顶、其下为更新管理', JSON.stringify(u.titles));
+    check(u.iNotes > u.iMgmt && u.iLog > u.iMgmt, '更新说明/更新日志位于更新管理之后', JSON.stringify(u.titles));
+    check(u.notesLeft >= 0 && u.logLeft >= 0 && u.notesLeft < u.logLeft, '更新说明在左、更新日志在右', `notes=${u.notesLeft} log=${u.logLeft}`);
   }
   const badConsole = consoleErrors.filter((e) => /LiveGrab|Uncaught|not a function|is not defined|undefined is not/.test(e));
   check(badConsole.length === 0, `${pg} 无前端报错`, badConsole.slice(0, 2).join(' | '));

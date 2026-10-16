@@ -180,6 +180,9 @@ function paint(root, st) {
   root.innerHTML = `
     <div class="stack" style="max-width:1100px">
       ${isRestart ? `<div class="up-banner restart"><i class="up-spin"></i><span>${t('settings.upRestartingBanner')}</span></div>` : ''}
+
+      ${configCard}
+
       <div class="card">
         <div class="card-h"><h3>${t('settings.upTitle')}</h3><span class="hint">${t('settings.upHint')}</span></div>
         <div class="card-b">
@@ -212,8 +215,6 @@ function paint(root, st) {
           <div class="hintline" style="margin-top:10px">${t('settings.upRepo', esc(st.repo || 'bianyh8/livegrab'), esc(st.branch || 'main'))}</div>
         </div>
       </div>
-
-      ${configCard}
 
       ${progressCard}
 
