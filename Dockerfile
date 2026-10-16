@@ -19,7 +19,7 @@ FROM node:22-bookworm-slim
 
 LABEL org.opencontainers.image.title="LiveGrab 直播录制台" \
       org.opencontainers.image.description="抖音/B站/快手/虎牙/斗鱼/小红书/微博 直播分段录制，带 Web 管理页面" \
-      org.opencontainers.image.version="0.1.12"
+      org.opencontainers.image.version="0.1.13"
 
 ENV NODE_ENV=production \
     PORT=8080 \

@@ -56,6 +56,7 @@ const ADD = {
   'ui.remuxFail': '转封装失败', 'ui.mergeInvalid': '该文件不属于整场记录，无法合并',
   'ui.mergeQueued': '已提交合并整场任务', 'ui.mergeFail': '合并失败',
   'ui.fitContain': '适应', 'ui.fitFill': '铺满', 'ui.rotate': '旋转画面', 'ui.fullscreen': '全屏',
+  'ui.switchOrient': '切换横屏 / 竖屏',
 
   // trash
   'trash.loading': '正在加载回收站…', 'trash.loadFail': '回收站加载失败：{0}',

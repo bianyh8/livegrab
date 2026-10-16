@@ -20,6 +20,7 @@ import { PlayManager } from '../server/play.js';
 import * as resolvers from '../server/resolvers/index.js';
 import { isPullBlocked, reconnectDelay } from '../server/recorder.js';
 import { byteLength, parseRange, safeJoin, formatBytes, formatDuration, HttpError, uid, VERSION, errText } from '../server/util.js';
+import { seekRatio } from '../web/ui.js';
 import * as fakeMedia from './fake-media.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -786,6 +787,17 @@ async function testUtil() {
   ok(errText(wrapped).includes('cause: 内层'), 'errText 展开 cause 链');
   const evt = { code: 'SPAWN_FAILED', message: 'ffmpeg 启动失败' };
   eq(errText(evt), 'ffmpeg 启动失败（code=SPAWN_FAILED）', 'errText 兼容事件载荷对象（recorder error 事件）');
+  // seekRatio：播放器进度条点击定位（容器 rotate(90deg) 模拟横屏时沿 clientY 取比例）
+  const rectH = { left: 0, top: 0, width: 300, height: 6 };
+  eq(seekRatio(rectH, 150, 0), 0.5, 'seekRatio 未旋转：中点命中一半');
+  eq(seekRatio(rectH, 300, 0), 1, 'seekRatio 未旋转：条末端为 1');
+  eq(seekRatio(rectH, 999, 0), 1, 'seekRatio 未旋转：点过头裁剪到 1');
+  eq(seekRatio(rectH, -50, 0), 0, 'seekRatio 未旋转：负值裁剪到 0');
+  const rectR = { left: 0, top: 40, width: 6, height: 300 }; // 旋转后包围盒：视觉长度在 height
+  eq(seekRatio(rectR, 0, 190, true), 0.5, 'seekRatio 旋转：沿 clientY 命中一半');
+  eq(seekRatio(rectR, 0, 40, true), 0, 'seekRatio 旋转：视觉起点为 0');
+  eq(seekRatio(rectR, 0, 999, true), 1, 'seekRatio 旋转：越界裁剪到 1');
+  eq(seekRatio({ left: 0, top: 0, width: 0, height: 0 }, 10, 10), 0, 'seekRatio 零宽高安全降级');
 }
 
 // ============ 8. HTTP 冒烟 ============

@@ -574,6 +574,20 @@ export async function openPlayer(ctx, opts) {
   video.play().catch(() => { /* 自动播放被拦截时由用户点播放键 */ });
 }
 
+/**
+ * 点击位置 → 进度比例（0~1），供播放器进度条 seek 使用。
+ * 播放器容器被 rotate(90deg) 模拟横屏时，进度条的水平轴在屏幕上呈竖直方向，
+ * 且 getBoundingClientRect 返回的是旋转后的轴对齐包围盒（rect.height = 进度条视觉长度），
+ * 此时必须沿 clientY 取比例；未旋转时沿 clientX。结果裁剪到 [0,1]，点到条外也不跳变。
+ */
+export function seekRatio(rect, clientX, clientY, rotated = false) {
+  let ratio;
+  if (rotated) ratio = (clientY - rect.top) / rect.height;
+  else ratio = (clientX - rect.left) / rect.width;
+  if (!isFinite(ratio)) return 0;
+  return Math.max(0, Math.min(1, ratio));
+}
+
 /* ================= 手机播放器：点播放直达竖屏全屏（无中间页），可切横竖屏、可关闭 ================= */
 function openMobilePlayer(ctx, opts, info, mode, url) {
   const mask = document.getElementById('playerMask');
@@ -587,7 +601,6 @@ function openMobilePlayer(ctx, opts, info, mode, url) {
     <div class="pv-mobile" id="plBox">
       <video id="plVideo" src="${esc(url)}" playsinline webkit-playsinline autoplay class="pv-video"></video>
       <div class="pv-mtools" id="plMBar">
-        <button class="pv-mbtn" id="plOrient" title="${esc(t('ui.switchOrient'))}">横屏</button>
         <button class="pv-mbtn danger" id="plMClose" title="${esc(t('common.close'))}">✕</button>
       </div>
       <div class="pv-mctl" id="plMCtl">
@@ -597,6 +610,13 @@ function openMobilePlayer(ctx, opts, info, mode, url) {
           <span class="mono" id="plMTotal">--:--</span>
           <div class="spacer"></div>
           <button class="pv-mbtn small" id="plMRate" title="倍速">1.0x</button>
+          <button class="pv-mbtn small ico" id="plOrient" title="${esc(t('ui.switchOrient'))}" aria-label="${esc(t('ui.switchOrient'))}">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <rect x="7.5" y="3.5" width="9" height="17" rx="2"/>
+              <path d="M4 9.5A8.5 8.5 0 0 1 18.5 6.5"/>
+              <path d="M18.5 2.5v4.5H14"/>
+            </svg>
+          </button>
         </div>
       </div>
     </div>`;
@@ -628,13 +648,14 @@ function openMobilePlayer(ctx, opts, info, mode, url) {
   video.ontimeupdate = sync;
   video.onloadedmetadata = sync;
 
-  /* 进度条拖动（直放可拖动；remux 边转边播不可拖） */
+  /* 进度条拖动（直放可拖动；remux 边转边播不可拖）。
+     容器被 rotate(90deg) 模拟横屏时，进度条的水平轴在屏幕上呈竖直方向，
+     getBoundingClientRect 返回旋转后的轴对齐包围盒，此时沿 clientY 取比例 */
   const track = mask.querySelector('#plMTrack');
   track.onclick = (e) => {
     if (mode === 'remux') { toast(t('ui.remuxNoSeek'), 'warn'); return; }
     if (!isFinite(video.duration) || !video.duration) return;
-    const r = track.getBoundingClientRect();
-    video.currentTime = ((e.clientX - r.left) / r.width) * video.duration;
+    video.currentTime = seekRatio(track.getBoundingClientRect(), e.clientX, e.clientY, !!playerEl.style.transform) * video.duration;
   };
 
   /* 倍速 */
@@ -644,39 +665,39 @@ function openMobilePlayer(ctx, opts, info, mode, url) {
     rateBtn.textContent = rates[rateIdx].toFixed(1) + 'x';
   };
 
-  /* 竖屏（默认，contain 完整显示）↔ 横屏（自适应：物理横屏时正常铺满，仍竖屏时旋转 90° 模拟横屏） */
+  /* 竖屏（默认，contain 完整显示）↔ 横屏（物理横屏时正常铺满；仍竖屏时容器整体旋转 90° 模拟横屏）。
+     旋转的是 #plBox 容器而非只有 video：进度条、时间、倍速、横竖屏按钮随容器一起转为横屏布局
+     （此前只转 video，控件留在竖屏方向，横屏后进度条/文字仍是竖排） */
   let landscape = false;
   const isPortraitViewport = () => window.innerHeight > window.innerWidth;
-  const resetVideoStyle = () => {
-    video.style.position = '';
-    video.style.width = ''; video.style.height = ''; video.style.left = ''; video.style.top = '';
-    video.style.margin = ''; video.style.transform = ''; video.style.objectFit = 'contain';
+  const resetBoxStyle = () => {
+    playerEl.style.position = '';
+    playerEl.style.width = ''; playerEl.style.height = '';
+    playerEl.style.left = ''; playerEl.style.top = ''; playerEl.style.margin = '';
+    playerEl.style.transform = '';
   };
   const applyOrient = () => {
     const portraitViewport = isPortraitViewport();
+    orientBtn.classList.toggle('land', landscape);
     if (!landscape) {
       /* 目标竖屏：正常显示（contain 完整不变形） */
-      resetVideoStyle();
-      orientBtn.textContent = '横屏';
+      resetBoxStyle();
       return;
     }
     if (!portraitViewport) {
-      /* 目标横屏，屏幕已是横屏（手机已转屏 / orientation.lock 生效）：正常 contain 铺满横屏 */
-      resetVideoStyle();
-      orientBtn.textContent = '竖屏';
+      /* 目标横屏，屏幕已是横屏（手机已转屏 / orientation.lock 生效）：contain 铺满横屏 */
+      resetBoxStyle();
       return;
     }
-    /* 目标横屏但屏幕仍是竖的：旋转 video 90° 模拟横屏，完整显示（contain） */
+    /* 目标横屏但屏幕仍是竖的：容器宽高互换 + rotate(90deg) 模拟横屏，视频与控件整体旋转 */
     const bw = window.innerWidth, bh = window.innerHeight;
-    video.style.position = 'absolute';
-    video.style.width = bh + 'px';
-    video.style.height = bw + 'px';
-    video.style.left = '50%';
-    video.style.top = '50%';
-    video.style.margin = `-${bw / 2}px 0 0 -${bh / 2}px`;
-    video.style.transform = 'rotate(90deg)';
-    video.style.objectFit = 'contain';
-    orientBtn.textContent = '竖屏';
+    playerEl.style.position = 'fixed';
+    playerEl.style.width = bh + 'px';
+    playerEl.style.height = bw + 'px';
+    playerEl.style.left = '50%';
+    playerEl.style.top = '50%';
+    playerEl.style.margin = `-${bw / 2}px 0 0 -${bh / 2}px`;
+    playerEl.style.transform = 'rotate(90deg)';
   };
   const toggleOrient = () => {
     landscape = !landscape;
