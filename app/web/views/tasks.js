@@ -1045,7 +1045,7 @@ async function submit(d, dialog, btn, ctx) {
 
   const old = btn.textContent;
   btn.disabled = true;
-  btn.textContent = t('tasks.saving');
+  btn.textContent = t('common.saving');
   try {
     if (d.id) await api.patchTask(d.id, payload);
     else await api.createTask(payload);

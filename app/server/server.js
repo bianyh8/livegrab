@@ -185,7 +185,11 @@ async function bootstrap() {
   storage.startCleanupTimer();
   await scheduler.init();
   const version = VERSION;
-  const update = new UpdateManager({ appDir: path.join(APP_DIR), logger });
+  const update = new UpdateManager({
+    appDir: path.join(APP_DIR),
+    logger,
+    getRepoConfig: () => (store.settings.customize || {}),
+  });
   // 更新完成后自重启：优雅停止录制器/持久化/关服务，再 re-exec 自身加载新版本。
   // 本地运行直接生效；架构 B 容器（/config/src 自带 .git）同样走此钩子——
   // re-exec 的新进程从 /config/src/app 加载新代码，配合 init:true 容器不退出。
@@ -571,6 +575,23 @@ async function main() {
   route('GET', '/api/update/status', async () => update.status());
   route('POST', '/api/update/check', async () => update.check(true));
   route('POST', '/api/update/apply', async () => update.apply());
+  route('POST', '/api/update/config', async (req) => {
+    const body = await readBody(req);
+    let cfg;
+    try {
+      cfg = update.normalizeRepoConfig({ repo: body.repo, branch: body.branch, gitUrl: body.gitUrl });
+    } catch (e) {
+      return { ok: false, error: { code: 'BAD_REQUEST', message: e.message || '仓库地址格式不正确' } };
+    }
+    const cur = (store.settings && store.settings.customize) || {};
+    // token 处理：占位 '••••••••' 代表未改动（保留原值）；空串代表主动清空；其它为明文写入
+    let token = cur.updateToken || '';
+    if (typeof body.token === 'string') {
+      token = body.token === '••••••••' ? (cur.updateToken || '') : body.token.trim();
+    }
+    await store.updateSettings({ customize: { updateRepo: cfg.repo, updateGitUrl: cfg.gitUrl, updateBranch: cfg.branch, updateToken: token } });
+    return { ok: true, repo: cfg.repo, gitUrl: cfg.gitUrl, branch: cfg.branch, token: token ? '••••••••' : '' };
+  });
 
   // ---- 日志 / 通知 ----
   route('GET', '/api/logs', async (req) => {
@@ -697,6 +718,8 @@ async function main() {
   }
   function settingsView() {
     const s = JSON.parse(JSON.stringify(store.settings));
+    // 更新源 token 不外泄：返回占位符，前端通过 /api/update/status 的 tokenConfigured 判断是否已配置
+    if (s.customize && s.customize.updateToken) s.customize.updateToken = '••••••••';
     const cookies = {};
     // 所有平台都给出一致的形状，前端表格无需判空
     for (const p of PLATFORMS) cookies[p.id] = cookieInfo(p.id);

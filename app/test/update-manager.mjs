@@ -195,5 +195,62 @@ console.log('== H. 更新日志统一写入 logger（环境自检/检查对比/�
 }
 
 global.fetch = realFetch;
+
+console.log('== I. normalizeRepoConfig：仓库地址/分支/Token 解析与校验 ==');
+{
+  const m = new UpdateManager({ appDir: TMP });
+  // ① owner/repo → 派生 gitUrl
+  let r = m.normalizeRepoConfig({ repo: 'bianyh8/livegrab', branch: '' });
+  check(r.repo === 'bianyh8/livegrab', 'owner/repo 原样保留', r.repo);
+  check(r.gitUrl === 'https://github.com/bianyh8/livegrab.git', 'owner/repo 派生 gitUrl', r.gitUrl);
+  check(r.branch === 'main', '分支缺省 main', r.branch);
+  // ② 完整 https URL → 反解 owner/repo
+  r = m.normalizeRepoConfig({ repo: 'https://github.com/bianyh8/livegrab.git' });
+  check(r.repo === 'bianyh8/livegrab', 'https URL 反解 owner/repo', r.repo);
+  check(r.gitUrl === 'https://github.com/bianyh8/livegrab.git', 'https URL 保留 gitUrl', r.gitUrl);
+  // ③ 自定义分支 + token
+  r = m.normalizeRepoConfig({ repo: 'acme/private', branch: 'dev', token: '  ghp_xxx  ' });
+  check(r.branch === 'dev', '自定义分支', r.branch);
+  check(r.token === 'ghp_xxx', 'token 去空格', JSON.stringify(r.token));
+  // ④ 空仓库 → 抛错
+  let threw = false;
+  try { m.normalizeRepoConfig({ repo: '' }); } catch { threw = true; }
+  check(threw, '仓库地址为空 → 抛错');
+  // ⑤ 格式非法 → 抛错
+  threw = false;
+  try { m.normalizeRepoConfig({ repo: 'just-a-name' }); } catch { threw = true; }
+  check(threw, '非法仓库格式 → 抛错');
+}
+
+console.log('== J. parseOwnerRepoFromGitHubUrl：仅 GitHub 可解析（经 normalizeRepoConfig 行为验证） ==');
+{
+  const m = new UpdateManager({ appDir: TMP });
+  check(typeof m.normalizeRepoConfig === 'function', 'normalizeRepoConfig 存在');
+  // 非 GitHub URL：gitUrl 原样保留，但 owner/repo 因主机不匹配而留空（当前实现仅支持 GitHub）
+  const r = m.normalizeRepoConfig({ repo: 'https://gitlab.com/acme/proj.git', branch: 'main' });
+  check(r.gitUrl === 'https://gitlab.com/acme/proj.git', '非 GitHub 的 gitUrl 原样保留', r.gitUrl);
+  check(r.repo === '', '非 GitHub 的 owner/repo 留空', JSON.stringify(r.repo));
+  // GitHub 路径不足两段 → 不反解
+  const r2 = m.normalizeRepoConfig({ repo: 'https://github.com/bianyh8', branch: 'main' });
+  check(r2.repo === '', 'GitHub 单段路径不反解', JSON.stringify(r2.repo));
+}
+
+console.log('== K. getRepoConfig 命名空间映射（update* 键 → 内部 repo/branch/token） ==');
+{
+  // 模拟 server.js 注入：customize 用 update* 命名空间存储
+  const cfg = { updateRepo: 'acme/priv', updateGitUrl: 'https://github.com/acme/priv.git', updateBranch: 'release', updateToken: 'tok_abc' };
+  const m = new UpdateManager({ appDir: TMP, getRepoConfig: () => cfg });
+  check(m._repo() === 'acme/priv', '_repo 读取 updateRepo', m._repo());
+  check(m._gitUrl() === 'https://github.com/acme/priv.git', '_gitUrl 读取 updateGitUrl', m._gitUrl());
+  check(m._branch() === 'release', '_branch 读取 updateBranch', m._branch());
+  check(m._token() === 'tok_abc', '_token 读取 updateToken', m._token());
+  check(m.status().tokenConfigured === true, 'status.tokenConfigured 随配置联动', JSON.stringify(m.status().tokenConfigured));
+  check(m.status().repo === 'acme/priv', 'status.repo 反映配置', m.status().repo);
+  // 兼容：未加前缀的裸键也应被识别
+  const cfg2 = { repo: 'foo/bar', branch: 'main', token: 't2' };
+  const m2 = new UpdateManager({ appDir: TMP, getRepoConfig: () => cfg2 });
+  check(m2._repo() === 'foo/bar' && m2._token() === 't2', '兼容裸键 repo/token', `${m2._repo()}/${m2._token()}`);
+}
+
 console.log(bad === 0 ? '\n全部通过 ✅' : `\n${bad} 项失败 ❌`);
 process.exit(bad === 0 ? 0 : 1);

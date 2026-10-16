@@ -169,6 +169,7 @@ export const api = {
   updateStatus: () => request('GET', '/api/update/status'),
   updateCheck: () => request('POST', '/api/update/check', {}),
   updateApply: () => request('POST', '/api/update/apply', {}),
+  updateConfig: (cfg) => request('POST', '/api/update/config', cfg),
 };
 
 export default api;

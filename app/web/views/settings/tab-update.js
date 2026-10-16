@@ -8,14 +8,17 @@ import { t } from '../../i18n.js';
 
 const ICON_REFRESH = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M20 12a8 8 0 1 1-2.3-5.6"/><path d="M20 4v5h-5"/></svg>';
 const ICON_DOWNLOAD = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M12 3v12M7 10l5 5 5-5"/><path d="M5 21h14"/></svg>';
+const ICON_GITHUB = '<svg viewBox="0 0 24 24" fill="currentColor" width="16" height="16"><path d="M12 2C6.48 2 2 6.58 2 12.25c0 4.53 2.87 8.37 6.84 9.73.5.1.68-.22.68-.49 0-.24-.01-.88-.01-1.73-2.78.62-3.37-1.37-3.37-1.37-.45-1.18-1.11-1.49-1.11-1.49-.91-.64.07-.62.07-.62 1 .07 1.53 1.06 1.53 1.06.89 1.56 2.34 1.11 2.91.85.09-.66.35-1.11.63-1.36-2.22-.26-4.55-1.14-4.55-5.06 0-1.12.39-2.03 1.03-2.75-.1-.26-.45-1.3.1-2.71 0 0 .84-.28 2.75 1.05a9.4 9.4 0 0 1 5 0c1.91-1.33 2.75-1.05 2.75-1.05.55 1.41.2 2.45.1 2.71.64.72 1.03 1.63 1.03 2.75 0 3.93-2.34 4.79-4.57 5.05.36.32.68.94.68 1.9 0 1.37-.01 2.48-.01 2.82 0 .27.18.6.69.49A10.02 10.02 0 0 0 22 12.25C22 6.58 17.52 2 12 2z"/></svg>';
 
 let pollTimer = null;
 let expectingRestart = false;   // 有 git 仓库时更新将自动重启服务（本地与容器架构 B 均适用）
 let sawRestartPhase = false;    // 后端已进入 restart 阶段
 let lastStatus = null;          // 最近一次成功拿到的状态（轮询失败时用于判断）
 let reloadedAfterRestart = false;
+let kitRef = null;              // 模块级缓存 kit，便于 paint 内读取已保存的更新源配置
 
 export async function render(root, ctx, kit) {
+  kitRef = kit || null;
   root.innerHTML = `<div class="card"><div class="empty">${t('settings.loading')}</div></div>`;
 
   // 首次进入：如果尚未检查过，自动静默检查一次（失败不打扰）
@@ -148,6 +151,32 @@ function paint(root, st) {
     </div>`).join('')
     : `<div class="empty" style="padding:14px 0">${t('settings.upLogEmpty')}</div>`;
 
+  // 更新源配置卡：允许覆盖默认仓库 / 分支 / Token（公共仓库可空，拉取时校验）
+  const custom = (kitRef && kitRef.state && kitRef.state.settings && kitRef.state.settings.customize) || {};
+  const repoVal = custom.updateRepo || st.repo || 'bianyh8/livegrab';
+  const branchVal = custom.updateBranch || st.branch || 'main';
+  const tokenVal = custom.updateToken || ''; // 已配置时来自后端脱敏占位
+  const configCard = `
+    <div class="card">
+      <div class="card-h"><h3>${t('settings.upRepoCfgTitle')}</h3><span class="hint">${t('settings.upRepoCfgHint')}</span></div>
+      <div class="card-b">
+        <div class="row wrap" style="gap:16px 18px">
+          <div class="f1" style="min-width:260px"><label class="fl">${t('settings.upRepoAddrLabel')}</label>
+            <input class="input mono" id="upRepo" placeholder="owner/repo 或 https://github.com/owner/repo.git" value="${esc(repoVal)}" />
+            <div class="hintline">${t('settings.upRepoAddrHint')}</div></div>
+          <div class="f1" style="min-width:160px"><label class="fl">${t('settings.upBranch')}</label>
+            <input class="input" id="upBranch" placeholder="main" value="${esc(branchVal)}" /></div>
+          <div class="f1" style="min-width:260px"><label class="fl">${t('settings.upTokenLabel')}</label>
+            <input class="input mono" id="upToken" type="password" autocomplete="off" placeholder="${t('settings.upTokenHint')}" value="${esc(tokenVal)}" />
+            <div class="hintline">${t('settings.upTokenHint')}</div></div>
+        </div>
+        <div class="row" style="margin-top:16px;gap:10px;align-items:center;flex-wrap:wrap">
+          <button class="btn" id="upGithub">${ICON_GITHUB}${t('settings.upGotoGithub')}</button>
+          <button class="btn primary" id="upCfgSave">${t('settings.upSaveConfig')}</button>
+        </div>
+      </div>
+    </div>`;
+
   root.innerHTML = `
     <div class="stack" style="max-width:1100px">
       ${isRestart ? `<div class="up-banner restart"><i class="up-spin"></i><span>${t('settings.upRestartingBanner')}</span></div>` : ''}
@@ -183,6 +212,8 @@ function paint(root, st) {
           <div class="hintline" style="margin-top:10px">${t('settings.upRepo', esc(st.repo || 'bianyh8/livegrab'), esc(st.branch || 'main'))}</div>
         </div>
       </div>
+
+      ${configCard}
 
       ${progressCard}
 
@@ -246,6 +277,47 @@ function paint(root, st) {
         }
       },
     });
+  };
+
+  // ---- 更新源配置：前往 GitHub 仓库 ----
+  const ghBtn = root.querySelector('#upGithub');
+  if (ghBtn) ghBtn.onclick = () => {
+    let url = (root.querySelector('#upRepo').value || '').trim();
+    if (/^https?:\/\//.test(url)) {
+      url = url.replace(/\.git$/, '');
+    } else if (url) {
+      url = 'https://github.com/' + url;
+    } else {
+      url = 'https://github.com/' + (repoVal || 'bianyh8/livegrab');
+    }
+    window.open(url, '_blank', 'noopener');
+  };
+
+  // ---- 更新源配置：保存 ----
+  const saveBtn = root.querySelector('#upCfgSave');
+  if (saveBtn) saveBtn.onclick = async () => {
+    const repo = (root.querySelector('#upRepo').value || '').trim();
+    const branch = (root.querySelector('#upBranch').value || '').trim();
+    const token = root.querySelector('#upToken').value; // 原始输入（占位或明文）
+    const prev = saveBtn.innerHTML;
+    saveBtn.disabled = true;
+    saveBtn.innerHTML = t('common.saving');
+    try {
+      const r = await api.updateConfig({ repo, branch, token });
+      toast(t('settings.upSaved'));
+      // 同步内存中的 customize，便于后续重绘保留；token 回显脱敏占位
+      if (kitRef && kitRef.state && kitRef.state.settings) {
+        kitRef.state.settings.customize = Object.assign({}, kitRef.state.settings.customize, {
+          updateRepo: r.repo, updateGitUrl: r.gitUrl, updateBranch: r.branch, updateToken: r.token,
+        });
+      }
+      const s2 = await api.updateStatus();
+      paint(root, s2);
+    } catch (e) {
+      toast(t('settings.upSaveFailed', (e && e.message) || e), 'err');
+      saveBtn.disabled = false;
+      saveBtn.innerHTML = prev;
+    }
   };
 }
 

@@ -13,10 +13,10 @@ import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 
-const REPO = process.env.LIVEGRAB_REPO || 'bianyh8/livegrab';
-const BRANCH = process.env.LIVEGRAB_BRANCH || 'main';
-const API = `https://api.github.com/repos/${REPO}`;
 const UA = 'LiveGrab-update-manager';
+const DEFAULT_REPO = process.env.LIVEGRAB_REPO || 'bianyh8/livegrab';
+const DEFAULT_BRANCH = process.env.LIVEGRAB_BRANCH || 'main';
+const DEFAULT_GIT_URL = process.env.LIVEGRAB_GIT_URL || `https://github.com/${DEFAULT_REPO}.git`;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const run = (cmd, args, opts = {}) =>
@@ -38,18 +38,30 @@ function readGitCredentialsToken() {
   } catch { return ''; }
 }
 
+/** 从 https://github.com/owner/repo.git 解析 owner/repo；非 GitHub 或解析失败返回空 */
+function parseOwnerRepoFromGitHubUrl(url) {
+  try {
+    const u = new URL(url);
+    if (u.hostname !== 'github.com') return '';
+    const parts = u.pathname.replace(/^\//, '').replace(/\.git$/, '').split('/').filter(Boolean);
+    if (parts.length >= 2) return `${parts[0]}/${parts[1]}`;
+  } catch { /* ignore */ }
+  return '';
+}
+
 export class UpdateManager {
-  constructor({ appDir, logger, token, restart } = {}) {
+  constructor({ appDir, logger, token, restart, getRepoConfig } = {}) {
     this.appDir = appDir || process.cwd();
     this.logger = logger || null;
     // 更新完成后的自重启钩子：由 server.js 注入优雅停止 + re-exec 逻辑。
     // 本地运行与架构 B 容器（/config/src 自带 .git）都会走到此钩子；
     // 容器首启克隆失败/镜像过旧（无 git）时提前返回手动重建指引，不走此钩子。
     this.restartHook = (typeof restart === 'function') ? restart : null;
-    // Token 优先级：显式传入 > 环境变量 LIVEGRAB_GITHUB_TOKEN > 本地 ~/.git-credentials 兜底
-    this.token = token || process.env.LIVEGRAB_GITHUB_TOKEN || readGitCredentialsToken();
-    this._apiHeaders = { 'User-Agent': UA, 'Accept': 'application/vnd.github+json' };
-    if (this.token) this._apiHeaders['Authorization'] = `token ${this.token}`;
+    // 动态配置来源：server.js 注入 store.settings.customize 读取函数；
+    // 用户未在 UI 配置时回退到环境变量 / 默认值。
+    this.getRepoConfig = (typeof getRepoConfig === 'function') ? getRepoConfig : null;
+    // 兜底 token：显式传入 > 环境变量 LIVEGRAB_GITHUB_TOKEN > 本地 ~/.git-credentials
+    this.envToken = token || process.env.LIVEGRAB_GITHUB_TOKEN || readGitCredentialsToken() || '';
     this.state = {
       env: null,            // { gitAvailable, gitRoot, dockerAvailable, inContainer }
       local: null,          // { version, commit, branch, commitAt, tag }
@@ -65,6 +77,79 @@ export class UpdateManager {
     };
     this._envSig = '';       // 环境自检结果签名（相同则不重复记日志）
     this._lastCheckSig = ''; // 最近一次已记录检查结果的签名（相同则不重复记日志）
+  }
+
+  /* ---------- 动态仓库配置（UI 可配置 > 环境变量 > 默认值） ---------- */
+
+  _cfg() {
+    const raw = (this.getRepoConfig && this.getRepoConfig()) || {};
+    // 兼容命名：存储层用 update* 命名空间（避免与 customize 其它键冲突），
+    // 这里统一归一为 repo/gitUrl/branch/token，读取时两种键都认。
+    return {
+      repo: raw.updateRepo || raw.repo || '',
+      gitUrl: raw.updateGitUrl || raw.gitUrl || '',
+      branch: raw.updateBranch || raw.branch || '',
+      token: raw.updateToken || raw.token || '',
+    };
+  }
+
+  _repo() {
+    const cfg = this._cfg();
+    if (cfg.repo) return cfg.repo;
+    if (cfg.gitUrl) return parseOwnerRepoFromGitHubUrl(cfg.gitUrl) || '';
+    return process.env.LIVEGRAB_REPO || DEFAULT_REPO;
+  }
+
+  _gitUrl() {
+    const cfg = this._cfg();
+    if (cfg.gitUrl) return cfg.gitUrl;
+    if (cfg.repo) return `https://github.com/${cfg.repo}.git`;
+    return process.env.LIVEGRAB_GIT_URL || DEFAULT_GIT_URL;
+  }
+
+  _branch() {
+    const cfg = this._cfg();
+    if (cfg.branch) return cfg.branch;
+    return process.env.LIVEGRAB_BRANCH || DEFAULT_BRANCH;
+  }
+
+  _token() {
+    const cfg = this._cfg();
+    if (cfg.token) return cfg.token;
+    return this.envToken;
+  }
+
+  _api() { return `https://api.github.com/repos/${this._repo()}`; }
+
+  _apiHeaders() {
+    const h = { 'User-Agent': UA, 'Accept': 'application/vnd.github+json' };
+    const t = this._token();
+    if (t) h['Authorization'] = `token ${t}`;
+    return h;
+  }
+
+  /** 校验并归一化前端提交的更新源配置。
+   *  repo 支持 owner/repo 或完整 https git URL；分支缺省 main；token 私有仓库必填。
+   *  返回 { repo, gitUrl, branch, token }，供 UI 即时回显与持久化到 settings.customize。 */
+  normalizeRepoConfig({ repo = '', branch = '', token = '' } = {}) {
+    const r = String(repo || '').trim();
+    const b = String(branch || '').trim() || 'main';
+    const t = String(token || '').trim();
+    if (!r) throw new Error('仓库地址不能为空');
+    let gitUrl = '', ownerRepo = '';
+    if (/^https?:\/\//.test(r)) {
+      gitUrl = r;
+      ownerRepo = parseOwnerRepoFromGitHubUrl(r);
+    } else if (/^[\w.-]+\/[\w.-]+$/.test(r)) {
+      ownerRepo = r;
+      gitUrl = `https://github.com/${r}.git`;
+    } else {
+      throw new Error('仓库地址格式不正确，应为 owner/repo 或 https://github.com/owner/repo.git');
+    }
+    if (!ownerRepo && /^https?:\/\/github\.com\//.test(gitUrl)) {
+      ownerRepo = parseOwnerRepoFromGitHubUrl(gitUrl) || '';
+    }
+    return { repo: ownerRepo, gitUrl, branch: b, token: t };
   }
 
   /* ---------- 内部工具 ---------- */
@@ -88,8 +173,9 @@ export class UpdateManager {
 
   /** 返回 git 认证参数（临时注入，不改仓库 config）。私有仓库无本地凭据时用 token 走 extraheader。 */
   _gitAuthArgs() {
-    if (!this.token) return [];
-    const b64 = Buffer.from(`x-access-token:${this.token}`).toString('base64');
+    const t = this._token();
+    if (!t) return [];
+    const b64 = Buffer.from(`x-access-token:${t}`).toString('base64');
     return ['-c', `http.extraheader=Authorization: Basic ${b64}`];
   }
 
@@ -160,9 +246,9 @@ export class UpdateManager {
       const buildCommit = (process.env.LIVEGRAB_BUILD_COMMIT || '').trim()
         || (await this._readBuildCommit().catch(() => ''));
       if (buildCommit) commit = String(buildCommit).slice(0, 12);
-      branch = BRANCH;
+      branch = this._branch();
     }
-    this.state.local = { version, commit, branch: branch || BRANCH, commitAt, tag: tag || `v${version}` };
+    this.state.local = { version, commit, branch: branch || this._branch(), commitAt, tag: tag || `v${version}` };
     return this.state.local;
   }
 
@@ -180,10 +266,12 @@ export class UpdateManager {
       两段式：先匿名请求（公开仓库无需 token）；若 404 且配置了 token，带 token 重试（私有仓库）。
       返回 { data, repoPublic, usedToken }。 */
   async _fetchGroup(headers) {
+    const api = this._api();
+    const branch = this._branch();
     const [rel, tags, main] = await Promise.all([
-      fetch(`${API}/releases/latest`, { headers, signal: AbortSignal.timeout(15000) }).then((r) => (r.ok ? r.json() : null)).catch(() => null),
-      fetch(`${API}/tags?per_page=10`, { headers, signal: AbortSignal.timeout(15000) }).then((r) => (r.ok ? r.json() : null)).catch(() => null),
-      fetch(`${API}/commits/${BRANCH}?per_page=1`, { headers, signal: AbortSignal.timeout(15000) }).then((r) => (r.ok ? r.json() : null)).catch(() => null),
+      fetch(`${api}/releases/latest`, { headers, signal: AbortSignal.timeout(15000) }).then((r) => (r.ok ? r.json() : null)).catch(() => null),
+      fetch(`${api}/tags?per_page=10`, { headers, signal: AbortSignal.timeout(15000) }).then((r) => (r.ok ? r.json() : null)).catch(() => null),
+      fetch(`${api}/commits/${branch}?per_page=1`, { headers, signal: AbortSignal.timeout(15000) }).then((r) => (r.ok ? r.json() : null)).catch(() => null),
     ]);
     return { rel, tags, main };
   }
@@ -194,14 +282,17 @@ export class UpdateManager {
     let group = await this._fetchGroup(anonHeaders);
     let repoPublic = !!(group.rel || group.tags || group.main);
     let usedToken = false;
+    const token = this._token();
     // ② 匿名 404 且配置了 token：私有仓库，带认证重试
-    if (!repoPublic && this.token) {
-      group = await this._fetchGroup(this._apiHeaders);
+    if (!repoPublic && token) {
+      group = await this._fetchGroup(this._apiHeaders());
       usedToken = true;
       // 带 token 重试仍失败 = 仓库不存在/网络问题；成功 = 私有仓库（repoPublic 保持 false）
       repoPublic = false;
     }
     const { rel, tags, main } = group;
+    const repo = this._repo();
+    const branch = this._branch();
 
     // 仓库不可见（私有但无 token / 仓库不存在）/ 网络失败 / 无任何 release、tag、commit 时，明确标记无法获取（不伪造版本号）
     const anyData = rel || tags || main;
@@ -209,9 +300,9 @@ export class UpdateManager {
       this.state.latest = {
         unavailable: true,
         error: 'repo-not-found',
-        repo: REPO,
-        branch: BRANCH,
-        releaseUrl: `https://github.com/${REPO}/releases`,
+        repo,
+        branch,
+        releaseUrl: repo ? `https://github.com/${repo}/releases` : '',
         repoPublic: false,
         // 只有「匿名读不到 + 没配 token」才提示需要 token（私有仓库场景）；配了 token 仍读不到 = 仓库真不存在/网络问题
         authHint: usedToken ? '' : 'private-repo-needs-token',
@@ -238,7 +329,7 @@ export class UpdateManager {
       commitAt,
       commitMsg,
       publishedAt: (rel && rel.published_at) || commitAt || '',
-      releaseUrl: (rel && rel.html_url) || `https://github.com/${REPO}/releases`,
+      releaseUrl: (rel && rel.html_url) || (repo ? `https://github.com/${repo}/releases` : ''),
       releaseNotes: notes,
     };
     return this.state.latest;
@@ -335,18 +426,20 @@ export class UpdateManager {
         this._log('WARN', env.inContainer
           ? '容器内未检测到代码仓库（首次启动克隆失败，或镜像过旧未内置 git）'
           : '未检测到可用 git 仓库，无法在线拉取代码');
-        this._log('INFO', env.inContainer
+        const branch = this._branch();
+      this._log('INFO', env.inContainer
           ? '请检查容器网络；私有仓库需配置 LIVEGRAB_GITHUB_TOKEN。重启容器会重试自动克隆；或在宿主机执行：docker compose up -d --build'
-          : `请在源码目录手动执行：git pull origin ${BRANCH} && npm install`);
+          : `请在源码目录手动执行：git pull origin ${branch} && npm install`);
         this._log('INFO', '已生成手动更新指引。重建并重启容器后生效。');
         this._phase('done', 100, '需手动重建镜像更新');
         return;
       }
 
+      const branch = this._branch();
       // ② fetch（私有仓库注入认证，避免依赖本机凭据）
       this._phase('fetch', 20, '拉取远端代码');
       this._log('INFO', '准备拉取代码…');
-      const fetchR = await run('git', [...this._gitAuthArgs(), 'fetch', 'origin', BRANCH], { cwd: env.gitRoot, timeout: 120000 });
+      const fetchR = await run('git', [...this._gitAuthArgs(), 'fetch', 'origin', branch], { cwd: env.gitRoot, timeout: 120000 });
       if (!fetchR.ok) {
         this._phase('error', 25, '');
         const detail = (fetchR.err || fetchR.out || '').split('\n').slice(0, 3).join(' ').trim();
@@ -359,7 +452,7 @@ export class UpdateManager {
       // ③ 对比本地与远端 HEAD
       const [cur, remote] = await Promise.all([
         run('git', ['rev-parse', 'HEAD'], { cwd: env.gitRoot }),
-        run('git', ['rev-parse', `origin/${BRANCH}`], { cwd: env.gitRoot }),
+        run('git', ['rev-parse', `origin/${branch}`], { cwd: env.gitRoot }),
       ]);
       const curSha = cur.ok ? cur.out.trim() : '';
       const remoteSha = remote.ok ? remote.out.trim() : '';
@@ -370,14 +463,14 @@ export class UpdateManager {
       }
 
       // ④ 快进拉取
-      this._phase('pull', 55, `拉取最新代码 ${BRANCH}`);
+      this._phase('pull', 55, `拉取最新代码 ${branch}`);
       this._log('INFO', `正在更新到 ${latest.tag} (${remoteSha.slice(0, 12)})…`);
-      const pullR = await run('git', [...this._gitAuthArgs(), 'pull', '--ff-only', 'origin', BRANCH], { cwd: env.gitRoot, timeout: 120000 });
+      const pullR = await run('git', [...this._gitAuthArgs(), 'pull', '--ff-only', 'origin', branch], { cwd: env.gitRoot, timeout: 120000 });
       if (!pullR.ok) {
         this._phase('error', 60, '');
         const detail = (pullR.err || pullR.out || '').split('\n').slice(0, 3).join(' ').trim();
         this._log('ERR', `代码更新失败（非快进或本地有改动，exit ${pullR.code}）：${detail || '无输出'}`);
-        this._log('INFO', '请先提交或暂存本地改动后重试，或手动执行 git pull origin ' + BRANCH);
+        this._log('INFO', '请先提交或暂存本地改动后重试，或手动执行 git pull origin ' + branch);
         return;
       }
       this._log('OK', `代码已更新到 ${latest.tag}`);
@@ -458,9 +551,10 @@ export class UpdateManager {
       log: s.log,
       hasUpdate: this._computeHasUpdate(s.local, s.latest),
       remoteUnavailable: !!(s.latest && s.latest.unavailable),
-      repo: REPO,
-      branch: BRANCH,
-      tokenConfigured: !!this.token,
+      repo: this._repo(),
+      gitUrl: this._gitUrl(),
+      branch: this._branch(),
+      tokenConfigured: !!this._token(),
       authHint: !!(s.latest && s.latest.authHint) ? s.latest.authHint : '',
     };
   }

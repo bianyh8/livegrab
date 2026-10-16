@@ -648,14 +648,12 @@ function openMobilePlayer(ctx, opts, info, mode, url) {
   video.ontimeupdate = sync;
   video.onloadedmetadata = sync;
 
-  /* 进度条拖动（直放可拖动；remux 边转边播不可拖）。
-     容器被 rotate(90deg) 模拟横屏时，进度条的水平轴在屏幕上呈竖直方向，
-     getBoundingClientRect 返回旋转后的轴对齐包围盒，此时沿 clientY 取比例 */
+  /* 进度条拖动（直放可拖动；remux 边转边播不可拖） */
   const track = mask.querySelector('#plMTrack');
   track.onclick = (e) => {
     if (mode === 'remux') { toast(t('ui.remuxNoSeek'), 'warn'); return; }
     if (!isFinite(video.duration) || !video.duration) return;
-    video.currentTime = seekRatio(track.getBoundingClientRect(), e.clientX, e.clientY, !!playerEl.style.transform) * video.duration;
+    video.currentTime = seekRatio(track.getBoundingClientRect(), e.clientX, e.clientY, false) * video.duration;
   };
 
   /* 倍速 */
@@ -665,47 +663,38 @@ function openMobilePlayer(ctx, opts, info, mode, url) {
     rateBtn.textContent = rates[rateIdx].toFixed(1) + 'x';
   };
 
-  /* 竖屏（默认，contain 完整显示）↔ 横屏（物理横屏时正常铺满；仍竖屏时容器整体旋转 90° 模拟横屏）。
-     旋转的是 #plBox 容器而非只有 video：进度条、时间、倍速、横竖屏按钮随容器一起转为横屏布局
-     （此前只转 video，控件留在竖屏方向，横屏后进度条/文字仍是竖排） */
+  /* 竖屏（默认，contain 完整显示）↔ 横屏：优先调用 screen.orientation.lock 锁定方向；
+     不支持或锁失败时提示用户手动旋转。不强制 CSS 旋转容器，避免视频内容被转 sideways。
+     物理横屏 / lock 生效后，容器自然使用 100vw/100vh，进度条与文字随 viewport 变为横排。 */
   let landscape = false;
-  const isPortraitViewport = () => window.innerHeight > window.innerWidth;
-  const resetBoxStyle = () => {
-    playerEl.style.position = '';
-    playerEl.style.width = ''; playerEl.style.height = '';
-    playerEl.style.left = ''; playerEl.style.top = ''; playerEl.style.margin = '';
-    playerEl.style.transform = '';
-  };
-  const applyOrient = () => {
-    const portraitViewport = isPortraitViewport();
-    orientBtn.classList.toggle('land', landscape);
-    if (!landscape) {
-      /* 目标竖屏：正常显示（contain 完整不变形） */
-      resetBoxStyle();
-      return;
+  const updateOrientIcon = () => { orientBtn.classList.toggle('land', landscape); };
+  const ensureFullscreen = async () => {
+    const fs = document.fullscreenElement || document.webkitFullscreenElement;
+    if (!fs && playerEl.requestFullscreen) {
+      try { await playerEl.requestFullscreen(); } catch { /* ignore */ }
     }
-    if (!portraitViewport) {
-      /* 目标横屏，屏幕已是横屏（手机已转屏 / orientation.lock 生效）：contain 铺满横屏 */
-      resetBoxStyle();
-      return;
-    }
-    /* 目标横屏但屏幕仍是竖的：容器宽高互换 + rotate(90deg) 模拟横屏，视频与控件整体旋转 */
-    const bw = window.innerWidth, bh = window.innerHeight;
-    playerEl.style.position = 'fixed';
-    playerEl.style.width = bh + 'px';
-    playerEl.style.height = bw + 'px';
-    playerEl.style.left = '50%';
-    playerEl.style.top = '50%';
-    playerEl.style.margin = `-${bw / 2}px 0 0 -${bh / 2}px`;
-    playerEl.style.transform = 'rotate(90deg)';
   };
-  const toggleOrient = () => {
+  const toggleOrient = async () => {
     landscape = !landscape;
-    applyOrient();
-    try { if (screen.orientation && screen.orientation.lock) screen.orientation.lock(landscape ? 'landscape' : 'portrait').catch(() => {}); } catch { /* ignore */ }
+    updateOrientIcon();
+    const target = landscape ? 'landscape' : 'portrait';
+    if (screen.orientation && screen.orientation.lock) {
+      await ensureFullscreen();
+      try {
+        await screen.orientation.lock(target);
+      } catch {
+        toast(t('ui.orientLockFailed'), 'warn');
+      }
+    } else {
+      toast(t('ui.orientLockUnsupported'), 'warn');
+    }
   };
   orientBtn.onclick = toggleOrient;
-  const onOrientResize = () => applyOrient();
+  /* 用户手动旋转设备后同步按钮图标 */
+  const onOrientResize = () => {
+    const isLand = window.innerWidth > window.innerHeight;
+    if (isLand !== landscape) { landscape = isLand; updateOrientIcon(); }
+  };
   window.addEventListener('resize', onOrientResize);
   window.addEventListener('orientationchange', onOrientResize);
 
