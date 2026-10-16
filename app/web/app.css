@@ -371,6 +371,7 @@ select.select.ph{color:var(--txt-3)}
 
 /* 表格 */
 .toolbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:13px 16px;border-bottom:1px solid var(--line)}
+.log-filters,.log-actions{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
 /* 任务管理查询条件强制一行：不换行，控件可收缩 */
 .toolbar.tq{flex-wrap:nowrap}
 .toolbar.tq .input,.toolbar.tq .select{flex:0 1 auto;min-width:52px;padding:6px 7px}

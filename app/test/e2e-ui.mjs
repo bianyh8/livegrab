@@ -217,6 +217,46 @@ for (const { pg, needles, absent = [], minLen = 40 } of PAGES) {
     check(String(nv.t || '').includes('最新在前'), '切走后视图仍是目标页（运行日志）', String(nv.t || '').replace(/\n+/g, ' / ').slice(0, 50));
     await send('Runtime.evaluate', { expression: `window.fetch = window.__lgFetch || window.fetch` });
 
+    /* 回归：暂停「实时追加」后，全局 2s 轮询不得再请求 /api/logs。
+       此前暂停只拦了 SSE 追加，2s 轮询仍会重绘拉入新日志 → 暂停形同虚设。
+       用 fetch 计数跨两个轮询周期验证，不靠时序碰运气。 */
+    const liveq = await send('Runtime.evaluate', {
+      expression: `JSON.stringify({
+        grouped: !!document.querySelector('.log-actions #lgLive') && !!document.querySelector('.log-actions #lgOrder') && !!document.querySelector('.log-actions #lgClear'),
+        filterGrouped: !!document.querySelector('.log-filters #lgLevel'),
+        label: (document.querySelector('#lgLive')||{}).innerText || ''
+      })`,
+      returnByValue: true,
+    });
+    const lv = JSON.parse(liveq?.result?.result?.value || '{}');
+    line(`   日志工具栏分组: 按钮区=${lv.grouped} 筛选区=${lv.filterGrouped} chip=${JSON.stringify(lv.label)}`);
+    check(lv.grouped && lv.filterGrouped, '日志工具栏：操作按钮归入 .log-actions / 筛选归入 .log-filters', JSON.stringify(lv));
+    check(String(lv.label).includes('实时追加中'), '初始为「实时追加中」', String(lv.label));
+
+    await send('Runtime.evaluate', { expression: `(() => {
+      window.__lgLogCalls = 0;
+      const of = window.fetch; window.__lgFetchLogs = of;
+      window.fetch = (u, o) => { const s = String((u && u.url) || u); if (s.includes('/api/logs')) window.__lgLogCalls++; return of(u, o); };
+      document.querySelector('#lgLive').click();
+      return true;
+    })()` });
+    await sleep(120);
+    const pl = await send('Runtime.evaluate', { expression: `(document.querySelector('#lgLive')||{}).innerText || ''`, returnByValue: true });
+    check(String(pl?.result?.result?.value || '').includes('已暂停'), '点击后切换为「实时追加已暂停」', String(pl?.result?.result?.value || ''));
+
+    await sleep(4600); // 跨过至少两个 2s 轮询周期
+    const cq = await send('Runtime.evaluate', { expression: `window.__lgLogCalls`, returnByValue: true });
+    const nCalls = Number(cq?.result?.result?.value || 0);
+    check(nCalls === 0, '暂停后 2s 轮询不再请求日志（新日志不会被刷出）', `paused 期间 /api/logs 调用 ${nCalls} 次`);
+
+    await send('Runtime.evaluate', { expression: `document.querySelector('#lgLive').click()` }); // 恢复
+    await sleep(400);
+    const rl = await send('Runtime.evaluate', { expression: `(document.querySelector('#lgLive')||{}).innerText || ''`, returnByValue: true });
+    const rc = await send('Runtime.evaluate', { expression: `window.__lgLogCalls`, returnByValue: true });
+    check(String(rl?.result?.result?.value || '').includes('实时追加中'), '恢复后回到「实时追加中」', String(rl?.result?.result?.value || ''));
+    check(Number(rc?.result?.result?.value || 0) >= 1, '恢复后立即补拉最新日志', `resume 后 /api/logs 调用 ${rc?.result?.result?.value}`);
+    await send('Runtime.evaluate', { expression: `window.fetch = window.__lgFetchLogs || window.fetch` });
+
     /* 同类回归（总览页）：/api/status 迟到返回时，总览不得回写 #view 覆盖当前页。
        目标页选设置页——它不做 2s 轮询重绘，迟到覆盖不会被轮询刷掉，判据更灵敏；
        判据用总览独有的磁盘块 #view .pkdisk 与设置页页签计数双向校验。 */

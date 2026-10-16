@@ -58,7 +58,8 @@ export async function render(root, ctx) {
       state.livePending = true;
       setTimeout(() => {
         state.livePending = false;
-        if (boundRoot) refresh(ctx, true);
+        if (state.paused || !boundRoot) return; // 暂停时取消这次防抖刷新，避免“点了暂停仍刷出新日志”
+        refresh(ctx, true);
       }, 1200);
     }
   });
@@ -66,7 +67,10 @@ export async function render(root, ctx) {
   if (onRefreshAll) { onRefreshAll(); onRefreshAll = null; }
   onRefreshAll = ctx.on('refresh-all', () => { if (boundRoot) { state.pending = false; refresh(ctx); } });
 
-  ctx.onRefresh(() => refresh(ctx));
+  // 全局 2s 轮询会调用这里的回调：暂停实时追加时跳过自动刷新，
+  // 否则每 2 秒拉取重绘仍会把新日志刷出来，导致「暂停」形同虚设。
+  // 注意：仅拦截自动轮询；筛选/翻页/清除等用户主动操作仍直接调用 refresh()，不受暂停影响。
+  ctx.onRefresh(() => { if (!state.paused) refresh(ctx); });
   await refresh(ctx, true);
 }
 
@@ -163,27 +167,31 @@ function paint(ctx) {
   root.innerHTML = `
     <div class="card">
       <div class="toolbar">
-        <select class="select" id="lgLevel" style="width:130px">
-          ${[['', t('logs.levelAll')], ['INFO', 'INFO'], ['WARN', 'WARN'], ['ERROR', 'ERROR'], ['DEBUG', 'DEBUG']]
-            .map(([v, lbl]) => `<option value="${v}"${state.level === v ? ' selected' : ''}>${lbl}</option>`).join('')}
-        </select>
-        <select class="select" id="lgTask" style="width:190px">
-          <option value="">${t('logs.taskAll')}</option>
-          ${state.tasks.map((tk) => `<option value="${esc(tk.id)}"${state.taskId === tk.id ? ' selected' : ''}>${esc(tk.name)}</option>`).join('')}
-          ${state.taskId && !state.tasks.some((tk) => tk.id === state.taskId)
-            ? `<option value="${esc(state.taskId)}" selected>${t('logs.taskLocked', esc(state.taskId))}</option>` : ''}
-        </select>
-        <select class="select" id="lgPlat" style="width:140px">
-          ${[['', t('common.allPlatforms')], ['抖音', t('plat.douyin')], ['哔哩哔哩', t('plat.bilibili')], ['快手', t('plat.kuaishou')], ['虎牙', t('plat.huya')], ['斗鱼', t('plat.douyu')], ['小红书', t('plat.xiaohongshu')], ['微博', t('plat.weibo')]]
-            .map(([v, lbl]) => `<option value="${v}"${state.platform === v ? ' selected' : ''}>${lbl}</option>`).join('')}
-        </select>
-        <input class="input" id="lgQ" style="width:200px" placeholder="${t('logs.qPlaceholder')}" value="${esc(state.q)}" />
-        <button class="btn sm ghost" id="lgOrder" title="${t('logs.toggleOrder')}">${state.newestFirst ? t('logs.newestFirst') : t('logs.newestLast')}</button>
-        <span class="chip ${state.paused ? 'wait' : 'on'}" id="lgLive" style="cursor:pointer"><i class="dot"></i>${state.paused ? t('logs.livePaused') : t('logs.liveStreaming')}</span>
+        <div class="log-filters">
+          <select class="select" id="lgLevel" style="width:130px">
+            ${[['', t('logs.levelAll')], ['INFO', 'INFO'], ['WARN', 'WARN'], ['ERROR', 'ERROR'], ['DEBUG', 'DEBUG']]
+              .map(([v, lbl]) => `<option value="${v}"${state.level === v ? ' selected' : ''}>${lbl}</option>`).join('')}
+          </select>
+          <select class="select" id="lgTask" style="width:190px">
+            <option value="">${t('logs.taskAll')}</option>
+            ${state.tasks.map((tk) => `<option value="${esc(tk.id)}"${state.taskId === tk.id ? ' selected' : ''}>${esc(tk.name)}</option>`).join('')}
+            ${state.taskId && !state.tasks.some((tk) => tk.id === state.taskId)
+              ? `<option value="${esc(state.taskId)}" selected>${t('logs.taskLocked', esc(state.taskId))}</option>` : ''}
+          </select>
+          <select class="select" id="lgPlat" style="width:140px">
+            ${[['', t('common.allPlatforms')], ['抖音', t('plat.douyin')], ['哔哩哔哩', t('plat.bilibili')], ['快手', t('plat.kuaishou')], ['虎牙', t('plat.huya')], ['斗鱼', t('plat.douyu')], ['小红书', t('plat.xiaohongshu')], ['微博', t('plat.weibo')]]
+              .map(([v, lbl]) => `<option value="${v}"${state.platform === v ? ' selected' : ''}>${lbl}</option>`).join('')}
+          </select>
+          <input class="input" id="lgQ" style="width:200px" placeholder="${t('logs.qPlaceholder')}" value="${esc(state.q)}" />
+        </div>
         <div class="spacer"></div>
-        <button class="btn sm danger" id="lgClear">${t('logs.clear')}</button>
-        <button class="btn sm ghost" id="lgCopy">${t('common.copy')}</button>
-        <button class="btn sm ghost" id="lgExport">${t('logs.export')}</button>
+        <div class="log-actions">
+          <button class="btn sm ghost" id="lgOrder" title="${t('logs.toggleOrder')}">${state.newestFirst ? t('logs.newestFirst') : t('logs.newestLast')}</button>
+          <span class="chip ${state.paused ? 'wait' : 'on'} link" id="lgLive" style="cursor:pointer"><i class="dot"></i>${state.paused ? t('logs.livePaused') : t('logs.liveStreaming')}</span>
+          <button class="btn sm danger" id="lgClear">${t('logs.clear')}</button>
+          <button class="btn sm ghost" id="lgCopy">${t('common.copy')}</button>
+          <button class="btn sm ghost" id="lgExport">${t('logs.export')}</button>
+        </div>
       </div>
       <div class="hintline" style="margin:0 16px 12px">${hint}</div>
       <div class="card-b" style="padding:0" id="lgTable">${table()}</div>
@@ -282,7 +290,13 @@ function bind(ctx) {
   }
 
   const live = root.querySelector('#lgLive');
-  if (live) live.onclick = () => { state.paused = !state.paused; syncCount(); toast(state.paused ? t('logs.pauseLiveToast') : t('logs.resumeLiveToast')); };
+  if (live) live.onclick = () => {
+    state.paused = !state.paused;
+    if (state.paused) state.livePending = false; // 取消已在等待的防抖刷新
+    syncCount();
+    toast(state.paused ? t('logs.pauseLiveToast') : t('logs.resumeLiveToast'));
+    if (!state.paused) refresh(ctx); // 恢复时立即补拉暂停期间的最新日志
+  };
 
   const order = root.querySelector('#lgOrder');
   if (order) order.onclick = () => rerender({ newestFirst: !state.newestFirst, page: 1 });
