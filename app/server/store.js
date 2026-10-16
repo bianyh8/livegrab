@@ -165,6 +165,8 @@ const SQL = {
 
 // ================= 行 ↔ 内存对象映射 =================
 const boolish = (v) => (v ? 1 : 0);
+// 三态布尔：null/undefined 保持 NULL 落库（语义=跟随全局），不得磨成 0
+const boolOrNull = (v) => (v === null || v === undefined ? null : (v ? 1 : 0));
 const num = (v, d = 0) => { const n = Number(v); return Number.isFinite(n) ? n : d; };
 const numOrNull = (v) => { if (v === null || v === undefined || v === '') return null; const n = Number(v); return Number.isFinite(n) ? n : null; };
 const strOrNull = (v) => (v === null || v === undefined ? null : String(v));
@@ -178,7 +180,7 @@ function taskToRow(t) {
     quality: strOrNull(t.quality), quality_actual: strOrNull(t.qualityActual), quality_label: strOrNull(t.qualityLabel),
     segment_mode: strOrNull(t.segmentMode), segment_minutes: numOrNull(t.segmentMinutes), segment_size_mb: numOrNull(t.segmentSizeMB),
     container: strOrNull(t.container),
-    remux_to_mp4: boolish(t.remuxToMp4), keep_source: boolish(t.keepSource), auto_merge: boolish(t.autoMerge),
+    remux_to_mp4: boolOrNull(t.remuxToMp4), keep_source: boolish(t.keepSource), auto_merge: boolish(t.autoMerge),
     reconnect_max: numOrNull(t.reconnectMax), naming_profile_id: strOrNull(t.namingProfileId), custom_text: strOrNull(t.customText),
     auto_record: boolish(t.autoRecord), monitor_only: boolish(t.monitorOnly), manual_held: boolish(t.manualHeld),
     poll_interval_sec: numOrNull(t.pollIntervalSec), start_delay_sec: numOrNull(t.startDelaySec), stop_delay_sec: numOrNull(t.stopDelaySec),
@@ -202,7 +204,7 @@ function rowToTask(r, overrides = {}) {
     avatarFile: r.avatar_file || null,
     quality: r.quality, qualityActual: r.quality_actual, qualityLabel: r.quality_label,
     segmentMode: r.segment_mode, segmentMinutes: r.segment_minutes, segmentSizeMB: r.segment_size_mb,
-    container: r.container, remuxToMp4: !!r.remux_to_mp4, keepSource: !!r.keep_source, autoMerge: !!r.auto_merge,
+    container: r.container, remuxToMp4: r.remux_to_mp4 == null ? null : !!r.remux_to_mp4, keepSource: !!r.keep_source, autoMerge: !!r.auto_merge,
     reconnectMax: r.reconnect_max, namingProfileId: r.naming_profile_id, customText: r.custom_text || '',
     autoRecord: !!r.auto_record, monitorOnly: !!r.monitor_only, manualHeld: !!r.manual_held,
     pollIntervalSec: r.poll_interval_sec, startDelaySec: r.start_delay_sec, stopDelaySec: r.stop_delay_sec,

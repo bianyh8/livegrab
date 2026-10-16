@@ -350,7 +350,7 @@ async function makeEngine(name, env = {}) {
   });
   scheduler.engine = { ffmpegAvailable: true, ffmpegVersion: 'fake' };
   await scheduler.init();
-  return { store, logger, storage, notifier, scheduler, recordRoot, events, play: new PlayManager({ store, logger, storage, mediaMod: fakeMedia }) };
+  return { configDir, store, logger, storage, notifier, scheduler, recordRoot, events, play: new PlayManager({ store, logger, storage, mediaMod: fakeMedia }) };
 }
 
 async function waitFor(fn, timeoutMs, label) {
@@ -521,6 +521,50 @@ async function testRecordChain() {
   for (const t of e.store.tasks) t.autoRecord = false;
   e.scheduler.stopPolling();
   for (const id of [...e.scheduler.recorders.keys()]) await e.scheduler.stopTask(id).catch(() => {});
+}
+
+/* 任务级「转封装 MP4」必须实时跟随全局（v0.1.24 回归）。
+   历史缺陷：创建任务时前端恒发 remuxToMp4=null（语义=跟随全局），后端 !!null 强转 false
+   并烙进扁平字段 → 全局开着「转封装 MP4」，分段录完也不立即转，只能等整场收尾。 */
+async function testRemuxFollowGlobal() {
+  suite('任务级转封装跟随全局（边录边转）');
+  const e = await makeEngine('remuxfg');
+  e.scheduler.stopPolling(); // 本测试只验证开关语义，不需要轮询把任务拉起来录
+  try {
+    e.store.settings.remuxToMp4 = true;
+    e.store.settings.autoMerge = false;
+    // ① 前端 submit() 恒发 null：不得被强转 false，必须保持「跟随全局」
+    const t1 = await e.scheduler.createTask({ url: 'https://example.com/rf1.m3u8', platform: 'direct', anchorName: '跟随全局', remuxToMp4: null });
+    eq(t1.remuxToMp4, null, '创建任务 remuxToMp4=null 不得被强转 false');
+    eq(e.scheduler.effective(t1).remuxToMp4, true, '全局开 → 生效值为开（边录边转）');
+    // ② 实时跟随：改全局设置，不重开任务当段即按新值决策
+    e.store.settings.remuxToMp4 = false;
+    eq(e.scheduler.effective(t1).remuxToMp4, false, '全局关 → 实时变为关');
+    e.store.settings.remuxToMp4 = true;
+    // ③ API 显式 false 仍被尊重（effective 语义不变）
+    const t2 = await e.scheduler.createTask({ url: 'https://example.com/rf2.m3u8', platform: 'direct', anchorName: '显式关', remuxToMp4: false });
+    eq(e.scheduler.effective(t2).remuxToMp4, false, '显式 false 仍尊重为关');
+    // ④ 存量自愈：模拟旧缺陷烙进库里的 false，init() 必须重置为跟随全局
+    const t3 = await e.scheduler.createTask({ url: 'https://example.com/rf3.m3u8', platform: 'direct', anchorName: '存量修复', remuxToMp4: false });
+    const stuck = e.store.getTask(t3.id);
+    stuck.remuxToMp4 = false;
+    await e.store.saveTask(stuck);
+    await e.scheduler.init();
+    e.scheduler.stopPolling(); // init() 内部会重启轮询，本测试不需要
+    eq(e.store.getTask(t3.id).remuxToMp4, null, 'init() 自愈：历史 false 重置为 null');
+    eq(e.scheduler.effective(e.store.getTask(t3.id)).remuxToMp4, true, '自愈后按全局实时生效');
+    // ⑤ 持久化往返：null 不得被磨成 false（重启后仍跟随全局）
+    await e.store.saveTask(e.store.getTask(t1.id));
+    await e.store.saveTask(e.store.getTask(t3.id));
+    const reopened = await openStore(e.configDir);
+    eq(reopened.getTask(t1.id).remuxToMp4, null, '重开库：跟随全局标记不丢（null 往返存活）');
+    eq(reopened.getTask(t3.id).remuxToMp4, null, '重开库：自愈结果持久化');
+    eq(e.scheduler.effective(reopened.getTask(t1.id)).remuxToMp4, true, '重开库后仍按全局生效');
+  } finally {
+    for (const t of e.store.tasks) t.autoRecord = false;
+    e.scheduler.stopPolling();
+    for (const id of [...e.scheduler.recorders.keys()]) await e.scheduler.stopTask(id).catch(() => {});
+  }
 }
 
 // ============ 5. 并发排队（D16） ============
@@ -1038,7 +1082,7 @@ function testUpdateGuards() {
   console.log(`LiveGrab 测试开始（临时目录 ${tmpRoot}）`);
   await rmrf(tmpRoot);
   await fsp.mkdir(tmpRoot, { recursive: true });
-  const suites = [testUtil, testNaming, testStore, testResolvers, testAuth, testRecordChain, testPullBlockedBackoff, testConcurrentStart, testRepeatSessionNaming, testTodayStats, testQueue, testHttp, testViewGuards, testUpdateGuards];
+  const suites = [testUtil, testNaming, testStore, testResolvers, testAuth, testRecordChain, testRemuxFollowGlobal, testPullBlockedBackoff, testConcurrentStart, testRepeatSessionNaming, testTodayStats, testQueue, testHttp, testViewGuards, testUpdateGuards];
   for (const s of suites) {
     try { await s(); } catch (e) {
       failed++;

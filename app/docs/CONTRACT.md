@@ -307,7 +307,7 @@ Settings += {
 - recorder/media：使用 `app/test/fake-ffmpeg.mjs`（伪造 ffmpeg：忽略参数、按 `-f segment` 语义写递增文件、读 stdin 的 `q` 后正常退出）跑通"启动 → 分段轮转 → 优雅停止 → 分段收尾"全链路。
 - server：启动后在随机端口跑一遍主要 API 的 smoke（不依赖 ffmpeg）。
 
-实测（v0.1.23 复测）：`node app/test/run.js` → **PASS 297 ｜ FAIL 0**（含 17 项 web 视图守卫静态断言与 17 项更新链路守卫断言：`nextFrame()` 必须带 setTimeout 兜底、强制横屏的旋转必须落在内层舞台 `#plStage`（不得写在全屏元素 `#plBox` 上）、任务查询防抖必须走局部重绘 `paintResults`（不得全量重建 `#tkQ` 抢焦点，防抖 300ms，2s 轮询同样只局部重绘）、git 必须走 HTTP/1.1 + 降级重试、`GIT_TERMINAL_PROMPT=0`、快进用本地 `FETCH_HEAD`、快照通道与容器克隆重试；无 ffmpeg、无网络）；
+实测（v0.1.24 复测）：`node app/test/run.js` → **PASS 306 ｜ FAIL 0**（含 17 项 web 视图守卫静态断言与 17 项更新链路守卫断言：`nextFrame()` 必须带 setTimeout 兜底、强制横屏的旋转必须落在内层舞台 `#plStage`（不得写在全屏元素 `#plBox` 上）、任务查询防抖必须走局部重绘 `paintResults`（不得全量重建 `#tkQ` 抢焦点，防抖 300ms，2s 轮询同样只局部重绘）、git 必须走 HTTP/1.1 + 降级重试、`GIT_TERMINAL_PROMPT=0`、快进用本地 `FETCH_HEAD`、快照通道与容器克隆重试；无 ffmpeg、无网络）；另有 9 项「任务级转封装跟随全局」行为断言（创建任务 `remuxToMp4=null` 不得强转 false、全局开关实时跟随、`init()` 自愈历史 false、null 持久化往返存活）；
 `node app/test/update-manager.mjs` → 全部通过（mock GitHub，离线；P/Q/R 三组新增：传输层降级参数与报错分级、fetch 参数只认配置的更新源、快照地址推导与标记读写、tar.gz 解析落地（含超长路径 pax/GNU longname））；
 `node app/test/update-git-flow.mjs` → 全部通过（架构 B 容器更新链路，离线自建 git 场景；新增「拉取失败后的处理流程」：三档降级重试 → 本地快进 → 快照通道覆盖/清理上游已删文件 → 内容指纹安全自愈对齐 git 索引 → 安全闸门拒绝覆盖本地改动）；
 `node app/test/db-sqlite.mjs` → 82 通过（v1→v2 库作废重建等）；
@@ -361,6 +361,7 @@ app/test/    run.js fake-ffmpeg.mjs fake-media.mjs e2e-ui.mjs e2e-ffmpeg.mjs e2e
 - 录制：`ffmpeg -f segment`，`-reset_timestamps 1`、`-segment_start_number` 续接；优雅停止写 stdin `q`，等收尾入库；大小轮转由轮询 `statSync` 触发（`-segment_time` 只是估算上限）。
 - 目录与命名：`/data/{平台显示名}/{主播}/{日期}/{日期}_{主播}_{清晰度}_{序号}.ts`（如 `直链/真实录制A/2026-10-09/2026-10-09_真实录制A_001.ts`），序号从 `001` 开始，暂停恢复后续接不覆盖。
 - 后处理（D5）：停止后按 `remuxToMp4` 自动把**每个分段**转封装成同名 `.mp4`（`-c copy`），产物挂在 `session.extras`（`kind:'mp4'`），同时把首个/单段的成品同时写入 `session.mp4`；`autoMerge` 打开时改为自动合并。合并整场（`POST /api/files/merge`，至少 2 段）产出 `_整场.ts`（`session.merged`），随后按 `remuxToMp4` 再转出 `_整场.mp4`（也进 `session.extras`）。
+- 边录边转（v0.1.24 起修正语义）：分段一录完就按**全局** `remuxToMp4`（任务弹窗无任务级开关，恒跟随全局、实时生效）立即转封装；仅全局 `autoMerge` 关闭时生效（合并需保留源 `.ts`，整场结束后先合并再统一转）。转封装失败不阻塞录制，源文件保留，日志 `分段 #N 立即转封装失败`。整场收尾 `autoRemux` 仍按全局设置兜底（跳过已转段），`keepSource=false` 时转完即删源。
 - `GET /api/files` 的每个场次都返回 `extras`，前端文件库据此显示「已生成 MP4 ×N」并在展开区列出 MP4 副本（可播放/下载/删除）——转封装与合并产物**不能只存在索引里而在界面上看不见**。
 - `GET /api/status` 的 `recording[]` 用完整任务形状（含 `live:{bytes,elapsedSec,segmentIndex,currentFile,dir}`），前端总览的实时进度直接读它；`tasks[]` 仍是精简形状。
 - 回放：MP4/M4A 直放（Range + `Accept-Ranges`），TS/FLV/MKV 走 `-c copy` → fMP4 渐进流（`-movflags frag_keyframe+empty_moov+default_base_moof -f mp4 pipe:1`），失败降级 `-c:v copy -c:a aac`；`playConcurrency` 默认 2，超出 429 `PLAY_BUSY`（测试已覆盖）。

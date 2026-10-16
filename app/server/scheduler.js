@@ -44,6 +44,7 @@ export class Scheduler {
 
   async init() {
     const tasks = this.store.tasks;
+    let healed = 0;
     for (const t of tasks) {
       if (['recording', 'queued', 'stopping', 'paused'].includes(t.status)) {
         t.status = 'stopped';
@@ -52,7 +53,12 @@ export class Scheduler {
       t.nextPollAt = 0;
       // 一次性迁移：已有非空主播名的任务一律锁定名称，解析刷新不再覆盖用户设置的名字
       if (!t.nameLocked && t.anchorName && String(t.anchorName).trim()) t.nameLocked = true;
+      // 一次性迁移（v0.1.24）：旧缺陷把「跟随全局」的 remuxToMp4=null 强转 false 并烙进扁平字段，
+      // 全局「转封装 MP4」开着也迟迟不转。弹窗从来没有任务级转封装开关，false 只可能是缺陷产物
+      // （API 显式传入的 false 同样视为跟随全局——该开关已不存在）→ 重置 null 恢复实时跟随全局。
+      if (t.remuxToMp4 === false) { t.remuxToMp4 = null; healed++; }
     }
+    if (healed) this.logger.info(`已修复 ${healed} 个任务的转封装开关（恢复跟随全局设置）`);
     await this.store.persist();
     this.startPolling();
     this.logger.info(`调度器就绪：${tasks.length} 个任务，全局并发上限 ${this.store.settings.maxConcurrency}`);
@@ -171,7 +177,8 @@ export class Scheduler {
     task.segmentMinutes = e.segmentMinutes;
     task.segmentSizeMB = e.segmentSizeMB;
     task.container = e.container;
-    task.remuxToMp4 = e.remuxToMp4;
+    // remuxToMp4 不烘焙扁平字段：有效值必须实时跟随全局（effective() 每次现算）。
+    // 一旦把 true/false 烙进扁平字段，之后改全局设置就再也传不进来了（旧缺陷方向之一）。
     task.autoMerge = e.autoMerge;
     task.namingProfileId = e.namingProfileId;
     task.customText = e.customText;
@@ -271,7 +278,10 @@ export class Scheduler {
     if (input.segmentMinutes !== undefined) task.segmentMinutes = Number(input.segmentMinutes);
     if (input.segmentSizeMB !== undefined) task.segmentSizeMB = Number(input.segmentSizeMB);
     if (input.container !== undefined) task.container = input.container;
-    if (input.remuxToMp4 !== undefined) task.remuxToMp4 = !!input.remuxToMp4;
+    // null = 跟随全局（任务弹窗无转封装开关，submit() 恒发 null）。
+    // 不得强转 false：v0.1.24 修复——旧代码 !!null 把"跟随全局"变成"永久关闭"，
+    // 导致全局「转封装 MP4」开着，分段录完也不立即转（只能等整场收尾 autoRemux）。
+    if (input.remuxToMp4 !== undefined) task.remuxToMp4 = input.remuxToMp4 === null ? null : !!input.remuxToMp4;
     if (input.keepSource !== undefined) task.keepSource = !!input.keepSource;
     if (input.autoMerge !== undefined) task.autoMerge = !!input.autoMerge;
     if (input.anchorNameLocked !== undefined) task.nameLocked = !!input.anchorNameLocked;
@@ -544,7 +554,8 @@ export class Scheduler {
     this.logger.info(`分段 #${seg.index} 收尾：${seg.name}（${formatBytes(seg.bytes)} · ${formatDuration(seg.durationSec)}）`, { taskId: task.id, taskName: task.anchorName });
     // 边录边转封装：每个分段一录完就按配置立即转 MP4（整场结束后 autoRemux 会跳过已转的分段）。
     // 仅在不自动合并时生效（合并需要源 .ts，先合并再统一转封装）。
-    const canRemuxNow = task.remuxToMp4 !== false && !this.store.settings.autoMerge && ['ts', 'flv', 'mkv'].includes(item.ext);
+    // remuxToMp4 取实时生效值（effective）：任务弹窗无任务级开关，恒跟随全局；改全局设置当段生效。
+    const canRemuxNow = this.effective(task).remuxToMp4 !== false && !this.store.settings.autoMerge && ['ts', 'flv', 'mkv'].includes(item.ext);
     if (canRemuxNow) this._segmentRemuxNow(task, session, item, seg).catch(() => {});
     // 分段收尾直接行级写穿透（不依赖 1500ms 防抖），崩溃/强杀窗口内分段登记立即落库
     await this.store.saveSession(session);
