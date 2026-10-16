@@ -48,19 +48,40 @@ fi
 
 if [ ! -d "$SRC/.git" ]; then
   log "首次运行：克隆代码仓库 → $SRC"
-  rm -rf "$SRC.tmp"
+  # git 传输层抗抖动（与服务端 update.js 同一套策略）：
+  #   「RPC failed; curl 16 Error in the HTTP2 framing layer」与「expected flush after ref listing」
+  #   都出在 HTTP/2 / protocol v2 的 ref 通告协商被中间设备（代理、网关、科学上网工具）改写，
+  #   改用 HTTP/1.1 + protocol v0 并关掉低速中断即可绕过；克隆失败还会自动重试 3 次。
+  GIT_FIX="-c http.version=HTTP/1.1 -c http.postBuffer=524288000 -c protocol.version=0"
+  # 禁止交互式凭据提示：私有仓库未配 token 时 git 会挂在「Username for …」等待输入，
+  # 容器表现为「启动卡死」，必须让它直接失败。
+  GIT_TERMINAL_PROMPT=0
+  GIT_ASKPASS=echo
+  export GIT_TERMINAL_PROMPT GIT_ASKPASS
   CLONE_OK=0
-  if [ -n "${LIVEGRAB_GITHUB_TOKEN:-}" ]; then
-    AUTH=$(printf 'x-access-token:%s' "$LIVEGRAB_GITHUB_TOKEN" | base64 | tr -d '\n')
-    git -c "http.extraheader=Authorization: Basic $AUTH" clone -b "$BRANCH" "$REPO_URL" "$SRC.tmp" && CLONE_OK=1
-  else
-    git clone -b "$BRANCH" "$REPO_URL" "$SRC.tmp" && CLONE_OK=1
-  fi
+  CLONE_TRY=1
+  while [ "$CLONE_TRY" -le 3 ] && [ "$CLONE_OK" != "1" ]; do
+    if [ "$CLONE_TRY" -gt 1 ]; then
+      log "克隆失败，第 $CLONE_TRY 次重试（HTTP/1.1 + protocol v0）…"
+      evt WARN "克隆失败，第 $CLONE_TRY 次重试"
+      sleep 3
+    fi
+    rm -rf "$SRC.tmp"
+    if [ -n "${LIVEGRAB_GITHUB_TOKEN:-}" ]; then
+      AUTH=$(printf 'x-access-token:%s' "$LIVEGRAB_GITHUB_TOKEN" | base64 | tr -d '\n')
+      git $GIT_FIX -c "http.extraheader=Authorization: Basic $AUTH" clone -b "$BRANCH" "$REPO_URL" "$SRC.tmp" && CLONE_OK=1
+    else
+      git $GIT_FIX clone -b "$BRANCH" "$REPO_URL" "$SRC.tmp" && CLONE_OK=1
+    fi
+    CLONE_TRY=$((CLONE_TRY + 1))
+  done
   if [ "$CLONE_OK" = "1" ]; then
     # 原子替换：克隆完整后才落位，避免把半成品 .git 留在 $SRC
     rm -rf "$SRC"
     mv "$SRC.tmp" "$SRC"
     git config --global --add safe.directory "$SRC" 2>/dev/null || true
+    # 让容器内的手工 git 操作也走稳定传输（HTTP/2 在弱网/代理下容易断）
+    git config --global http.version HTTP/1.1 2>/dev/null || true
     # 切到镜像内置版本（.build-info.json 的 version → v<version> 标签），
     # 保证首启代码与镜像内 node_modules 匹配；无对应标签则用仓库最新代码
     if [ -f "$IMAGE_APP/.build-info.json" ]; then
@@ -89,9 +110,9 @@ if [ ! -d "$SRC/.git" ]; then
     fi
   else
     rm -rf "$SRC.tmp"
-    log "克隆失败（网络不通，或私有仓库未配置 LIVEGRAB_GITHUB_TOKEN）"
+    log "克隆失败（已重试 3 次：网络不通、私有仓库未配置 LIVEGRAB_GITHUB_TOKEN，或代理改写了 git 连接）"
     log "本次使用镜像内置代码启动；网络/token 恢复后重启容器会重试克隆"
-    evt ERROR "克隆失败（网络不通，或私有仓库未配置 LIVEGRAB_GITHUB_TOKEN），本次使用镜像内置代码；恢复后重启容器会重试"
+    evt ERROR "克隆失败（已重试 3 次；网络不通或未配置 LIVEGRAB_GITHUB_TOKEN），本次使用镜像内置代码；恢复后重启容器会重试"
   fi
 else
   evt INFO "使用持久化代码目录 $SRC（容器重启不丢失，页面「立即更新」在此升级）"

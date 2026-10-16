@@ -982,12 +982,39 @@ function testViewGuards() {
   ok(!!nf && /setTimeout\(/.test(nf[0]), 'nextFrame() 带 setTimeout 兜底（rAF 被节流/停止时路由不会卡死）');
 }
 
+/* 更新链路守卫（静态扫描）：拉取必须在「弱网/代理会改写长连接」的现实下仍然可用，
+   并在 git 传输彻底不可用时走快照通道兜底。这些是踩过的坑，用断言钉死。 */
+function testUpdateGuards() {
+  suite('更新链路守卫');
+  const upd = fs.readFileSync(path.join(APP_DIR, 'server', 'update.js'), 'utf8');
+
+  ok(/http\.version=HTTP\/1\.1/.test(upd), 'git 传输层强制 HTTP/1.1（HTTP2 framing / ref listing 报错的根因）');
+  ok(/protocol\.version=0/.test(upd), '降级档位带 protocol v0（绕开 v2 的 ref 通告解析）');
+  ok(/FETCH_PLAN\s*=\s*\[[\s\S]*?\]\s*;/.test(upd) && (upd.match(/legacyRefs:\s*true/g) || []).length >= 2, '拉取失败有多档降级重试计划');
+  ok(/GIT_TERMINAL_PROMPT:\s*'0'/.test(upd), '禁用 git 交互式凭据提示（无 token 时不挂在等待输入）');
+  ok(/classifyGitError/.test(upd) && /_logGitAdvice/.test(upd), '失败后按原因分级并给出可操作建议');
+  ok(/'merge',\s*'--ff-only',\s*'FETCH_HEAD'/.test(upd), '快进用本地 FETCH_HEAD（不再为同一段网络赌第二次）');
+  ok(!/'pull',\s*'--ff-only'/.test(upd), '不再调用 git pull --ff-only（fetch + merge 两步各自可控）');
+  ok(!/\[[^\]]*'fetch',\s*'origin'/.test(upd), 'fetch 不写死 origin（远端取配置地址）');
+
+  ok(/codeload\.github\.com/.test(upd), 'git 传输不可用时走 codeload 快照通道');
+  ok(/zlib\.gunzipSync/.test(upd) && /function parseTarEntries/.test(upd), '零依赖解包 tar.gz（不依赖容器内 tar/curl）');
+  ok(/livegrab-snapshot\.json/.test(upd), '快照状态写入 .git 内标记文件（不污染工作区）');
+  ok(/_contentDigest/.test(upd) && /reset',\s*'--hard',\s*'FETCH_HEAD'/.test(upd), '快照后可按内容指纹安全自愈对齐 git 索引');
+  ok(/'ls-tree',\s*'-r',\s*'-z'/.test(upd), '只清理「旧 commit 跟踪过」的文件（-z 取原始路径，避免非 ASCII 被转义而算错删除集）');
+
+  const ep = fs.readFileSync(path.join(APP_DIR, '..', 'deploy', 'entrypoint.sh'), 'utf8');
+  ok(/GIT_FIX=.*http\.version=HTTP\/1\.1/.test(ep), '容器首次克隆同样走 HTTP/1.1 + protocol v0');
+  ok(/while\s+\[[^\]]*CLONE_TRY[^\]]*\]/.test(ep), '容器首次克隆失败会自动重试（3 次）');
+  ok(/GIT_TERMINAL_PROMPT=0/.test(ep), '容器克隆禁用交互式凭据提示（否则私库无 token 时启动卡死）');
+}
+
 // ============ 主流程 ============
 (async () => {
   console.log(`LiveGrab 测试开始（临时目录 ${tmpRoot}）`);
   await rmrf(tmpRoot);
   await fsp.mkdir(tmpRoot, { recursive: true });
-  const suites = [testUtil, testNaming, testStore, testResolvers, testAuth, testRecordChain, testPullBlockedBackoff, testConcurrentStart, testRepeatSessionNaming, testTodayStats, testQueue, testHttp, testViewGuards];
+  const suites = [testUtil, testNaming, testStore, testResolvers, testAuth, testRecordChain, testPullBlockedBackoff, testConcurrentStart, testRepeatSessionNaming, testTodayStats, testQueue, testHttp, testViewGuards, testUpdateGuards];
   for (const s of suites) {
     try { await s(); } catch (e) {
       failed++;

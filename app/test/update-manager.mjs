@@ -1,12 +1,30 @@
 // 更新管理器单元测试：覆盖版本对比、远程不可用、公开/私有仓库、检查/应用流程
 // 用 mock 全局 fetch 返回假 GitHub 响应，离线运行
-import { UpdateManager, parseVersion, compareVersions, pickLatestTag } from '../server/update.js';
+import {
+  UpdateManager, parseVersion, compareVersions, pickLatestTag,
+  gitTransportArgs, classifyGitError, FETCH_PLAN, parseTarEntries, extractTarGzTo,
+} from '../server/update.js';
 
 let bad = 0;
 const check = (cond, label, extra = '') => { if (!cond) bad++; console.log(`  ${cond ? 'PASS' : 'FAIL'}  ${label}${extra ? '  → ' + extra : ''}`); };
 
-const TMP = '/tmp/lg-update-unit';
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+/** 极简外部命令执行（仅测试用：调用系统 tar 生成归档） */
+const runCmd = (cmd, args, opts = {}) => new Promise((resolve) => {
+  execFile(cmd, args, { timeout: 60000, maxBuffer: 8 * 1024 * 1024, ...opts }, (err, stdout, stderr) => {
+    resolve(err
+      ? { ok: false, code: err.code, out: String(stdout || '').trim(), err: String(stderr || '').trim() }
+      : { ok: true, out: String(stdout || '').trim(), err: String(stderr || '').trim() });
+  });
+});
+
+// 用原生临时目录 + 正斜杠：Windows 下也能把同一路径交给系统 tar（MSYS 会把 /tmp 映射到别处）
+const TMP = path.join(os.tmpdir(), 'lg-update-unit').split(path.sep).join('/');
+import { mkdirSync, rmSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
+import { execFile } from 'node:child_process';
+import os from 'node:os';
+import path from 'node:path';
+import zlib from 'node:zlib';
+const fsExists = existsSync;
 rmSync(TMP, { recursive: true, force: true });
 mkdirSync(TMP, { recursive: true });
 writeFileSync(TMP + '/package.json', JSON.stringify({ name: 'livegrab', version: '0.1.0' }));
@@ -326,6 +344,110 @@ console.log('== O. 立即更新使用「更新源配置」的仓库（不写死 
   const logs = m.status().log.map((l) => l.msg).join('\n');
   check(/https:\/\/github\.com\/acme\/priv\.git/.test(logs), '更新流程日志使用配置的仓库地址', logs.split('\n').slice(-2).join(' | '));
   check(!/\borigin\b/.test(logs), '日志中不再出现写死的 origin 远端', /origin/.test(logs) ? logs : '');
+}
+
+console.log('== P. 拉取失败的处理：传输层降级参数 + 报错分级 + 可操作建议 ==');
+{
+  const m = new UpdateManager({ appDir: TMP });
+  const t0 = gitTransportArgs();
+  check(t0.includes('-c') && t0[t0.indexOf('-c') + 1] === 'http.version=HTTP/1.1', '默认走 HTTP/1.1（绕开 HTTP2 framing 错误）');
+  check(t0.some((a) => a === 'http.postBuffer=524288000'), '放大 http.postBuffer（大仓库/CDN 抖动）');
+  check(!t0.includes('protocol.version=0'), '默认不动 protocol 版本（优先用 v2，失败再降级）');
+  check(gitTransportArgs({ legacyRefs: true }).includes('protocol.version=0'), '降级档位开启 protocol v0（绕开 expected flush after ref listing）');
+  check(FETCH_PLAN.length === 3 && FETCH_PLAN[1].legacyRefs === true, '拉取计划为 3 档且第 2 档起降级', FETCH_PLAN.map((p) => p.label).join(' | '));
+
+  // 用户实际报错原文（容器内 fetch 失败）
+  const realErr = 'error: RPC failed; curl 16 Error in the HTTP2 framing layer\nfatal: expected flush after ref listing';
+  check(classifyGitError(realErr) === 'http2', 'HTTP2 framing / ref listing 错误归类为 http2');
+  check(classifyGitError('fatal: Authentication failed for \'https://github.com/x/y\'') === 'auth', '认证失败归类为 auth');
+  check(classifyGitError('fatal: unable to access: Could not resolve host: github.com') === 'network', 'DNS/连不上归类为 network');
+  check(classifyGitError('remote: Repository not found.') === 'notfound', '仓库不存在归类为 notfound');
+  check(classifyGitError('fatal: the remote end hung up unexpectedly\nerror: unexpected disconnect while reading sideband packet') === 'unstable', '连接中断归类为 unstable');
+  check(classifyGitError('随便一段无关输出') === '', '无法识别时返回空（不误导）');
+
+  m._logGitAdvice('http2', 'https://github.com/acme/priv.git', 'release', { inContainer: true });
+  const advice = m.state.log.map((l) => l.msg).join('\n');
+  check(advice.includes('git -c http.version=HTTP/1.1 -c protocol.version=0 fetch https://github.com/acme/priv.git release'),
+    '给出可直接复制的手动命令（含配置的仓库地址）');
+  check(/代理|网关/.test(advice), '指出中间设备/代理是最常见原因');
+  check(advice.includes('可直接再次点击「立即更新」重试'), '明确告知可重试且代码未被改动');
+}
+
+console.log('== Q. fetch 参数 / 快照通道地址与标记 ==');
+{
+  const m = new UpdateManager({ appDir: TMP });
+  const args = m._buildFetchArgs('https://github.com/acme/priv.git', 'release');
+  check(args.includes('http.version=HTTP/1.1'), 'fetch 参数带 HTTP/1.1');
+  check(args.slice(-3).join(' ') === 'fetch https://github.com/acme/priv.git release', '远端取配置地址、分支取配置分支', args.slice(-3).join(' '));
+  check(!args.includes('origin'), '不再把 origin 写死进 fetch/marge 远端');
+  check(m._buildFetchArgs('git://x/y', 'main', { legacyRefs: true }).includes('protocol.version=0'), '降级档位透传到 fetch 参数');
+
+  check(m._snapshotUrl() === 'https://codeload.github.com/bianyh8/livegrab/tar.gz/refs/heads/main',
+    '默认配置推导出 codeload 归档地址', m._snapshotUrl());
+  const m2 = new UpdateManager({ appDir: TMP, getRepoConfig: () => ({ updateRepo: 'acme/priv', updateBranch: 'release' }) });
+  check(m2._snapshotUrl() === 'https://codeload.github.com/acme/priv/tar.gz/refs/heads/release', '快照地址跟随配置的仓库/分支', m2._snapshotUrl());
+  const m3 = new UpdateManager({ appDir: TMP, getRepoConfig: () => ({ updateGitUrl: 'https://gitlab.com/acme/priv.git', updateBranch: 'main' }) });
+  check(m3._snapshotUrl() === '', '非 GitHub 仓库不快照（明确返回空，不做无效尝试）');
+
+  // 快照标记：写 → 读 → localInfo 优先采用 → status 暴露 → 清除
+  const fakeRoot = TMP + '/snaproot';
+  mkdirSync(fakeRoot + '/.git', { recursive: true });
+  const env = { gitAvailable: true, gitBin: 'git', gitRoot: fakeRoot, dockerAvailable: false, inContainer: true };
+  const m4 = new UpdateManager({ appDir: TMP });
+  m4.state.env = env;
+  check(m4._readSnapshot(env) === null, '无标记时读取为空');
+  m4._writeSnapshot(env, { commit: 'abcdef123456', tag: 'v0.9.9', version: '0.9.9', at: Date.now() });
+  const snap = m4._readSnapshot(env);
+  check(!!snap && snap.commit === 'abcdef123456', '标记可写入并可读回');
+  const loc = await m4.localInfo();
+  check(loc.version === '0.9.9' && loc.commit === 'abcdef123456' && loc.tag === 'v0.9.9',
+    'localInfo 以快照标记为准（不拿落后的 .git 索引冒充本地版本）', `${loc.version}/${loc.commit}`);
+  check(!!m4.status().snapshot, 'status() 暴露 snapshot 供前端提示');
+  m4._clearSnapshot(env);
+  check(m4._readSnapshot(env) === null, '清除标记后不再上报快照状态');
+}
+
+console.log('== R. tar.gz 解析与落地（零依赖快照通道的底座） ==');
+{
+  const tarOk = await runCmd('tar', ['--version']);
+  if (!tarOk.ok) {
+    console.log('  SKIP  未检测到 tar，跳过归档用例');
+  } else {
+    const src = TMP + '/snapsrc';
+    rmSync(src, { recursive: true, force: true });
+    // GitHub 归档结构：<repo>-<branch>/ 顶层目录
+    const root = src + '/livegrab-main';
+    const deep = root + '/app/server/' + 'x'.repeat(60) + '/' + 'y'.repeat(60);
+    mkdirSync(deep, { recursive: true });
+    mkdirSync(root + '/deploy', { recursive: true });
+    writeFileSync(root + '/app/package.json', JSON.stringify({ name: 'livegrab', version: '0.9.9' }));
+    writeFileSync(root + '/app/server/server.js', '// snapshot\n');
+    writeFileSync(root + '/deploy/entrypoint.sh', '#!/bin/sh\n');
+    writeFileSync(deep + '/deep.txt', 'deep\n');           // 超长路径：强制归档器用 pax / GNU longname
+    writeFileSync(root + '/gone.txt', 'to be deleted\n');
+    const tgz = TMP + '/snap.tar.gz';
+    rmSync(tgz, { force: true });
+    // Windows 的 GNU tar 会把 "C:/..." 当成远端主机（host:path），失败时补 --force-local 重试
+    let packed = await runCmd('tar', ['-czf', tgz, '-C', src, 'livegrab-main']);
+    if (!packed.ok) packed = await runCmd('tar', ['-czf', tgz, '--force-local', '-C', src, 'livegrab-main']);
+    check(packed.ok, '用系统 tar 生成测试归档', packed.err);
+    if (packed.ok) {
+      const buf = readFileSync(tgz);
+      const entries = parseTarEntries(zlib.gunzipSync(buf));
+      const names = entries.map((e) => e.name);
+      check(names.includes('livegrab-main/app/server/server.js'), '解析出普通文件条目');
+      check(names.some((n) => n.includes('x'.repeat(60))), '超长路径条目也能解析（pax/GNU longname）');
+
+      const dest = TMP + '/snapout';
+      rmSync(dest, { recursive: true, force: true });
+      const res = extractTarGzTo(buf, dest);
+      check(fsExists(dest + '/app/server/server.js'), '落地后文件就位');
+      check(fsExists(dest + '/app/package.json'), '落地后 package.json 就位');
+      check(readFileSync(dest + '/app/package.json', 'utf8').includes('0.9.9'), '文件内容正确');
+      check(fsExists(dest + '/app/server/' + 'x'.repeat(60) + '/' + 'y'.repeat(60) + '/deep.txt'), '超长路径文件落地');
+      check(res.files.some((f) => f === 'app/server/server.js'), '返回的文件清单是剥离顶层目录后的相对路径');
+    }
+  }
 }
 
 console.log(bad === 0 ? '\n全部通过 ✅' : `\n${bad} 项失败 ❌`);

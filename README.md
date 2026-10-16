@@ -105,11 +105,23 @@ docker compose up -d
 - 页面行为：配置好 token 后「系统更新」页会显示远程最新版本，有新版本时「立即更新」按钮可用（容器内自动执行 git fetch → 快进拉取 → 安装依赖 → 自动重启，全程约 10~60 秒，页面有进度与重启提示）。
 - 未配置 token 访问**私有**仓库时，页面会明确提示「私有仓库需要配置 GitHub Token」，不会误报有新版本；**公开**仓库则不会有任何 token 相关提示。
 
+### 拉取失败时会发生什么（v0.1.21 起）
+
+家宽/公司网络里 `git fetch` 被代理或网关打断是常见事（典型报错 `RPC failed; curl 16 Error in the HTTP2 framing layer`、`fatal: expected flush after ref listing`）。这些不再是死路：
+
+1. **传输层自动降级重试**：第 1 次用 HTTP/1.1；第 2 次加 `protocol.version=0`（绕开 v2 的 ref 通告解析，专治 `expected flush after ref listing`）；第 3 次原样再试（这类错误多为瞬时抖动）。全部用 `-c` 临时注入，不改你的 `.git/config`。
+2. **失败原因分级 + 可操作建议**：更新日志里会直接告诉你是 HTTP2/代理问题、DNS/连不通、认证失败还是仓库不存在，并给出可复制的命令（含你配置的仓库地址），而不是只留一行 `exit 128`。
+3. **快照通道兜底（git 完全走不通时）**：改用普通 HTTPS 从 `codeload.github.com` 下载分支归档并覆盖工作区 —— 只覆盖代码文件、不动 `.git` 索引，用本地 git 对象算出「上游已删除的文件」清单再清理（绝不碰 `node_modules` 等你自己的文件）。更新照样能完成并重启，页面会提示「代码已由快照通道更新，git 索引待对齐」。
+4. **下次联网自愈**：再点一次「立即更新」时，只要工作区自快照落地后没有被改动过（按内容指纹比对），就会自动 `reset --hard` 把 `.git` 索引对齐到远端，恢复正常 git 语义；若你改过代码则跳过对齐并给出提示，绝不覆盖你的改动。
+5. **永远可以重试**：任何失败都不会改动代码，按钮会变成「重试更新」，直接再点一次即可。
+
+容器的**首次克隆**同样走 HTTP/1.1 + protocol v0，并自动重试 3 次；未配 token 时禁止交互式凭据提示（不会出现「启动卡在 Username for...」）。
+
 ### 容器里代码从哪来、怎么更新（架构 B）
 
 镜像本身**不包含业务源码**（只含 `node_modules` 基线、ffmpeg、git 和入口脚本）。容器首次启动时，入口脚本 `deploy/entrypoint.sh` 会把仓库 clone 到 `./config/src`、切换到镜像内置版本，之后服务从该目录运行。因此：
 
-- **日常更新 = 页面点「立即更新」**：容器内自己完成 `git pull → npm install → 重启`，不动镜像、不丢录制，宿主机无需干预。
+- **日常更新 = 页面点「立即更新」**：容器内自己完成 `git fetch → 快进 → npm install → 重启`（fetch 失败时自动降级重试，仍不行则走 tar.gz 快照通道，见上文），不动镜像、不丢录制，宿主机无需干预。
 - **镜像级变更才需要在宿主机重建**（更换 ffmpeg / Node 版本、修改入口脚本本身）：
   ```bash
   cd livegrab && git pull && docker compose up -d --build
@@ -133,6 +145,8 @@ docker run -d --name livegrab -p 18080:8080 \
 - 停止：`docker compose stop`（已配置 `stop_grace_period: 30s`，会先把当前分段收尾再退出）；彻底移除：`docker compose down`。
 - 看日志：`docker compose logs -f --tail=200 livegrab`。
 - 更新页提示「容器内未检测到代码仓库」：首启克隆失败（网络/ token），修好后重启容器即可，页面「立即更新」在此期间不可用。
+- 更新页日志里报 `RPC failed; curl 16 ... HTTP2 framing` / `expected flush after ref listing`：网络中间设备（代理/网关）改写了 git 的长连接，程序会自动降级 HTTP/1.1 重试；仍不行时会自动走快照通道完成更新，详见上文「拉取失败时会发生什么」。
+- 更新页出现「重试更新」：上次更新未完成、代码未被改动，直接再点一次即可（首次失败后会自动重试 3 档）。
 - 容器行为异常、怀疑代码目录损坏：`rm -rf ./config/src` 后 `docker compose restart livegrab`，会重新克隆到镜像内置版本。
 
 ---

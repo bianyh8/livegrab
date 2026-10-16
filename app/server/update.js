@@ -9,9 +9,12 @@
    容器首启克隆失败/镜像过旧（无 .git / 无 git）时不伪更新，明确提示手动步骤；本模块零第三方依赖。 */
 
 import { execFile } from 'node:child_process';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
+import zlib from 'node:zlib';
 
 const UA = 'LiveGrab-update-manager';
 const DEFAULT_REPO = process.env.LIVEGRAB_REPO || 'bianyh8/livegrab';
@@ -89,6 +92,130 @@ export function pickLatestTag(candidates) {
     if (!bestV || cmpParsedVersion(v, bestV) > 0) { bestV = v; bestTag = name; }
   }
   return bestTag;
+}
+
+/* ---------- git 传输层抗抖动 ---------- */
+
+/** git 传输层参数：容器/家庭网络里最常见的两类拉取失败——
+    ① `RPC failed; curl 16 Error in the HTTP2 framing layer`
+    ② `fatal: expected flush after ref listing`
+    都出在 HTTP/2 与 protocol v2 的 ref 通告协商上（中间设备/代理/出口网关改写了连接）。
+    改用 HTTP/1.1 并关掉低速中断即可稳定通过；legacyRefs 再用 protocol v0（老式 ref 通告，
+    完全绕开 v2 的 ls-refs 解析，对②尤其有效）。全部用 -c 临时注入，不动用户仓库的 .git/config。 */
+export function gitTransportArgs({ legacyRefs = false } = {}) {
+  const args = [
+    '-c', 'http.version=HTTP/1.1',
+    '-c', 'http.postBuffer=524288000',
+    '-c', 'http.lowSpeedLimit=0',
+    '-c', 'http.lowSpeedTime=999999',
+  ];
+  if (legacyRefs) args.push('-c', 'protocol.version=0');
+  return args;
+}
+
+/** 拉取尝试计划：由轻到重逐级降级，每级失败后自动进入下一级。
+    第 3 次与第 2 次参数相同——falsh/ref listing 类错误多是一次性的网络抖动，原样重试常能过。 */
+export const FETCH_PLAN = [
+  { label: 'HTTP/1.1', legacyRefs: false },
+  { label: 'HTTP/1.1 + protocol v0', legacyRefs: true },
+  { label: '重试（HTTP/1.1 + protocol v0）', legacyRefs: true },
+];
+
+/** 把 git 的报错文本归类，便于给出「对症」的可操作建议。返回 '' 表示未识别。 */
+export function classifyGitError(text) {
+  const s = String(text || '');
+  if (/HTTP2 framing|expected flush after ref listing|RPC failed/i.test(s)) return 'http2';
+  if (/could not resolve host|Failed to connect|Connection (refused|reset|timed out)|Network is unreachable|Operation timed out/i.test(s)) return 'network';
+  if (/Authentication failed|could not read Username|terminal prompts disabled|403|401/i.test(s)) return 'auth';
+  if (/repository .* not found|not found|does not exist/i.test(s)) return 'notfound';
+  if (/low-speed limit|transfer closed|early EOF|unexpected disconnect/i.test(s)) return 'unstable';
+  return '';
+}
+
+/* ---------- tar.gz 快照解析（零依赖：只用 node:zlib） ---------- */
+
+/** 解析 tar 归档为条目列表（支持 ustar 前缀、GNU longname、pax 扩展头与 base-256 长度）。
+    返回 [{ name, type, mode, data }]，name 已按 ustar prefix 拼好；type: 'f'|'d'|'other'。 */
+export function parseTarEntries(buf) {
+  const entries = [];
+  let off = 0;
+  let nextName = '';     // GNU longname / pax path 覆盖
+  const cstr = (b, s, e) => {
+    const slice = b.subarray(s, e);
+    const z = slice.indexOf(0);
+    return slice.subarray(0, z === -1 ? slice.length : z).toString('utf8');
+  };
+  const octal = (b, s, e) => {
+    const slice = b.subarray(s, e);
+    // base-256（高位为 1）表示大数，tar 用它存超长数值
+    if (slice[0] & 0x80) {
+      let n = 0n;
+      for (const byte of slice.subarray(1)) n = (n << 8n) | BigInt(byte);
+      return Number(n);
+    }
+    const txt = cstr(b, s, e).trim();
+    return txt ? parseInt(txt, 8) || 0 : 0;
+  };
+  while (off + 512 <= buf.length) {
+    const h = buf.subarray(off, off + 512);
+    if (h[0] === 0) break; // 全零块 = 归档结束
+    const size = octal(h, 124, 136);
+    const typeflag = String.fromCharCode(h[156] || 0x30);
+    const data = buf.subarray(off + 512, off + 512 + size);
+    const prefix = cstr(h, 345, 500);
+    let name = nextName || (prefix ? `${prefix}/${cstr(h, 0, 100)}` : cstr(h, 0, 100));
+    nextName = '';
+    if (typeflag === 'L') { nextName = data.subarray(0, data.indexOf(0) === -1 ? data.length : data.indexOf(0)).toString('utf8'); }
+    else if (typeflag === 'x' || typeflag === 'g') {
+      // pax 记录形如「len key=value\n」；只关心 path
+      const txt = data.toString('utf8');
+      let i = 0;
+      while (i < txt.length) {
+        const sp = txt.indexOf(' ', i);
+        if (sp === -1) break;
+        const len = parseInt(txt.slice(i, sp), 10);
+        if (!len || Number.isNaN(len)) break;
+        const rec = txt.slice(sp + 1, i + len - 1);
+        const eq = rec.indexOf('=');
+        if (eq > 0 && rec.slice(0, eq) === 'path') nextName = rec.slice(eq + 1);
+        i += len;
+      }
+    } else if (typeflag === '0' || typeflag === '\0' || typeflag === '7') {
+      entries.push({ name, type: 'f', mode: octal(h, 100, 108) & 0o777, data });
+    } else if (typeflag === '5') {
+      entries.push({ name, type: 'd', mode: octal(h, 100, 108) & 0o777, data: Buffer.alloc(0) });
+    } else {
+      entries.push({ name, type: 'other', mode: 0, data: Buffer.alloc(0) });
+    }
+    off += 512 + Math.ceil(size / 512) * 512;
+  }
+  return entries;
+}
+
+/** 把 tar.gz 解压落地到 destDir，剥离最外层目录（GitHub 归档是 <repo>-<branch>/...）。
+    返回 { files, dirs, skipped }（相对路径列表）。 */
+export function extractTarGzTo(buf, destDir) {
+  const all = parseTarEntries(zlib.gunzipSync(buf));
+  // 顶层目录名（如 livegrab-main），用于剥离
+  const roots = new Set(all.map((e) => e.name.replace(/^\.\//, '').split('/')[0]).filter(Boolean));
+  const strip = roots.size === 1 ? `${[...roots][0]}/` : '';
+  const files = [], dirs = [], skipped = [];
+  for (const e of all) {
+    let rel = e.name.replace(/^\.\//, '');
+    if (strip) {
+      if (!rel.startsWith(strip)) { skipped.push(rel); continue; }
+      rel = rel.slice(strip.length);
+    }
+    if (!rel || rel.includes('..') || path.isAbsolute(rel)) { if (rel) skipped.push(rel); continue; }
+    const abs = path.join(destDir, rel);
+    if (e.type === 'd') { fs.mkdirSync(abs, { recursive: true }); dirs.push(rel); continue; }
+    if (e.type !== 'f') { skipped.push(rel); continue; }
+    fs.mkdirSync(path.dirname(abs), { recursive: true });
+    fs.writeFileSync(abs, e.data);
+    try { fs.chmodSync(abs, e.mode || 0o644); } catch { /* Windows 上可能不支持 */ }
+    files.push(rel);
+  }
+  return { files, dirs, skipped };
 }
 
 export class UpdateManager {
@@ -221,6 +348,224 @@ export class UpdateManager {
     return ['-c', `http.extraheader=Authorization: Basic ${b64}`];
   }
 
+  /** git 子进程环境：禁用一切交互式凭据提示。
+      否则无凭据（私有仓库未配 token）时 git 会挂在「Username for ...」等待输入，
+      表现为「一直卡着不报错」，直到 120s 超时才失败。 */
+  _gitEnv() {
+    return {
+      ...process.env,
+      GIT_TERMINAL_PROMPT: '0',
+      GIT_ASKPASS: 'echo',
+      GCM_INTERACTIVE: 'never',
+      GIT_SSH_COMMAND: 'ssh -o BatchMode=yes -o StrictHostKeyChecking=no',
+    };
+  }
+
+  /** 组装一次 fetch 的完整参数（传输层抗抖动参数 + 认证参数 + 兜底超时）。 */
+  _buildFetchArgs(gitUrl, branch, { legacyRefs = false } = {}) {
+    return [...gitTransportArgs({ legacyRefs }), ...this._gitAuthArgs(), 'fetch', gitUrl, branch];
+  }
+
+  /** git 拉取（带降级重试）。返回 { ok, code, out, err, attempt, label, tried }。
+      逐级降级：HTTP/1.1 → + protocol v0 → 原样再试一次；每次失败都写 WARN 日志，
+      让「点更新 → 失败」在页面上留下完整的排查链条，而不是只有一条 exit 128。 */
+  async _fetchWithRetry(env, gitUrl, branch) {
+    let last = { ok: false, code: '?', out: '', err: '' };
+    let tried = 0;
+    for (let i = 0; i < FETCH_PLAN.length; i++) {
+      const p = FETCH_PLAN[i];
+      if (i > 0) {
+        this._log('WARN', `拉取失败（exit ${last.code}）：${this._firstLine(last.err || last.out)}`);
+        this._log('WARN', `改用「${p.label}」重试（第 ${i + 1}/${FETCH_PLAN.length} 次）…`);
+        await sleep(1000 * i);
+      }
+      tried = i + 1;
+      last = await run('git', this._buildFetchArgs(gitUrl, branch, p), {
+        cwd: env.gitRoot, timeout: 180000, env: this._gitEnv(),
+      });
+      if (last.ok) return { ...last, attempt: tried, label: p.label, tried };
+    }
+    return { ...last, attempt: tried, label: '', tried };
+  }
+
+  /** 取报错文本首行（日志里只展示一行，避免刷屏）。 */
+  _firstLine(s) {
+    return String(s || '').split('\n').map((x) => x.trim()).filter(Boolean)[0] || '无输出';
+  }
+
+  /** 针对不同失败原因给出可操作建议（真正能救命的提示都写在这里）。 */
+  _logGitAdvice(kind, gitUrl, branch, env) {
+    const cmd = `git -c http.version=HTTP/1.1 -c protocol.version=0 fetch ${gitUrl} ${branch}`;
+    if (kind === 'http2') {
+      this._log('INFO', '该错误来自网络中间设备/代理改写了 HTTP2 连接（curl 16 / expected flush after ref listing）。');
+      this._log('INFO', `已自动降级 HTTP/1.1 + protocol v0 重试仍失败，可在${env.inContainer ? '宿主机执行容器的 git，或' : ''}源码目录手动验证：${cmd}`);
+      this._log('INFO', '若宿主机同样报错，请检查代理/网关（公司网络、软路由、科学上网工具常改写长连接）。');
+    } else if (kind === 'network') {
+      this._log('INFO', `无法连接仓库地址，请确认网络与 DNS：${gitUrl}`);
+      this._log('INFO', '容器部署请确认容器能访问外网（docker compose 里不要用 host 网络的代理例外）。');
+    } else if (kind === 'auth') {
+      this._log('INFO', '认证失败：私有仓库请在「更新源配置」里填写 GitHub Token（或设置环境变量 LIVEGRAB_GITHUB_TOKEN）后重试。');
+    } else if (kind === 'notfound') {
+      this._log('INFO', '仓库不存在或无权限：请核对「更新源配置」中的仓库地址与分支名。');
+    } else if (kind === 'unstable') {
+      this._log('INFO', '连接被中途断开（网络不稳定）：稍后重试即可，已自动重试 3 次。');
+    }
+    this._log('INFO', '更新已中止，代码未被改动；可直接再次点击「立即更新」重试。');
+  }
+
+  /* ---------- 快照通道（git 传输不可用时的兜底） ---------- */
+
+  /** 快照标记文件放在 .git 内：不进工作区、不出现在 git status、也不会被快照覆盖。 */
+  _snapshotPath(env) { return path.join(env.gitRoot, '.git', 'livegrab-snapshot.json'); }
+
+  /** 读取快照标记：存在即表示「工作区是快照通道更新的，.git 索引尚未对齐」。 */
+  _readSnapshot(env) {
+    if (!env || !env.gitRoot) return null;
+    try {
+      const raw = JSON.parse(fs.readFileSync(this._snapshotPath(env), 'utf8'));
+      return raw && raw.commit ? raw : null;
+    } catch { return null; }
+  }
+
+  _writeSnapshot(env, data) {
+    try { fs.writeFileSync(this._snapshotPath(env), JSON.stringify(data, null, 2)); } catch { /* 忽略 */ }
+  }
+
+  _clearSnapshot(env) {
+    try { fs.rmSync(this._snapshotPath(env), { force: true }); } catch { /* 忽略 */ }
+  }
+
+  /** 由配置的仓库地址推导 codeload 归档地址（唯一非 git 的代码获取通道，普通 HTTPS GET）。 */
+  _snapshotUrl() {
+    let repo = this._repo();
+    if (!repo) repo = parseOwnerRepoFromGitHubUrl(this._gitUrl());
+    if (!repo || !/^[\w.-]+\/[\w.-]+$/.test(repo)) return '';
+    return `https://codeload.github.com/${repo}/tar.gz/refs/heads/${encodeURIComponent(this._branch())}`;
+  }
+
+  /** 下载分支归档（tar.gz）。GitHub 私有仓库用 token 认证；非 GitHub 仓库返回 null。 */
+  async _downloadSnapshot() {
+    const url = this._snapshotUrl();
+    if (!url) return null;
+    const headers = { 'User-Agent': UA };
+    const t = this._token();
+    if (t) headers['Authorization'] = `Bearer ${t}`;
+    const r = await fetch(url, { headers, signal: AbortSignal.timeout(180000) });
+    if (!r.ok) throw new Error(`归档下载失败 HTTP ${r.status}`);
+    const buf = Buffer.from(await r.arrayBuffer());
+    if (!buf.length) throw new Error('归档内容为空');
+    if (buf.length > 128 * 1024 * 1024) throw new Error('归档过大，已放弃快照通道');
+    return buf;
+  }
+
+  /** 用归档覆盖工作区（不走 git 传输）。
+      安全性：① 只覆盖归档内文件；② 归档里没有、但**旧 commit 跟踪过**的文件才删除
+      （用本地 git 对象算出旧清单，绝不误删 node_modules / 运行时产生的未跟踪文件）。 */
+  async _applySnapshot(buf, env, latest) {
+    const tmp = path.join(os.tmpdir(), `lg-snap-${Date.now()}-${process.pid}`);
+    await fsp.mkdir(tmp, { recursive: true });
+    try {
+      const { files, skipped } = extractTarGzTo(buf, tmp);
+      if (!files.length) throw new Error('归档解析后没有任何文件');
+      if (!fs.existsSync(path.join(tmp, 'app', 'server', 'server.js')) || !fs.existsSync(path.join(tmp, 'app', 'package.json'))) {
+        throw new Error('归档结构异常（缺少 app/server/server.js 或 app/package.json），已放弃');
+      }
+      let version = '';
+      try { version = JSON.parse(fs.readFileSync(path.join(tmp, 'app', 'package.json'), 'utf8')).version || ''; } catch { /* 忽略 */ }
+
+      // 上游删除的文件：按旧 commit 的文件清单推算（本地对象即可算，无需网络）。
+      // 必须用 -z：git 默认会 QuotePath（把非 ASCII 路径转义成 "ui/UI\350..."），
+      // 那样清单与归档里的真实路径对不上，会算错删除集。
+      const removed = [];
+      const listed = await run('git', ['ls-tree', '-r', '-z', '--name-only', 'HEAD'], { cwd: env.gitRoot, env: this._gitEnv() });
+      if (listed.ok) {
+        const now = new Set(files);
+        for (const rel of listed.out.split('\0').filter(Boolean)) {
+          if (now.has(rel) || rel.startsWith('app/node_modules/')) continue;
+          try { fs.rmSync(path.join(env.gitRoot, rel), { force: true }); removed.push(rel); } catch { /* 忽略 */ }
+        }
+      }
+
+      // 覆盖式拷贝
+      let copied = 0;
+      for (const rel of files) {
+        const dst = path.join(env.gitRoot, rel);
+        fs.mkdirSync(path.dirname(dst), { recursive: true });
+        fs.copyFileSync(path.join(tmp, rel), dst);
+        try { fs.chmodSync(dst, fs.statSync(path.join(tmp, rel)).mode); } catch { /* 忽略 */ }
+        copied += 1;
+      }
+      if (version) latest = { ...(latest || {}), version };
+
+      // 记下「快照落地那一刻」的文件清单与内容指纹，供下次联网自愈时判断工作区是否被改过
+      const digest = this._contentDigest(env.gitRoot, files);
+      this._writeSnapshot(env, {
+        commit: (latest && latest.commit) || '',
+        tag: (latest && latest.tag) || (version ? `v${version}` : ''),
+        version,
+        at: Date.now(),
+        files: copied,
+        removed: removed.length,
+        paths: files,
+        digest,
+      });
+      if (skipped.length) this._log('WARN', `归档中有 ${skipped.length} 个条目被跳过（软链/异常路径）`);
+      return { copied, removed: removed.length, version, tmp };
+    } finally {
+      try { fs.rmSync(tmp, { recursive: true, force: true }); } catch { /* 忽略 */ }
+    }
+  }
+
+  /** 已跟踪文件是否有未提交改动（-uno：容器运行时写入的 data/、config/ 等未跟踪目录不参与）。 */
+  async _worktreeDirty(env) {
+    const st = await run('git', ['status', '--porcelain', '-uno'], { cwd: env.gitRoot, timeout: 30000, env: this._gitEnv() });
+    if (!st.ok) return null;
+    return st.out.trim() !== '';
+  }
+
+  /** 工作区内容指纹：对给定相对路径逐个取 sha1，再合成一个 sha1。
+      为什么不用 git status：「相对旧 HEAD 有改动」是快照更新后的必然状态，而
+      `M file` 的文本在文件被再次编辑时并不变化（太粗），无法发现「快照之后有人改过代码」。
+      内容指纹则精确到字节，且与平台/换行设置无关。 */
+  _contentDigest(root, rels) {
+    const h = crypto.createHash('sha1');
+    for (const rel of [...rels].sort()) {
+      h.update(rel).update('\0');
+      try {
+        h.update(crypto.createHash('sha1').update(fs.readFileSync(path.join(root, rel))).digest());
+      } catch { h.update('missing'); }
+    }
+    return h.digest('hex');
+  }
+
+  /** 把 .git 索引对齐到刚 fetch 下来的远端（快照通道更新过工作区后的自愈）。
+      安全性：用「快照落地时的内容指纹」判定——指纹一致说明工作区自那以后没被改过，
+      可以安全 reset --hard；没有指纹（老标记）时退回「必须干净」的保守判据。
+      不满足就只记 WARN、不动代码（宁可不自愈，也不覆盖用户的改动）。 */
+  async _alignGitToWorktree(env) {
+    const snap = this._readSnapshot(env);
+    if (snap && Array.isArray(snap.paths) && snap.digest) {
+      const now = this._contentDigest(env.gitRoot, snap.paths);
+      if (now !== snap.digest) {
+        this._log('WARN', '工作区在快照更新之后又被改动过，跳过自动对齐（不覆盖你的改动）');
+        return false;
+      }
+    } else {
+      const dirty = await this._worktreeDirty(env);
+      if (dirty === null || dirty) {
+        this._log('WARN', '工作区有未提交改动，跳过 git 索引对齐（避免覆盖你的改动）');
+        return false;
+      }
+    }
+    const reset = await run('git', ['reset', '--hard', 'FETCH_HEAD'], { cwd: env.gitRoot, timeout: 60000, env: this._gitEnv() });
+    if (!reset.ok) {
+      this._log('WARN', `git 索引对齐失败：${this._firstLine(reset.err || reset.out)}`);
+      return false;
+    }
+    this._clearSnapshot(env);
+    return true;
+  }
+
   async _findGitRoot(dir) {
     let cur = path.resolve(dir);
     for (let i = 0; i < 8; i++) {
@@ -271,6 +616,10 @@ export class UpdateManager {
 
     let commit = '', branch = '', commitAt = null, tag = '';
     const env = this.state.env || await this.detectEnv();
+    // 快照标记优先：走快照通道更新过的工作区，其真实代码 = 标记里的 commit，
+    // 而 .git 索引还停在旧提交（下次成功 fetch 时会自动对齐），不能拿旧 index 冒充本地版本。
+    const snap = env.gitRoot ? this._readSnapshot(env) : null;
+    this.state.snapshot = snap || null;
     if (env.gitAvailable && env.gitRoot) {
       const [sha, br, at, tg] = await Promise.all([
         run('git', ['rev-parse', '--short=12', 'HEAD'], { cwd: env.gitRoot }),
@@ -289,6 +638,13 @@ export class UpdateManager {
         || (await this._readBuildCommit().catch(() => ''));
       if (buildCommit) commit = String(buildCommit).slice(0, 12);
       branch = this._branch();
+    }
+    if (snap) {
+      if (snap.commit) commit = String(snap.commit).slice(0, 12);
+      if (snap.tag) tag = snap.tag;
+      if (snap.version) version = snap.version;
+      if (snap.at) commitAt = new Date(snap.at).toISOString();
+      branch = branch || this._branch();
     }
     this.state.local = { version, commit, branch: branch || this._branch(), commitAt, tag: tag || `v${version}` };
     return this.state.local;
@@ -457,15 +813,17 @@ export class UpdateManager {
       }
 
       const hasNew = this._computeHasUpdate(local, latest);
+      // 上次走过「快照通道」（工作区已更新、.git 索引落后）时，即使没有新版本也要尝试对齐一次
+      const snap = env.gitRoot ? this._readSnapshot(env) : null;
 
-      // 没有新版本：直接结束，不再误报「发现新版本」（commit 一致即视为最新，即使版本号字符串不同）
-      if (!hasNew) {
+      // 没有新版本、也没有待对齐的快照标记：直接结束，不再误报「发现新版本」
+      if (!hasNew && !snap) {
         this._phase('done', 100, '');
         this._log('OK', `已是最新版本${local.commit ? `（${local.commit}）` : `（${local.version}）`}，无需更新`);
         return;
       }
 
-      this._log('INFO', `发现新版本：${latest.tag} (${latest.commit || '?'})`);
+      if (hasNew) this._log('INFO', `发现新版本：${latest.tag} (${latest.commit || '?'})`);
 
       if (!env.gitAvailable) {
         // 容器/无 git：不能伪更新，给手动指引。这是正常的「需手动重建」状态，不是错误。
@@ -478,55 +836,104 @@ export class UpdateManager {
         const gitUrl = this._gitUrl();
       this._log('INFO', env.inContainer
           ? '请检查容器网络；私有仓库需配置 LIVEGRAB_GITHUB_TOKEN。重启容器会重试自动克隆；或在宿主机执行：docker compose up -d --build'
-          : `请在源码目录手动执行：git pull ${gitUrl} ${branch} && npm install`);
+          : `请在源码目录手动执行：git -c http.version=HTTP/1.1 pull ${gitUrl} ${branch} && npm install`);
         this._log('INFO', '已生成手动更新指引。重建并重启容器后生效。');
         this._phase('done', 100, '需手动重建镜像更新');
         return;
       }
 
       // 更新源完全取自「更新源配置」（UI > 环境变量 > 默认），不写死仓库：
-      // 直接以配置的仓库地址作为 fetch/pull 的远端，避免仓库里残留的 origin 指向别处导致拉到旧代码。
+      // 直接以配置的仓库地址作为 fetch 的远端，避免仓库里残留的 origin 指向别处导致拉到旧代码。
       const branch = this._branch();
       const gitUrl = this._gitUrl();
-      // ② fetch（私有仓库注入认证，避免依赖本机凭据）
+      // ② fetch（传输层抗抖动 + 逐级降级重试 + 认证注入）
       this._phase('fetch', 20, '拉取远端代码');
       this._log('INFO', `准备从更新源拉取代码：${gitUrl}（分支 ${branch}）…`);
-      const fetchR = await run('git', [...this._gitAuthArgs(), 'fetch', gitUrl, branch], { cwd: env.gitRoot, timeout: 120000 });
-      if (!fetchR.ok) {
+      const fetchR = await this._fetchWithRetry(env, gitUrl, branch);
+
+      if (fetchR.ok) {
+        this._log('OK', fetchR.attempt > 1 ? `代码拉取成功（第 ${fetchR.attempt} 次尝试 · ${fetchR.label}）` : '代码拉取成功');
+        this.state.progress = 40;
+
+        // 快照自愈：上次是快照通道更新的 → 现在能把 .git 对齐到远端了
+        if (snap) {
+          if (await this._alignGitToWorktree(env)) {
+            this._log('OK', `git 索引已对齐到远端（${(latest.commit || '').slice(0, 12)}）：此后本地版本以 git 为准`);
+            const nowLocal = await this.localInfo();
+            if (!this._computeHasUpdate(nowLocal, latest)) {
+              this._phase('done', 100, '');
+              this._log('OK', `已是最新代码（${nowLocal.commit || nowLocal.version}），无需更新`);
+              return;
+            }
+          }
+        }
+
+        // ③ 对比本地与远端 HEAD（远端 commit 即刚 fetch 下来的 FETCH_HEAD）
+        const [cur, remote] = await Promise.all([
+          run('git', ['rev-parse', 'HEAD'], { cwd: env.gitRoot, env: this._gitEnv() }),
+          run('git', ['rev-parse', 'FETCH_HEAD'], { cwd: env.gitRoot, env: this._gitEnv() }),
+        ]);
+        const curSha = cur.ok ? cur.out.trim() : '';
+        const remoteSha = remote.ok ? remote.out.trim() : '';
+        if (curSha && remoteSha && curSha === remoteSha) {
+          this._phase('done', 100, '');
+          this._log('OK', `已是最新代码（${curSha.slice(0, 12)}），无需更新`);
+          return;
+        }
+
+        // ④ 本地快进：fetch 已经拿到代码，直接用它快进，不再走第二次网络
+        //    （原来的 git pull = fetch + merge，等于把同一段网络再赌一次）
+        this._phase('pull', 55, `拉取最新代码 ${branch}`);
+        this._log('INFO', `正在更新到 ${latest.tag} (${remoteSha.slice(0, 12)})…`);
+        const ffR = await run('git', ['merge', '--ff-only', 'FETCH_HEAD'], { cwd: env.gitRoot, timeout: 60000, env: this._gitEnv() });
+        if (!ffR.ok) {
+          this._phase('error', 60, '');
+          this._log('ERR', `代码更新失败（非快进或本地有改动，exit ${ffR.code}）：${this._firstLine(ffR.err || ffR.out)}`);
+          this._log('INFO', `请先提交或暂存本地改动后重试，或手动执行 git -C ${env.gitRoot} pull --ff-only ${gitUrl} ${branch}`);
+          this._log('INFO', '代码未被改动；处理完后可直接再次点击「立即更新」重试。');
+          return;
+        }
+        this._log('OK', `代码已更新到 ${latest.tag}`);
+        this.state.progress = 75;
+      } else {
+        // ③ git 传输彻底不可用 → 兜底「快照通道」：普通 HTTPS 下载分支归档覆盖工作区
+        //    （只覆盖文件、不动 .git 索引，并用标记记录状态，下次联网自动对齐）
+        const kind = classifyGitError(`${fetchR.err}\n${fetchR.out}`);
         this._phase('error', 25, '');
-        const detail = (fetchR.err || fetchR.out || '').split('\n').slice(0, 3).join(' ').trim();
-        this._log('ERR', `代码拉取失败（exit ${fetchR.code}）：${detail || '无输出'}`);
-        return;
-      }
-      this._log('OK', '代码拉取成功');
-      this.state.progress = 40;
+        this._log('ERR', `代码拉取失败（exit ${fetchR.code}；已尝试 ${fetchR.tried} 种拉取方式）：${this._firstLine(fetchR.err || fetchR.out)}`);
+        this._logGitAdvice(kind, gitUrl, branch, env);
 
-      // ③ 对比本地与远端 HEAD（远端 commit 即刚 fetch 下来的 FETCH_HEAD）
-      const [cur, remote] = await Promise.all([
-        run('git', ['rev-parse', 'HEAD'], { cwd: env.gitRoot }),
-        run('git', ['rev-parse', 'FETCH_HEAD'], { cwd: env.gitRoot }),
-      ]);
-      const curSha = cur.ok ? cur.out.trim() : '';
-      const remoteSha = remote.ok ? remote.out.trim() : '';
-      if (curSha && remoteSha && curSha === remoteSha) {
-        this._phase('done', 100, '');
-        this._log('OK', `已是最新代码（${curSha.slice(0, 12)}），无需更新`);
-        return;
-      }
+        if (!hasNew) {
+          // 只是为了对齐上次的快照标记：拉不到就先留着，下次联网再对齐
+          this._phase('done', 100, '');
+          this._log('WARN', '本次未能取到远端代码，快照标记保留，下次联网时会再尝试对齐 git 索引');
+          return;
+        }
 
-      // ④ 快进拉取
-      this._phase('pull', 55, `拉取最新代码 ${branch}`);
-      this._log('INFO', `正在更新到 ${latest.tag} (${remoteSha.slice(0, 12)})…`);
-      const pullR = await run('git', [...this._gitAuthArgs(), 'pull', '--ff-only', gitUrl, branch], { cwd: env.gitRoot, timeout: 120000 });
-      if (!pullR.ok) {
-        this._phase('error', 60, '');
-        const detail = (pullR.err || pullR.out || '').split('\n').slice(0, 3).join(' ').trim();
-        this._log('ERR', `代码更新失败（非快进或本地有改动，exit ${pullR.code}）：${detail || '无输出'}`);
-        this._log('INFO', `请先提交或暂存本地改动后重试，或手动执行 git pull ${gitUrl} ${branch}`);
-        return;
+        const snapUrl = this._snapshotUrl();
+        if (!snapUrl) {
+          this._phase('error', 25, '');
+          this._log('WARN', '当前更新源不是 GitHub 仓库地址，快照通道不可用；代码未被改动');
+          return;
+        }
+        this._phase('fetch', 30, '改用快照通道');
+        this._log('WARN', `git 传输不可用，改用「快照通道」：普通 HTTPS 下载分支归档 ${snapUrl}`);
+        try {
+          const buf = await this._downloadSnapshot();
+          const info = await this._applySnapshot(buf, env, latest);
+          this._log('OK', `快照通道成功：覆盖 ${info.copied} 个文件${info.removed ? `，清理上游已删除的 ${info.removed} 个文件` : ''}（v${info.version || latest.version}）`);
+          this._log('WARN', '本次代码由快照通道落地：工作区已是最新，但 .git 索引仍停在旧提交；下次成功联网会自动对齐（再点一次「立即更新」即可触发）');
+          // 刷新本地状态：让页面立刻显示「已是最新 + 快照提示」，而不是继续停在「可用更新」
+          // （重启钩子失败或未注入时，这一步是页面唯一能反映真实状态的机会）
+          await this.localInfo();
+          this.state.progress = 75;
+        } catch (e) {
+          this._phase('error', 25, '');
+          this._log('ERR', `快照通道同样失败：${e.message || e}`);
+          this._log('INFO', '两条通道都不可用，代码未被改动；网络恢复后可直接再次点击「立即更新」重试。');
+          return;
+        }
       }
-      this._log('OK', `代码已更新到 ${latest.tag}`);
-      this.state.progress = 75;
 
       // ⑤ 安装依赖
       if (env.gitRoot && path.basename(env.gitRoot) === 'app') {
@@ -615,6 +1022,8 @@ export class UpdateManager {
       log: s.log,
       hasUpdate: this._computeHasUpdate(s.local, s.latest),
       remoteUnavailable: !!(s.latest && s.latest.unavailable),
+      // 快照通道状态：非空表示工作区由 tar.gz 快照更新、.git 索引待对齐（前端据此提示）
+      snapshot: s.snapshot || null,
       repo: this._repo(),
       gitUrl: this._gitUrl(),
       branch: this._branch(),

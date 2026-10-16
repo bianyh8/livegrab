@@ -8,6 +8,8 @@ import { t } from '../../i18n.js';
 
 const ICON_REFRESH = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M20 12a8 8 0 1 1-2.3-5.6"/><path d="M20 4v5h-5"/></svg>';
 const ICON_DOWNLOAD = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M12 3v12M7 10l5 5 5-5"/><path d="M5 21h14"/></svg>';
+// 失败/快照横幅用的小图标（自带尺寸，不依赖 .btn 的 svg 规则）
+const ICON_WARN = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" style="flex:0 0 16px"><path d="M12 8v5M12 16.5v.5"/><circle cx="12" cy="12" r="9"/></svg>';
 const ICON_GITHUB = '<svg viewBox="0 0 24 24" fill="currentColor" width="16" height="16"><path d="M12 2C6.48 2 2 6.58 2 12.25c0 4.53 2.87 8.37 6.84 9.73.5.1.68-.22.68-.49 0-.24-.01-.88-.01-1.73-2.78.62-3.37-1.37-3.37-1.37-.45-1.18-1.11-1.49-1.11-1.49-.91-.64.07-.62.07-.62 1 .07 1.53 1.06 1.53 1.06.89 1.56 2.34 1.11 2.91.85.09-.66.35-1.11.63-1.36-2.22-.26-4.55-1.14-4.55-5.06 0-1.12.39-2.03 1.03-2.75-.1-.26-.45-1.3.1-2.71 0 0 .84-.28 2.75 1.05a9.4 9.4 0 0 1 5 0c1.91-1.33 2.75-1.05 2.75-1.05.55 1.41.2 2.45.1 2.71.64.72 1.03 1.63 1.03 2.75 0 3.93-2.34 4.79-4.57 5.05.36.32.68.94.68 1.9 0 1.37-.01 2.48-.01 2.82 0 .27.18.6.69.49A10.02 10.02 0 0 0 22 12.25C22 6.58 17.52 2 12 2z"/></svg>';
 
 let pollTimer = null;
@@ -109,6 +111,12 @@ function paint(root, st) {
       : `<span style="color:var(--txt-3);font-size:12.5px">${t('settings.upUpToDate')}</span>`;
 
   const applyDisabled = running || remoteUnavailable || !hasUpdate;
+  // 上次更新失败（代码未被改动）：按钮转为「重试更新」，并给一条明确的横幅，
+  // 让用户不必翻日志就知道可以直接再点一次。
+  const failed = !running && st.phase === 'error';
+  // 快照通道：工作区已更新、git 索引待对齐（下次成功联网会自动对齐）
+  const snapshot = st.snapshot || null;
+  const applyLabel = failed ? t('settings.upRetryBtn') : t('settings.upApplyBtn');
 
   // 进度卡：仅更新/检查进行中显示
   const progressCard = running ? `
@@ -181,6 +189,8 @@ function paint(root, st) {
   root.innerHTML = `
     <div class="stack" style="max-width:1100px">
       ${isRestart ? `<div class="up-banner restart"><i class="up-spin"></i><span>${t('settings.upRestartingBanner')}</span></div>` : ''}
+      ${failed ? `<div class="up-banner err">${ICON_WARN}<span>${t('settings.upFailedBanner')}</span></div>` : ''}
+      ${snapshot ? `<div class="up-banner snap">${ICON_WARN}<span>${t('settings.upSnapshotHint', `<b class="mono">${esc(String(snapshot.commit || snapshot.tag || '').slice(0, 12))}</b>`, esc(String(snapshot.version || '')))}</span></div>` : ''}
 
       ${configCard}
 
@@ -210,7 +220,7 @@ function paint(root, st) {
           </div>
           <div class="row" style="margin-top:18px;gap:10px;align-items:center;flex-wrap:wrap">
             <button class="btn" id="upCheck" ${st.checking ? 'disabled' : ''}>${ICON_REFRESH}${st.checking ? t('settings.upChecking') : t('settings.upCheckBtn')}</button>
-            <button class="btn primary" id="upApply" ${applyDisabled ? 'disabled' : ''}>${ICON_DOWNLOAD}${t('settings.upApplyBtn')}</button>
+            <button class="btn primary" id="upApply" ${applyDisabled ? 'disabled' : ''}>${ICON_DOWNLOAD}${applyLabel}</button>
             ${tip}
           </div>
           <div class="hintline" style="margin-top:10px">${t('settings.upRepo', esc(st.repo || st.gitUrl || '—'), esc(st.branch || 'main'))}</div>
@@ -258,7 +268,7 @@ function paint(root, st) {
     confirmDialog({
       title: t('settings.upApplyConfirmTitle'),
       danger: true,
-      ok: t('settings.upApplyBtn'),
+      ok: applyLabel,
       text: confirmText,
       onOk: async () => {
         // 新一轮更新：重置重启相关标记

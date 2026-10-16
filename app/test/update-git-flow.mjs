@@ -86,6 +86,102 @@ const after = await m.localInfo();
 check(after.version === '0.1.7', '拉取后本地版本为 0.1.7', after.version);
 check(m._computeHasUpdate(after, latest) === false, '拉取后 commit 一致 → 判定无更新');
 
+console.log('== 拉取失败后的处理流程：降级重试参数 → 本地快进 → 快照通道兜底 ==');
+{
+  // 用本地打包的远端仓库验证「带降级重试的 fetch」在真实 git 上可用（与线上同一份参数）
+  const env = m.state.env;
+  const r2 = await m._fetchWithRetry(env, REMOTE, 'main');
+  check(r2.ok, '_fetchWithRetry 用配置的远端地址拉取成功', r2.err);
+  check(r2.attempt === 1, '本地远端一次即成功（无需降级）', `attempt=${r2.attempt} ${r2.label}`);
+  const fh = await run('git', ['rev-parse', 'FETCH_HEAD'], { cwd: gitRoot });
+  const head = await run('git', ['rev-parse', 'HEAD'], { cwd: gitRoot });
+  check(fh.out === head.out, 'FETCH_HEAD 与本地 HEAD 一致（已是最新）');
+
+  // 造一个更新版本 v0.1.8，并删掉 v0.1.7 里的 app/server/old.js（验证快照会清理上游已删除文件）
+  writeTree('0.1.7');
+  fs.writeFileSync(path.join(WORK, 'app', 'server', 'old.js'), '// 上游后续会删除\n');
+  check((await run('git', [...G, 'add', '.'], { cwd: WORK })).ok, '暂存含 old.js 的 v0.1.7 树');
+  check((await run('git', [...G, 'commit', '-m', 'v0.1.7b'], { cwd: WORK })).ok, '重新提交 v0.1.7（含 old.js）');
+  check((await run('git', ['tag', '-f', 'v0.1.7'], { cwd: WORK })).ok, '移动 v0.1.7 标签');
+
+  // 先把 SRC 变成「含 old.js 的 v0.1.7」：直接把 old.js 写进去并提交（模拟旧代码）
+  fs.writeFileSync(path.join(gitRoot, 'app', 'server', 'old.js'), '// 上游后续会删除\n');
+  check((await run('git', [...G, 'add', '.'], { cwd: gitRoot })).ok, 'SRC 暂存 old.js');
+  check((await run('git', [...G, 'commit', '-m', 'local v0.1.7 with old.js'], { cwd: gitRoot })).ok, 'SRC 提交 old.js（模拟旧代码）');
+  const localBefore = await m.localInfo();
+  check(localBefore.version === '0.1.7', '快照前本地为 v0.1.7', localBefore.version);
+
+  // 远端推进到 v0.1.8：删掉 old.js 并提交/打标签/推送
+  writeTree('0.1.8');
+  fs.rmSync(path.join(WORK, 'app', 'server', 'old.js'), { force: true });
+  check((await run('git', [...G, 'add', '-A'], { cwd: WORK })).ok, '暂存 v0.1.8 树（含删除 old.js）');
+  check((await run('git', [...G, 'commit', '-m', 'v0.1.8'], { cwd: WORK })).ok, '提交 v0.1.8');
+  check((await run('git', ['tag', 'v0.1.8'], { cwd: WORK })).ok, '打 v0.1.8 标签');
+  check((await run('git', ['push', 'origin', 'main'], { cwd: WORK })).ok, '推送 v0.1.8');
+  check((await run('git', ['push', 'origin', 'v0.1.8'], { cwd: WORK })).ok, '推送 v0.1.8 标签');
+
+  // 打包 v0.1.8 的归档（结构与 GitHub 一致：顶层 <repo>-<branch>/）
+  const SNAP = path.join(TMP, 'snaproot');
+  fs.mkdirSync(path.join(SNAP, 'livegrab-main'), { recursive: true });
+  fs.cpSync(path.join(WORK, 'app'), path.join(SNAP, 'livegrab-main', 'app'), { recursive: true });
+  const TGZ = path.join(TMP, 'v018.tar.gz');
+  let pack = await run('tar', ['-czf', TGZ, '-C', SNAP, 'livegrab-main']);
+  if (!pack.ok) pack = await run('tar', ['-czf', TGZ, '--force-local', '-C', SNAP, 'livegrab-main']);
+  check(pack.ok, '生成 v0.1.8 快照归档', pack.err);
+
+  const latestV18 = {
+    version: '0.1.8', tag: 'v0.1.8', unavailable: false,
+    commit: (await run('git', ['rev-parse', '--short=12', 'v0.1.8'], { cwd: WORK })).out,
+  };
+  check(!!latestV18.commit, '取到 v0.1.8 的 commit');
+  const beforeFetch = await m.localInfo();
+  check(m._computeHasUpdate(beforeFetch, latestV18) === true, 'v0.1.7 → v0.1.8 判定有更新');
+
+  const applied = await m._applySnapshot(fs.readFileSync(TGZ), env, latestV18);
+  check(applied.copied > 0 && applied.version === '0.1.8', '快照落地并读出归档内版本号', `copied=${applied.copied} v${applied.version}`);
+  check(!fs.existsSync(path.join(gitRoot, 'app', 'server', 'old.js')), '上游已删除的文件被清理（按旧 commit 清单，不误删未跟踪文件）');
+  check(fs.readFileSync(path.join(gitRoot, 'app', 'package.json'), 'utf8').includes('0.1.8'), '工作区 package.json 已更新到 0.1.8');
+  const snapMark = m._readSnapshot(env);
+  check(!!snapMark && snapMark.commit === latestV18.commit, '写入快照标记（记录实际落地的 commit）', JSON.stringify(snapMark && snapMark.commit));
+  const localAfterSnap = await m.localInfo();
+  check(localAfterSnap.version === '0.1.8' && localAfterSnap.commit === latestV18.commit,
+    '快照后 localInfo 以标记为准（不会拿落后的 .git 索引冒充旧版本）', `${localAfterSnap.version}/${localAfterSnap.commit}`);
+  check(m._computeHasUpdate(localAfterSnap, latestV18) === false, '快照后不再提示「可用更新」');
+  check(!!m.status().snapshot, 'status() 上报 snapshot，前端可提示「索引待对齐」');
+
+  // 自愈：下次 fetch 成功时把 .git 索引对齐到远端，并清掉标记
+  const okNext = await m._fetchWithRetry(env, REMOTE, 'main');
+  check(okNext.ok, '下一次 fetch 成功（网络恢复）');
+  check(await m._alignGitToWorktree(env) === true, 'git 索引对齐成功（工作区干净时 reset --hard FETCH_HEAD）');
+  check(m._readSnapshot(env) === null, '对齐后清除快照标记');
+  const st = await run('git', ['status', '--porcelain'], { cwd: gitRoot });
+  check(st.out.trim() === '', '对齐后工作区与远端提交完全一致（git status 干净）', st.out.trim().slice(0, 120));
+  const healed = await m.localInfo();
+  check(healed.version === '0.1.8' && healed.commit === latestV18.commit, '自愈后本地版本以 git 为准且等于远端', `${healed.version}/${healed.commit}`);
+  const healedHasNew = m._computeHasUpdate(healed, latestV18);
+  check(healedHasNew === false, '自愈后判定已是最新');
+
+  // 安全闸门：快照之后有人改过代码 → 不得自动对齐（不覆盖用户改动）
+  check((await m._applySnapshot(fs.readFileSync(TGZ), env, latestV18)).copied > 0, '再次走一次快照通道（用于验证安全闸门）');
+  check(!!m._readSnapshot(env), '此时存在快照标记');
+  fs.appendFileSync(path.join(gitRoot, 'app', 'server', 'server.js'), '\n// 本地手工改动\n');
+  check((await m._fetchWithRetry(env, REMOTE, 'main')).ok, '再次 fetch 成功');
+  check(await m._alignGitToWorktree(env) === false, '工作区在快照后被改动 → 拒绝自动对齐（保护本地改动）');
+  check(!!m._readSnapshot(env), '被拒绝时保留快照标记（状态不撒谎）');
+  check(fs.readFileSync(path.join(gitRoot, 'app', 'server', 'server.js'), 'utf8').includes('本地手工改动'), '本地改动确实还在（没被 reset 掉）');
+  // 把文件内容还原成快照内容（不是 git checkout：index 里还是旧代码），指纹恢复一致后即可对齐
+  fs.copyFileSync(
+    path.join(SNAP, 'livegrab-main', 'app', 'server', 'server.js'),
+    path.join(gitRoot, 'app', 'server', 'server.js'),
+  );
+  check(await m._alignGitToWorktree(env) === true, '内容还原后可以正常对齐');
+  check(m._readSnapshot(env) === null, '对齐成功即清除标记');
+
+  // 全档位失败：三档重试都跑过，最终如实返回失败（不会假装成功）
+  const dead = await m._fetchWithRetry(env, 'https://127.0.0.1:9/nope.git', 'main');
+  check(dead.ok === false && dead.tried === 3, '远端不可达时跑满 3 档重试并如实失败', `tried=${dead.tried} code=${dead.code}`);
+}
+
 console.log('== npm install 的 cwd（update.js 用法） ==');
 const npmCwd = path.join(gitRoot, 'app');
 check(fs.existsSync(path.join(npmCwd, 'package.json')), 'npm install cwd 指向含 package.json 的 app 目录', npmCwd);

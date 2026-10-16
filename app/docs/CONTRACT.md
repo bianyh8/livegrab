@@ -307,9 +307,9 @@ Settings += {
 - recorder/media：使用 `app/test/fake-ffmpeg.mjs`（伪造 ffmpeg：忽略参数、按 `-f segment` 语义写递增文件、读 stdin 的 `q` 后正常退出）跑通"启动 → 分段轮转 → 优雅停止 → 分段收尾"全链路。
 - server：启动后在随机端口跑一遍主要 API 的 smoke（不依赖 ffmpeg）。
 
-实测（v0.1.20 复测）：`node app/test/run.js` → **PASS 271 ｜ FAIL 0**（含 8 项 web 视图守卫静态断言，其中新增「`nextFrame()` 必须带 setTimeout 兜底」；无 ffmpeg、无网络）；
-`node app/test/update-manager.mjs` → 全部通过（mock GitHub，离线；L/M/N/O 四组新增：远端更旧不得误报「可用更新」、`pickLatestTag` 取最高版本、只打 tag 未发 Release 时取最高标签、「立即更新」按配置的更新源而非写死的 origin）；
-`node app/test/update-git-flow.mjs` → 全部通过（架构 B 容器更新链路，离线自建 git 场景）；
+实测（v0.1.21 复测）：`node app/test/run.js` → **PASS 287 ｜ FAIL 0**（含 8 项 web 视图守卫静态断言与 17 项更新链路守卫断言：`nextFrame()` 必须带 setTimeout 兜底、git 必须走 HTTP/1.1 + 降级重试、`GIT_TERMINAL_PROMPT=0`、快进用本地 `FETCH_HEAD`、快照通道与容器克隆重试；无 ffmpeg、无网络）；
+`node app/test/update-manager.mjs` → 全部通过（mock GitHub，离线；P/Q/R 三组新增：传输层降级参数与报错分级、fetch 参数只认配置的更新源、快照地址推导与标记读写、tar.gz 解析落地（含超长路径 pax/GNU longname））；
+`node app/test/update-git-flow.mjs` → 全部通过（架构 B 容器更新链路，离线自建 git 场景；新增「拉取失败后的处理流程」：三档降级重试 → 本地快进 → 快照通道覆盖/清理上游已删文件 → 内容指纹安全自愈对齐 git 索引 → 安全闸门拒绝覆盖本地改动）；
 `node app/test/db-sqlite.mjs` → 82 通过（v1→v2 库作废重建等）；
 `node app/test/check-docker.mjs` → ALL PASS（37 项：静态校验打包三件套 + 容器形态环境变量真起一次服务；宿主 8080 被占用时自动换端口冒烟）；
 `node app/test/close-http.mjs` → 全部通过（关闭 HTTP 服务：对照组复现「页面开着 SSE 长连接时 `server.close()` 不回调」，修复后 `closeHttpServer` 在超时兜底内返回）；
