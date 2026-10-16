@@ -588,8 +588,9 @@ export function seekRatio(rect, clientX, clientY, rotated = false) {
   return Math.max(0, Math.min(1, ratio));
 }
 
-/* ================= 手机播放器：点播放直达竖屏全屏（无中间页），可切横竖屏、可关闭 ================= */
-function openMobilePlayer(ctx, opts, info, mode, url) {
+/* ================= 手机播放器：点播放直达竖屏全屏（无中间页），可切横竖屏、可关闭 =================
+   导出供端到端测试直接驱动（真实 DOM + 真实事件绑定），避免测试去复刻一份结构。 */
+export function openMobilePlayer(ctx, opts, info, mode, url) {
   const mask = document.getElementById('playerMask');
   if (!mask) return;
   closePlayer();
@@ -597,26 +598,32 @@ function openMobilePlayer(ctx, opts, info, mode, url) {
 
   playerState = { playId: info.playId || null, fileId: opts.fileId };
 
+  /* #plBox 是「全屏元素」，而全屏元素会被 UA 样式表强制
+     position:fixed / inset:0 / width:100% / height:100% / transform:none 全部 !important，
+     任何旋转写在它身上都会被吃掉。所以视频与控制条统一挂在内层舞台 #plStage 上，
+     强制横屏时旋转的是舞台，全屏与否都成立。 */
   mask.innerHTML = `
     <div class="pv-mobile" id="plBox">
-      <video id="plVideo" src="${esc(url)}" playsinline webkit-playsinline autoplay class="pv-video"></video>
-      <div class="pv-mtools" id="plMBar">
-        <button class="pv-mbtn danger" id="plMClose" title="${esc(t('common.close'))}">✕</button>
-      </div>
-      <div class="pv-mctl" id="plMCtl">
-        <div class="pv-mtrack" id="plMTrack"><i id="plMFill"></i></div>
-        <div class="pv-mrow">
-          <span class="mono" id="plMNow">00:00</span>
-          <span class="mono" id="plMTotal">--:--</span>
-          <div class="spacer"></div>
-          <button class="pv-mbtn small" id="plMRate" title="倍速">1.0x</button>
-          <button class="pv-mbtn small ico" id="plOrient" title="${esc(t('ui.switchOrient'))}" aria-label="${esc(t('ui.switchOrient'))}">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-              <rect x="7.5" y="3.5" width="9" height="17" rx="2"/>
-              <path d="M4 9.5A8.5 8.5 0 0 1 18.5 6.5"/>
-              <path d="M18.5 2.5v4.5H14"/>
-            </svg>
-          </button>
+      <div class="pv-stage" id="plStage">
+        <video id="plVideo" src="${esc(url)}" playsinline webkit-playsinline autoplay class="pv-video"></video>
+        <div class="pv-mtools" id="plMBar">
+          <button class="pv-mbtn danger" id="plMClose" title="${esc(t('common.close'))}">✕</button>
+        </div>
+        <div class="pv-mctl" id="plMCtl">
+          <div class="pv-mtrack" id="plMTrack"><i id="plMFill"></i></div>
+          <div class="pv-mrow">
+            <span class="mono" id="plMNow">00:00</span>
+            <span class="mono" id="plMTotal">--:--</span>
+            <div class="spacer"></div>
+            <button class="pv-mbtn small" id="plMRate" title="倍速">1.0x</button>
+            <button class="pv-mbtn small ico" id="plOrient" title="${esc(t('ui.switchOrient'))}" aria-label="${esc(t('ui.switchOrient'))}">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <rect x="7.5" y="3.5" width="9" height="17" rx="2"/>
+                <path d="M4 9.5A8.5 8.5 0 0 1 18.5 6.5"/>
+                <path d="M18.5 2.5v4.5H14"/>
+              </svg>
+            </button>
+          </div>
         </div>
       </div>
     </div>`;
@@ -663,17 +670,32 @@ function openMobilePlayer(ctx, opts, info, mode, url) {
     rateBtn.textContent = rates[rateIdx].toFixed(1) + 'x';
   };
 
-  /* 竖屏（默认，contain 完整显示）↔ 横屏：点击「横屏」直接强制切到横屏视图——
-     给播放器容器加 .pv-land（宽高互换 + 整体旋转 90°），进度条/时间/按钮随容器一起转为横排。
-     不再调用 screen.orientation.lock（iOS Safari 等根本不支持，点了只会弹「不支持/锁失败」），
-     也不在 JS 里判断设备方向：用户点了就是横屏，不会因设备未转屏或一次自动同步把选择改回去。
-     设备本身转为横屏后，由 app.css 的 (orientation:landscape) 媒体查询取消旋转，回到正常铺满。 */
+  /* 竖屏（默认，contain 完整显示）↔ 横屏：点击「横屏」直接强制切到横屏视图。
+     ① CSS 通道（兜底，任何浏览器都成立）：给舞台加 .pv-land —— 宽高互换 + 整体旋转 90°，
+        进度条/时间/倍速/按钮随舞台一起转为横排。旋转必须落在 #plStage 上，
+        写在全屏元素 #plBox 上会被 UA 的 transform:none !important 吃掉（实测点了一点反应都没有）。
+     ② API 通道（best-effort）：顺手试一次 screen.orientation.lock('landscape')。
+        Android Chrome 成功 → 设备真转屏，媒体查询随即取消舞台旋转，画面更自然；
+        iOS Safari 不支持 → 静默忽略，由 ① 兜底。不再因此弹「不支持 / 锁失败」。
+     两路都不判断设备方向：用户点了就是横屏；设备自己转成横屏后由 CSS 媒体查询接管。 */
   let landscape = false;
   const applyOrient = () => {
     playerEl.classList.toggle('pv-land', landscape);
     orientBtn.classList.toggle('land', landscape);
   };
-  orientBtn.onclick = () => { landscape = !landscape; applyOrient(); };
+  const setOrientLock = (on) => {
+    const so = screen.orientation;
+    if (!so) return;
+    try {
+      if (on) { if (so.lock) Promise.resolve(so.lock('landscape')).catch(() => {}); }
+      else if (so.unlock) so.unlock();
+    } catch { /* 不支持/被拒绝：静默忽略，CSS 旋转兜底 */ }
+  };
+  orientBtn.onclick = () => {
+    landscape = !landscape;
+    applyOrient();
+    setOrientLock(landscape);
+  };
 
   /* 无操作 3 秒自动隐藏控制，触屏/移动即显示（沉浸观看） */
   let hideTimer = null;
@@ -692,15 +714,23 @@ function openMobilePlayer(ctx, opts, info, mode, url) {
   mask.querySelector('#plMClose').onclick = closePlayer;
   mask.onclick = (e) => { if (e.target === mask) closePlayer(); };
 
-  /* 直接进入全屏；若被浏览器手势限制拒绝，首次播放/触摸时重试 */
+  /* 直接进入全屏；若被浏览器手势限制拒绝，首次播放/触摸/点画面时重试 */
   const enterFs = () => {
+    if (!playerEl.isConnected) return; // 已关闭：别在脱离文档的元素上请求全屏
     if (document.fullscreenElement || document.webkitFullscreenElement) return;
-    if (playerEl.requestFullscreen) playerEl.requestFullscreen().catch(() => {});
-    else if (video.webkitEnterFullscreen) video.webkitEnterFullscreen();
+    try {
+      if (playerEl.requestFullscreen) playerEl.requestFullscreen().catch(() => {});
+      else if (video.webkitEnterFullscreen) video.webkitEnterFullscreen();
+    } catch { /* 不支持或其被策略拦下：交给 CSS 兜底，不打断观看 */ }
   };
   enterFs();
   video.addEventListener('play', () => enterFs(), { once: true });
   playerEl.addEventListener('touchend', () => { if (!document.fullscreenElement) enterFs(); });
+  /* 点画面也补一次全屏：首次（非手势）请求常被拒，点到时就该补上；
+     顺带覆盖窄窗口下的鼠标/触控板用户。 */
+  playerEl.addEventListener('click', () => {
+    if (!document.fullscreenElement && !document.webkitFullscreenElement) enterFs();
+  });
 
   /* 系统返回键关闭：Android 按返回会先退出全屏（浏览器原生行为）→ 借此直接关闭播放器回文件页；
      不在全屏时（或 iOS 原生播放器结束）→ 用 history 回退监听兜底 */
@@ -727,6 +757,7 @@ function openMobilePlayer(ctx, opts, info, mode, url) {
     document.removeEventListener('webkitfullscreenchange', onFsChange);
     video.removeEventListener('webkitendfullscreen', onIosFsEnd);
     window.removeEventListener('popstate', onPop);
+    setOrientLock(false); // 关播放器时释放方向锁，避免整个页面被留在横屏
     // 非返回键关闭时，回退掉自己压入的那条历史（避免残留一步空历史）
     if (!poppedBack && history.state && history.state.lgPlayer) { try { history.back(); } catch { /* ignore */ } }
   });

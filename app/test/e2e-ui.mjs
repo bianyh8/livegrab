@@ -406,6 +406,105 @@ for (const { pg, needles, absent = [], minLen = 40 } of PAGES) {
   check(/event: status/.test(head) && /text\/event-stream/.test(ctype), 'SSE /api/events 正常', head.slice(0, 50).replace(/\n/g, '|'));
 }
 
+/* 6) 手机播放器「横屏」按钮：**全屏下必须真的转过去**
+   回归背景：曾把旋转写在 #plBox 上，而 #plBox 正是全屏元素——UA 样式表对全屏元素
+   强制 position/inset/width/height/transform 全部 !important（含 transform:none），
+   于是「点横屏」在任何进了全屏的手机上一点反应都没有。现改为旋转内层舞台 #plStage。
+   这里用真机同款路径复现：真实触摸进全屏 → 真实点击横屏 → 量几何。 */
+{
+  await send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
+  await send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 5 });
+  /* 无头下的页面默认被当成「未聚焦/后台」，合成输入不会带来用户激活，
+     requestFullscreen 一律被拒（not granted）、rAF 也可能被节流。显式开启聚焦模拟。 */
+  await send('Page.bringToFront');
+  await send('Emulation.setFocusEmulationEnabled', { enabled: true });
+
+  /* 记录 requestFullscreen 的成败，便于断言失败时直接看出原因（UA 拒绝 → 无用户手势/被策略拦） */
+  await send('Runtime.evaluate', { expression: `(() => {
+    window.__fsLog = [];
+    const f = Element.prototype.requestFullscreen;
+    if (f && !f.__lgPatched) {
+      const wrap = function () {
+        const p = f.apply(this, arguments);
+        if (p && p.then) p.then(() => window.__fsLog.push('ok:' + this.id), (e) => window.__fsLog.push('rej:' + this.id + ':' + ((e && (e.message || e.name)) || e)));
+        return p;
+      };
+      wrap.__lgPatched = true;
+      Element.prototype.requestFullscreen = wrap;
+    }
+    return true;
+  })()` });
+
+  const geom = `JSON.stringify({
+    fs: document.fullscreenElement ? document.fullscreenElement.id : null,
+    land: document.getElementById('plBox').classList.contains('pv-land'),
+    boxT: getComputedStyle(document.getElementById('plBox')).transform,
+    stageT: getComputedStyle(document.getElementById('plStage')).transform,
+    stageW: getComputedStyle(document.getElementById('plStage')).width,
+    stageH: getComputedStyle(document.getElementById('plStage')).height,
+    ctl: (() => { const r = document.getElementById('plMCtl').getBoundingClientRect(); return [Math.round(r.width), Math.round(r.height)]; })(),
+  })`;
+  const readGeom = async () => JSON.parse((await send('Runtime.evaluate', { expression: geom, returnByValue: true })).result?.result?.value || '{}');
+  const rectOf = async (sel) => JSON.parse((await send('Runtime.evaluate', { expression: `(()=>{const el=document.querySelector(${JSON.stringify(sel)});if(!el)return '{}';const b=el.getBoundingClientRect();return JSON.stringify({x:Math.round(b.left+b.width/2),y:Math.round(b.top+b.height/2)})})()`, returnByValue: true })).result?.result?.value || '{}');
+  /* 一律走真实鼠标点击：CDP 的 tap 手势只发 touch、不合成 click，且不被计入用户手势
+     （实测 tap 进全屏会被 UA 以「not granted」拒绝）。 */
+  const click = async (sel) => {
+    const r = await rectOf(sel);
+    for (const type of ['mousePressed', 'mouseReleased']) await send('Input.dispatchMouseEvent', { type, x: r.x, y: r.y, button: 'left', clickCount: 1 });
+    await sleep(400);
+  };
+
+  /* 手机上播放器是从「点文件行」这个手势里打开的（openPlayer 里立刻 enterFs 才拿得到全屏）。
+     这里同样在真实点击里打开，否则首次无手势的请求会被拒并污染该源的权限状态。 */
+  await send('Runtime.evaluate', { expression: `(() => {
+    const b = document.createElement('button');
+    b.id = 'e2eOpenPlayer';
+    b.style.cssText = 'position:fixed;left:6px;top:6px;width:64px;height:36px;z-index:9999';
+    b.textContent = 'open';
+    b.addEventListener('click', async () => {
+      const m = await import('/ui.js');
+      m.openMobilePlayer({ api: { downloadUrl: () => '' } }, { fileId: 'e2e-orient', name: '横屏回归' }, { mode: 'direct', playId: null }, 'direct', 'data:video/mp4;base64,AAAAIGZ0eXBpc29t');
+    });
+    document.body.appendChild(b);
+    return true;
+  })()` });
+  await click('#e2eOpenPlayer');
+  await send('Runtime.evaluate', { expression: `document.getElementById('e2eOpenPlayer')?.remove()` });
+  const opened = await send('Runtime.evaluate', { expression: `!!document.querySelector('#plStage')`, returnByValue: true });
+  check(opened.result?.result?.value === true, '6) 手机播放器已渲染（视频与控制条在内层舞台 #plStage 内）');
+
+  /* 等全屏真正生效再断言：CDP 合成的手势不一定被算作用户激活（UA 会以 not granted 拒绝），
+     而全屏是本段的前提条件。这里连点画面收敛等待——app 里 click 会补一次 enterFs，
+     每次点击都是新的手势机会；拿不到就如实报 FAIL 并把 requestFullscreen 的返回打出来。 */
+  let g0 = {};
+  for (let i = 0; i < 8; i++) {
+    g0 = await readGeom();
+    if (g0.fs) break;
+    await click('#plBox');
+  }
+  const fslog0 = (await send('Runtime.evaluate', { expression: `JSON.stringify({log: window.__fsLog, enabled: document.fullscreenEnabled})`, returnByValue: true })).result?.result?.value;
+  check(g0.fs === 'plBox', '6) 播放器处于全屏（复现该 bug 的前提条件）', String(fslog0));
+  check(g0.land === false && g0.ctl[0] > g0.ctl[1], '6) 初始为竖屏（控制条横跨屏幕宽度）', `ctl=${g0.ctl} 舞台=${g0.stageW}×${g0.stageH}`);
+
+  await click('#plOrient');
+  const g1 = await readGeom();
+  line(`   横屏: 舞台=${g1.stageW}×${g1.stageH} transform=${g1.stageT} 控制条=${g1.ctl}`);
+  check(g1.land === true && g1.stageW !== g1.stageH && /matrix\(0,\s*1,\s*-1,\s*0,/.test(g1.stageT), '6) 全屏下点「横屏」真的转过去了（舞台宽高互换 + 旋转 90°）', `舞台=${g1.stageW}×${g1.stageH}`);
+  check(g1.ctl[1] > g1.ctl[0], '6) 控制条随舞台转为竖排（内容确实横过来了）', `ctl=${g1.ctl}`);
+  check(g1.boxT === 'none', '6) 旋转不依赖全屏元素本身（UA 对其强制 transform:none !important）', `boxT=${g1.boxT}`);
+
+  await click('#plOrient');
+  const g2 = await readGeom();
+  check(g2.land === false && g2.ctl[0] > g2.ctl[1], '6) 再点一次回到竖屏', `ctl=${g2.ctl}`);
+
+  await send('Runtime.evaluate', { awaitPromise: true, expression: `import('/ui.js').then((m) => m.closePlayer())` });
+  await sleep(300);
+  const cleared = await send('Runtime.evaluate', { expression: `JSON.stringify({fs: !!document.fullscreenElement, stage: !!document.querySelector('#plStage')})`, returnByValue: true });
+  check(JSON.parse(cleared.result?.result?.value || '{}').stage === false, '6) 关闭播放器后舞台已移除');
+  await send('Emulation.clearDeviceMetricsOverride');
+  await send('Emulation.setTouchEmulationEnabled', { enabled: false });
+}
+
 ws.close();
 edge.kill();
 srv.kill('SIGTERM');

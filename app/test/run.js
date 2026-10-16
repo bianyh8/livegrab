@@ -980,6 +980,20 @@ function testViewGuards() {
   const nf = appSrc.match(/function nextFrame\(\)\s*\{[\s\S]*?\n\}/);
   ok(!!nf, 'app.js 存在 nextFrame()（路由渲染前的等帧）');
   ok(!!nf && /setTimeout\(/.test(nf[0]), 'nextFrame() 带 setTimeout 兜底（rAF 被节流/停止时路由不会卡死）');
+
+  /* 手机播放器强制横屏：旋转必须落在内层舞台上。
+     全屏元素会被 UA 样式表强制 position/inset/width/height/transform 全部 !important（含 transform:none），
+     所以把旋转写在 #plBox 上时，一进全屏就完全失效（「点了横屏没反应」的根因）。 */
+  const uiSrc = fs.readFileSync(path.join(APP_DIR, 'web', 'ui.js'), 'utf8');
+  ok(/class="pv-mobile"\s+id="plBox"[\s\S]*?class="pv-stage"\s+id="plStage"/.test(uiSrc), '手机播放器有内层舞台 #plStage（旋转/布局的落点）');
+  const iStage = uiSrc.indexOf('id="plStage"');
+  ok(iStage > 0 && uiSrc.indexOf('id="plVideo"', iStage) > iStage && uiSrc.indexOf('id="plOrient"', iStage) > iStage, '视频与控制条都挂在舞台 #plStage 内（随之一起旋转）');
+  const cssSrc = fs.readFileSync(path.join(APP_DIR, 'web', 'app.css'), 'utf8');
+  const onBox = cssSrc.match(/\.pv-mobile\.pv-land\s*\{[^}]*\}/);
+  ok(!onBox || !/transform\s*:/.test(onBox[0]), '不把旋转加在全屏元素 #plBox 上（UA 会强制其 transform:none !important）');
+  ok(/\.pv-mobile\.pv-land\s+\.pv-stage\s*\{[^}]*transform\s*:\s*translate\(-50%,\s*-50%\)\s*rotate\(90deg\)/.test(cssSrc), '强制横屏：舞台宽高互换 + 旋转 90°');
+  ok(/@media\s*\(orientation:landscape\)\s*\{[\s\S]{0,220}?\.pv-mobile\.pv-land\s+\.pv-stage\s*\{[^}]*transform\s*:\s*none/.test(cssSrc), '设备真转横屏后由媒体查询取消旋转（不靠 JS 判断方向）');
+  ok(!/orientLockFailed|orientLockUnsupported/.test(uiSrc), '方向锁失败不再弹提示（CSS 旋转兜底，不打断观看）');
 }
 
 /* 更新链路守卫（静态扫描）：拉取必须在「弱网/代理会改写长连接」的现实下仍然可用，

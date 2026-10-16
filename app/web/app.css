@@ -536,6 +536,10 @@ td .sub{font-size:11.5px;color:var(--txt-3);margin-top:3px}
 .pv-btn:hover{background:#1d2634}
 /* ---- 手机全屏播放器：直达竖屏全屏，右上角关闭 + 右下角（控制条内）横竖屏切换 ---- */
 .pv-mobile{position:fixed;inset:0;width:100vw;height:100vh;background:#000;display:grid;place-items:center;overflow:hidden}
+/* 舞台：视频 + 控制条都挂在这里。强制横屏旋转的是它，而不是 #plBox ——
+   #plBox 是全屏元素，会被 UA 强制 inset:0 / 100%×100% / transform:none（全部 !important），
+   把旋转写在它身上在全屏下完全无效（这就是「点了横屏没反应」的原因）。 */
+.pv-stage{position:absolute;inset:0;overflow:hidden}
 .pv-mobile video{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;background:#000;display:block}
 .pv-mtools{
   position:absolute;top:calc(12px + env(safe-area-inset-top));right:calc(12px + env(safe-area-inset-right));
@@ -554,13 +558,15 @@ td .sub{font-size:11.5px;color:var(--txt-3);margin-top:3px}
 .pv-mbtn.ico{width:34px;padding:0}
 .pv-mbtn.ico svg{width:19px;height:19px;display:block;transition:transform .25s}
 .pv-mbtn.ico.land svg{transform:rotate(90deg)}
-/* 强制横屏：点击「横屏」后容器宽高互换并整体旋转 90°，把竖屏手持的屏幕当横屏来布局，
-   进度条/时间/倍速/按钮随容器一起转为横排。不依赖 screen.orientation.lock（iOS Safari 不支持），
+/* 强制横屏：把舞台宽高互换并整体旋转 90°，进度条/时间/倍速/按钮随舞台一起转为横排，
+   竖屏手持即可当横屏看。不依赖 screen.orientation.lock（iOS Safari 不支持），
    也不由 JS 判断设备方向——点了就是横屏。设备本身转为横屏后，媒体查询取消旋转，回到正常铺满。 */
-.pv-mobile.pv-land{inset:auto;left:50%;top:50%;width:100vh;height:100vw;
+.pv-mobile.pv-land .pv-stage{inset:auto;left:50%;top:50%;
+  width:100vh;height:100vw;width:100dvh;height:100dvw;
   transform:translate(-50%,-50%) rotate(90deg);transform-origin:center center}
 @media (orientation:landscape){
-  .pv-mobile.pv-land{inset:0;left:0;top:0;width:100vw;height:100vh;transform:none}
+  .pv-mobile.pv-land .pv-stage{inset:0;left:0;top:0;
+    width:100vw;height:100vh;width:100dvw;height:100dvh;transform:none}
 }
 /* 手机播放器底部控制条：进度条 + 时间 + 倍速 */
 .pv-mctl{

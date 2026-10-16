@@ -307,13 +307,14 @@ Settings += {
 - recorder/media：使用 `app/test/fake-ffmpeg.mjs`（伪造 ffmpeg：忽略参数、按 `-f segment` 语义写递增文件、读 stdin 的 `q` 后正常退出）跑通"启动 → 分段轮转 → 优雅停止 → 分段收尾"全链路。
 - server：启动后在随机端口跑一遍主要 API 的 smoke（不依赖 ffmpeg）。
 
-实测（v0.1.21 复测）：`node app/test/run.js` → **PASS 287 ｜ FAIL 0**（含 8 项 web 视图守卫静态断言与 17 项更新链路守卫断言：`nextFrame()` 必须带 setTimeout 兜底、git 必须走 HTTP/1.1 + 降级重试、`GIT_TERMINAL_PROMPT=0`、快进用本地 `FETCH_HEAD`、快照通道与容器克隆重试；无 ffmpeg、无网络）；
+实测（v0.1.22 复测）：`node app/test/run.js` → **PASS 293 ｜ FAIL 0**（含 13 项 web 视图守卫静态断言与 17 项更新链路守卫断言：`nextFrame()` 必须带 setTimeout 兜底、强制横屏的旋转必须落在内层舞台 `#plStage`（不得写在全屏元素 `#plBox` 上）、git 必须走 HTTP/1.1 + 降级重试、`GIT_TERMINAL_PROMPT=0`、快进用本地 `FETCH_HEAD`、快照通道与容器克隆重试；无 ffmpeg、无网络）；
 `node app/test/update-manager.mjs` → 全部通过（mock GitHub，离线；P/Q/R 三组新增：传输层降级参数与报错分级、fetch 参数只认配置的更新源、快照地址推导与标记读写、tar.gz 解析落地（含超长路径 pax/GNU longname））；
 `node app/test/update-git-flow.mjs` → 全部通过（架构 B 容器更新链路，离线自建 git 场景；新增「拉取失败后的处理流程」：三档降级重试 → 本地快进 → 快照通道覆盖/清理上游已删文件 → 内容指纹安全自愈对齐 git 索引 → 安全闸门拒绝覆盖本地改动）；
 `node app/test/db-sqlite.mjs` → 82 通过（v1→v2 库作废重建等）；
 `node app/test/check-docker.mjs` → ALL PASS（37 项：静态校验打包三件套 + 容器形态环境变量真起一次服务；宿主 8080 被占用时自动换端口冒烟）；
 `node app/test/close-http.mjs` → 全部通过（关闭 HTTP 服务：对照组复现「页面开着 SSE 长连接时 `server.close()` 不回调」，修复后 `closeHttpServer` 在超时兜底内返回）；
-`node app/test/e2e-ui.mjs` → 真实浏览器端到端（需要 Edge/Chrome：登录流程、逐页渲染、切页竞态回归、日志暂停/搜索框、更新页模块顺序、SSE 与前端报错检查，缺浏览器时自动跳过）。
+`node app/test/e2e-ui.mjs` → 真实浏览器端到端（需要 Edge/Chrome：登录流程、逐页渲染、切页竞态回归、日志暂停/搜索框、更新页模块顺序、**手机播放器强制横屏**、SSE 与前端报错检查，缺浏览器时自动跳过）。
+**手机播放器「横屏」的回归方式（必须保留）**：把视口模拟为 390×844 手机 + 开 `Emulation.setFocusEmulationEnabled`（无头下页面默认被当后台，合成输入不算用户激活、`requestFullscreen` 会被 `not granted` 拒绝），在真实点击手势里打开播放器拿到**真全屏**，再真实点击「横屏」，断言舞台宽高互换 + `rotate(90deg)`、控制条随之转为竖排。**前提是全屏真的生效**——旋转写在 `#plBox` 上时，全屏元素会被 UA 强制 `transform:none !important`，这个 bug 只在全屏下才复现（旧写法跑该断言会稳定 FAIL，已做负向对照）。
 **时序断言一律「收敛等待」**：不用固定 sleep，改为轮询到「特征词出现 + 连续多次读数一致」再采样，并给足异步预算（更新页签要等 GitHub 检查超时，最长约 16s → 预算 24s），避免负载/网络抖动造成偶发 FAIL；
 `node app/test/e2e-ffmpeg.mjs` → 真实 ffmpeg 录制链路（缺 ffmpeg 时自动跳过）；
 `node app/test/e2e-douyin.mjs` → 抖音真实房间录制（需要真实 ffmpeg + 能访问抖音 + 有房间在播，否则自动跳过）。
@@ -377,6 +378,8 @@ app/test/    run.js fake-ffmpeg.mjs fake-media.mjs e2e-ui.mjs e2e-ffmpeg.mjs e2e
 - **平台设置收敛**（2026-10 定版）：① 平台级「并发上限 / 启用」**只在「系统设置 › 平台账号」一处**展示与编辑，「录制与存储」的「平台并发上限」整卡已删除（不再重复）；② 平台账号里「可用清晰度」改成紧凑显示（最多 3 个短名 + `等 N 档`，完整列表放 `title` 提示），不再堆一长串 chip；③ 在平台账号里停用某平台后，**任务页的新建/编辑表单与筛选下拉里不再出现该平台**（添加被隐藏；编辑一条已存在的该平台任务时仍保留其平台以便可编辑，不会把任务"卡死"）；④ 稳定性/分层的英文代号（`stable`/`experimental`/`planned`）**前台一律不显示英文**：平台名后的分层 tag 与「稳定性」列都走统一的 `tierName()` 中文映射（稳定/实验性/规划中），稳定性列的详细说明折成悬停 `title`、平时不占行高（改动在此边界内有断言：e2e 校验 `#tabHost` 文本里没有 `stable`）。
 - **「最近事件」没有独立页面**：早期方案曾是左侧导航独立页（`views/events.js`，v0.1.0 前后），后已删除并入「运行日志」页——事件与日志同一份日志环，默认**最新在前**，可切换顺序；「运行日志」页即唯一入口（过滤 / 排序 / 导出 / 保留策略 / 实时追加）。
 - **视图的异步绘制必须走本视图的 `boundRoot`，禁止按 id 直取 `#view`**（2026-10-16 定版）：路由切换时 `handleRoute` 先 `stopView()` 作废旧视图（DOM 留着避免闪烁）再挂载新视图；每次渲染注入的 `ctx` 由 `makeViewCtx(token)` 生成，`ctx.isActive()` 表示该视图是否仍是当前活动视图，`ctx.onRefresh()` 也只对仍活动的视图生效。凡 `await` 之后再写 DOM 的视图都必须自查（`if (!boundRoot || !isActive(ctx)) return;`），否则迟到的绘制会覆盖新页面（历史症状：切到「运行日志」后视图里出现设置页页签、切到「设置」后被总览整页覆盖、旧视图的 `onRefresh` 把新视图的轮询刷成空转）。两层防线：`testViewGuards`（静态扫描——视图不得 `getElementById('view')`、用 `boundRoot` 的视图必须导出 `destroy()`、`app.js` 必须注入绑定 token 的 ctx 门面）＋ `e2e-ui` 的两条「切页竞态回归」（页面内把 `/api/settings`、`/api/status` 各延迟 800 ms，200 ms 后切页，断言目标页未被覆盖；临时停用守卫可稳定复现失败）。
+
+- **手机播放器的「横屏」按钮：点一下就是横屏，不判断设备方向**（2026-10-16 定版）：旋转落在**内层舞台 `#plStage`** 上（宽高互换 + `rotate(90deg)`，进度条/时间/倍速/按钮随舞台一起转为横排）。原因是 `#plBox` 是**全屏元素**，UA 样式表对它强制 `position / inset / width / height / transform` 全部 `!important`（含 `transform: none`），把旋转写在其上时**一进全屏就完全失效**（历史症状：手机上点「横屏」毫无反应）。另外顺带 best-effort 调一次 `screen.orientation.lock('landscape')`：Android Chrome 成功 → 设备真转屏、媒体查询随即取消舞台旋转；iOS Safari 不支持 → 静默忽略，不再弹「不支持 / 锁失败」，关闭播放器时 `unlock()`。设备自己转成横屏由 `@media (orientation:landscape)` 取消旋转（纯 CSS 判定，JS 不判断方向、不做 `innerWidth > innerHeight` 同步）。防线：`run.js` 静态守卫（旋转选择器必须带 `.pv-stage`、不得写在全屏元素上、媒体查询必须复位）＋ `e2e-ui` 的**真全屏**几何断言（旧写法跑该断言稳定 FAIL，已做负向对照）。
 
 ### 7.4 已验证 / 未验证（诚实边界）
 
