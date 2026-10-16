@@ -3,6 +3,9 @@ config/
 data/
 *.log
 
+# ---- 内部工程文档（重构方案 / 评审报告，仅本地留存，不入库）----
+doc/
+
 # ---- 本地/临时 ----
 node_modules/
 acl-reports/

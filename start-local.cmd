@@ -8,7 +8,8 @@ if "%PORT%"=="" set PORT=8080
 if "%RECORD_ROOT%"=="" set RECORD_ROOT=%~dp0data
 if "%CONFIG_DIR%"=="" set CONFIG_DIR=%~dp0config
 if "%TZ%"=="" set TZ=Asia/Shanghai
-if "%LIVEGRAB_VERSION%"=="" set LIVEGRAB_VERSION=0.1.0
+rem 版本号不设 LIVEGRAB_VERSION：由 app/server/util.js 启动时读 app/package.json
+rem（此前写死 0.1.0 会覆盖动态版本，本地运行一直显示旧版本号）
 
 rem ffmpeg: prefer PATH, else common local installs
 where ffmpeg >nul 2>nul

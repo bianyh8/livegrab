@@ -167,7 +167,17 @@ const PAGES = [
 for (const { pg, needles, absent = [], minLen = 40 } of PAGES) {
   consoleErrors.length = 0;
   await send('Page.navigate', { url: `${BASE}/#/${pg}` });
-  await sleep(2600);
+  /* 轮询等待目标页挂载：该页特征词已出现且视图文本连续两次一致才视为稳定。
+     固定 sleep 在负载高时会抓成上一页（历史串页误判），这里改为收敛等待。 */
+  let prevView = null;
+  for (let i = 0; i < 30; i++) {
+    const q = await send('Runtime.evaluate', { expression: `((document.querySelector('#view')||{}).innerText||'')`, returnByValue: true });
+    const txt = String(q?.result?.result?.value || '');
+    const ready = needles.some((n) => txt.includes(n)) || txt.trim().length > minLen;
+    if (ready && txt === prevView) break;
+    prevView = txt;
+    await sleep(200);
+  }
   const r = await send('Runtime.evaluate', {
     expression: `JSON.stringify({view: (document.querySelector('#view')||{}).innerText || '', viewLen: ((document.querySelector('#view')||{}).innerHTML||'').length, loginHidden: !!document.querySelector('#loginPage.hide'), user: (document.querySelector('#userName')||{}).textContent, engineChip: (document.querySelector('#engineChip')||{}).textContent, disk: (document.querySelector('#diskText')||{}).textContent, hasDiskText: !!document.querySelector('#diskText'), hasTz: !!document.querySelector('#tzChip'), brand: (document.querySelector('.brand small')||{}).textContent || '', top: (document.querySelector('#topChip')||{}).textContent, topShown: (document.querySelector('#topChip')||{}).style.display !== 'none'})`,
     returnByValue: true,
@@ -191,6 +201,36 @@ for (const { pg, needles, absent = [], minLen = 40 } of PAGES) {
     const inView = (v.view || '').includes(n);
     const inChrome = `${v.engineChip || ''}${v.disk || ''}${v.top || ''}${v.brand || ''}`.includes(n);
     check(!inView && !inChrome, `${pg} 不再出现「${n}」（简化显示）`, inView ? '仍出现在视图' : inChrome ? '仍出现在顶栏/侧栏' : '');
+  }
+  if (pg === 'logs') {
+    /* 回归：设置页数据在飞行中时切走页面，迟到的绘制不得覆盖新视图。
+       页面内把 /api/settings 延迟 800ms，稳定复现该竞态（不靠时序碰运气）。 */
+    await send('Runtime.evaluate', { expression: `(() => { const of = window.fetch; window.__lgFetch = of; window.fetch = (u, o) => { const s = String((u && u.url) || u); if (s.includes('/api/settings')) return new Promise((r) => setTimeout(() => r(of(u, o)), 800)); return of(u, o); }; return true; })()` });
+    await send('Page.navigate', { url: `${BASE}/#/settings` });
+    await sleep(200);
+    await send('Page.navigate', { url: `${BASE}/#/logs` });
+    await sleep(2000);
+    const navq = await send('Runtime.evaluate', { expression: `JSON.stringify({t: ((document.querySelector('#view')||{}).innerText||'').slice(0, 160), tabs: document.querySelectorAll('#settingsTabs').length})`, returnByValue: true });
+    const nv = JSON.parse(navq?.result?.result?.value || '{}');
+    line(`   切页竞态回归: #settingsTabs=${nv.tabs} / 视图=${String(nv.t || '').replace(/\n+/g, ' / ').slice(0, 50)}`);
+    check(nv.tabs === 0, '设置页加载中切走后，其迟到绘制不再覆盖新视图', `#settingsTabs=${nv.tabs}`);
+    check(String(nv.t || '').includes('最新在前'), '切走后视图仍是目标页（运行日志）', String(nv.t || '').replace(/\n+/g, ' / ').slice(0, 50));
+    await send('Runtime.evaluate', { expression: `window.fetch = window.__lgFetch || window.fetch` });
+
+    /* 同类回归（总览页）：/api/status 迟到返回时，总览不得回写 #view 覆盖当前页。
+       目标页选设置页——它不做 2s 轮询重绘，迟到覆盖不会被轮询刷掉，判据更灵敏；
+       判据用总览独有的磁盘块 #view .pkdisk 与设置页页签计数双向校验。 */
+    await send('Runtime.evaluate', { expression: `(() => { const of = window.fetch; window.__lgFetch2 = of; window.fetch = (u, o) => { const s = String((u && u.url) || u); if (s.includes('/api/status')) return new Promise((r) => setTimeout(() => r(of(u, o)), 800)); return of(u, o); }; return true; })()` });
+    await send('Page.navigate', { url: `${BASE}/#/dashboard` });
+    await sleep(200);
+    await send('Page.navigate', { url: `${BASE}/#/settings` });
+    await sleep(2200);
+    const dashq = await send('Runtime.evaluate', { expression: `JSON.stringify({t: ((document.querySelector('#view')||{}).innerText||'').slice(0, 160), pk: document.querySelectorAll('#view .pkdisk').length, tabs: document.querySelectorAll('#settingsTabs').length})`, returnByValue: true });
+    const dv = JSON.parse(dashq?.result?.result?.value || '{}');
+    line(`   切页竞态回归(总览): #view .pkdisk=${dv.pk} / #settingsTabs=${dv.tabs} / 视图=${String(dv.t || '').replace(/\n+/g, ' / ').slice(0, 40)}`);
+    check(dv.pk === 0 && dv.tabs === 1, '总览页迟到绘制不再回写 #view（设置页未被覆盖）', `pkdisk=${dv.pk} settingsTabs=${dv.tabs}`);
+    check(String(dv.t || '').includes('命名规则'), '切走后视图仍是目标页（设置）', String(dv.t || '').replace(/\n+/g, ' / ').slice(0, 40));
+    await send('Runtime.evaluate', { expression: `window.fetch = window.__lgFetch2 || window.fetch` });
   }
   if (pg === 'dashboard') {
     // 磁盘信息只在「存储统计」卡出现一次（DOM 计数，比文本匹配更稳）

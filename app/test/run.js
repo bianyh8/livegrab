@@ -944,12 +944,43 @@ async function testHttp() {
   ok(true, '服务已关闭');
 }
 
+/* 前端视图守卫（静态扫描）：视图的异步绘制必须经过各自模块的 boundRoot，
+   否则路由切走后迟到的绘制会覆盖新视图（曾导致页面串页 / 旧视图覆盖新视图）。 */
+function testViewGuards() {
+  suite('web 视图守卫');
+  const viewsDir = path.join(APP_DIR, 'web', 'views');
+  const files = [];
+  (function walk(dir) {
+    for (const ent of fs.readdirSync(dir, { withFileTypes: true })) {
+      const fp = path.join(dir, ent.name);
+      if (ent.isDirectory()) walk(fp);
+      else if (ent.name.endsWith('.js')) files.push(fp);
+    }
+  })(viewsDir);
+  const rel = (arr) => arr.map((f) => path.relative(APP_DIR, f).replace(/\\/g, '/')).join(', ');
+  ok(files.length >= 6, `扫到视图模块 ${files.length} 个`);
+
+  const byId = files.filter((f) => /getElementById\(\s*['"]view['"]\s*\)/.test(fs.readFileSync(f, 'utf8')));
+  ok(byId.length === 0, '视图不按 id 直取 #view（必须走 boundRoot 守卫）', rel(byId));
+
+  const noDestroy = files.filter((f) => {
+    const src = fs.readFileSync(f, 'utf8');
+    return /\blet boundRoot\b/.test(src) && !/export function destroy\s*\(/.test(src);
+  });
+  ok(noDestroy.length === 0, '使用 boundRoot 的视图都导出 destroy()（路由切走时置空）', rel(noDestroy));
+
+  const appSrc = fs.readFileSync(path.join(APP_DIR, 'web', 'app.js'), 'utf8');
+  ok(/makeViewCtx\(/.test(appSrc), 'app.js 为每次渲染注入绑定 token 的 ctx 门面');
+  ok(/isActive = \(\) => runtime\.view === token/.test(appSrc), 'ctx.isActive() 能反映当前活动视图');
+  ok(/stopView\(\);\s*\n\s*\n\s*let mod;/.test(appSrc), '路由切换先作废旧视图（在导入新模块之前）');
+}
+
 // ============ 主流程 ============
 (async () => {
   console.log(`LiveGrab 测试开始（临时目录 ${tmpRoot}）`);
   await rmrf(tmpRoot);
   await fsp.mkdir(tmpRoot, { recursive: true });
-  const suites = [testUtil, testNaming, testStore, testResolvers, testAuth, testRecordChain, testPullBlockedBackoff, testConcurrentStart, testRepeatSessionNaming, testTodayStats, testQueue, testHttp];
+  const suites = [testUtil, testNaming, testStore, testResolvers, testAuth, testRecordChain, testPullBlockedBackoff, testConcurrentStart, testRepeatSessionNaming, testTodayStats, testQueue, testHttp, testViewGuards];
   for (const s of suites) {
     try { await s(); } catch (e) {
       failed++;

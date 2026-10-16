@@ -29,6 +29,7 @@ const runtime = {
   page: null,
   loaded: {},
   view: null,
+  viewSeq: 0,
   tick: 0,
   viewRaf: false,
   loggedInAt: null,
@@ -47,9 +48,11 @@ const ctx = {
   formatDuration,
   formatDurationCn,
   formatDateTime,
-  /* 视图注册自己的局部刷新函数（2s 轮询调用，返回 false 表示不再需要刷新） */
+  /* 视图注册自己的局部刷新函数（2s 轮询调用，返回 false 表示不再需要刷新）。
+     实际渲染时会被 makeViewCtx 换成绑定到本次视图 token 的版本，
+     以免旧视图迟到的注册覆盖新视图的刷新逻辑。 */
   onRefresh(fn) {
-    if (typeof fn === 'function') runtime.view.refresh = fn;
+    if (typeof fn === 'function' && runtime.view) runtime.view.refresh = fn;
   },
   /* 视图间事件总线（SSE 与跨页局部刷新用） */
   on(evt, fn) {
@@ -295,6 +298,18 @@ function nextFrame() {
   });
 }
 
+/* 单次视图渲染的 ctx 门面：所有会「延时生效」的接口都绑定本次视图 token。
+   视图在 await 之后调用 ctx.isActive() 即可判断自己是否已被路由切走，
+   避免迟到的绘制/注册污染新视图。 */
+function makeViewCtx(token) {
+  const c = Object.create(ctx);
+  c.onRefresh = (fn) => {
+    if (runtime.view === token && typeof fn === 'function') token.refresh = fn;
+  };
+  c.isActive = () => runtime.view === token;
+  return c;
+}
+
 async function handleRoute(first) {
   if (!runtime.authed) return;
   const page = parseHash();
@@ -318,6 +333,10 @@ async function handleRoute(first) {
   const root = el('view');
   if (!root) return;
 
+  // 旧视图立即作废（DOM 先留着，等新视图渲染时再清空，避免闪烁）：
+  // 之后它任何迟到的异步绘制都会因 boundRoot/token 失效而被丢弃。
+  stopView();
+
   let mod;
   try {
     mod = await import('./views/' + route.file + '.js');
@@ -329,14 +348,13 @@ async function handleRoute(first) {
   }
 
   await nextFrame();
-  stopView();
   if (changed) root.innerHTML = '';
-  runtime.view = { page, destroy: null, refresh: null };
+  runtime.view = { page, destroy: null, refresh: null, seq: (runtime.viewSeq += 1) };
   const myToken = runtime.view;
   if (typeof mod.destroy === 'function') runtime.view.destroy = mod.destroy;
 
   try {
-    await mod.render(root, ctx);
+    await mod.render(root, makeViewCtx(myToken));
     if (runtime.view !== myToken) return;
     runtime.loaded[page] = true;
     await refreshOnce();

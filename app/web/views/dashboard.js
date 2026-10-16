@@ -15,11 +15,16 @@ export const page = 'dashboard';
 
 const state = { tasks: [], booted: false, pending: false, lastStatus: null };
 
+let boundRoot = null;
+
 export async function render(root, ctx) {
+  boundRoot = root;
   root.innerHTML = `<div class="stack"><div class="card"><div class="empty">${_t('dashboard.loading')}</div></div></div>`;
   ctx.onRefresh(() => tick(ctx));
   await tick(ctx, true);
 }
+
+export function destroy() { boundRoot = null; }
 
 async function tick(ctx, initial) {
   if (state.pending) return;
@@ -41,7 +46,7 @@ function tasksOfType(type) {
 }
 
 function paint(ctx, status) {
-  const root = document.getElementById('view');
+  const root = boundRoot;
   if (!root) return;
   if (!status && !state.tasks.length) {
     root.innerHTML = `<div class="card"><div class="card-b">

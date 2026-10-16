@@ -57,7 +57,7 @@ async function tick(ctx, initial) {
     if (r && r.retentionDays != null) state.retentionDays = Number(r.retentionDays || state.retentionDays);
     paint(ctx, initial);
   } catch (e) {
-    if (initial) boundRoot.innerHTML = `<div class="card"><div class="empty">${t('trash.loadFail', esc(e.message || t('common.unknownError')))}</div></div>`;
+    if (initial && boundRoot) boundRoot.innerHTML = `<div class="card"><div class="empty">${t('trash.loadFail', esc(e.message || t('common.unknownError')))}</div></div>`;
   } finally {
     state.pending = false;
   }

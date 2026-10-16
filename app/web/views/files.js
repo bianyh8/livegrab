@@ -119,7 +119,7 @@ async function tick(ctx, initial) {
     if (r && Array.isArray(r.platforms)) state.platforms = r.platforms;
     paint(ctx, initial);
   } catch (e) {
-    if (initial) boundRoot.innerHTML = `<div class="card"><div class="empty">${t('files.loadFailed', esc(e.message || t('common.unknownError')))}</div></div>`;
+    if (initial && boundRoot) boundRoot.innerHTML = `<div class="card"><div class="empty">${t('files.loadFailed', esc(e.message || t('common.unknownError')))}</div></div>`;
   } finally {
     state.pending = false;
   }
