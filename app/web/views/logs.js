@@ -70,7 +70,7 @@ export async function render(root, ctx) {
   // 全局 2s 轮询会调用这里的回调：暂停实时追加时跳过自动刷新，
   // 否则每 2 秒拉取重绘仍会把新日志刷出来，导致「暂停」形同虚设。
   // 注意：仅拦截自动轮询；筛选/翻页/清除等用户主动操作仍直接调用 refresh()，不受暂停影响。
-  ctx.onRefresh(() => { if (!state.paused) refresh(ctx); });
+  ctx.onRefresh(() => { if (!state.paused) refresh(ctx, false, false); });
   await refresh(ctx, true);
 }
 
@@ -81,7 +81,7 @@ export function destroy() {
   boundRoot = null;
 }
 
-async function refresh(ctx, initial) {
+async function refresh(ctx, initial, full = true) {
   const root = boundRoot;
   if (!root) return;
   if (state.pending) return;
@@ -110,7 +110,7 @@ async function refresh(ctx, initial) {
     state.tasks = r.tasks || [];
     state.files = r.files || [];
     state.lastTs = state.rows.reduce((mx, l) => Math.max(mx, new Date(l.ts || 0).getTime()), 0);
-    paint(ctx);
+    if (full) paint(ctx); else paintResults(ctx);
   } catch (e) {
     if (initial) root.innerHTML = `<div class="card"><div class="empty">${t('logs.loadFailed', esc(e.message || e))}</div></div>`;
   } finally {
@@ -145,16 +145,8 @@ async function fetchAllFiltered() {
 
 /* ---------- 渲染 ---------- */
 
-function paint(ctx) {
-  const root = boundRoot;
-  if (!root) return;
-  const totalBytes = state.files.reduce((n, f) => n + (Number(f.bytes) || 0), 0);
-  const retDays = Number(state.limits.logRetentionDays) || 14;
-  const retLevel = esc(state.limits.logLevel || 'INFO');
-  let hint = t('logs.hint', retDays, retLevel, state.pageSize);
-  if (state.files.length) hint += t('logs.filesNote', state.files.length, esc(formatBytes(totalBytes)));
-
-  const pager = `
+function pagerHtml() {
+  return `
     <div class="pager" id="lgPager">
       <button class="btn sm ghost" id="lgFirst"${state.page <= 1 ? ' disabled' : ''} title="${t('logs.firstPage')}">«</button>
       <button class="btn sm ghost" id="lgPrev"${state.page <= 1 ? ' disabled' : ''}>‹ ${t('common.pagerPrev')}</button>
@@ -163,7 +155,44 @@ function paint(ctx) {
       <button class="btn sm ghost" id="lgLast"${state.page >= state.pages ? ' disabled' : ''} title="${t('logs.lastPage')}">»</button>
       <span class="pager-go">${t('logs.goPage')} <input class="input" id="lgPageGo" type="number" min="1" max="${state.pages}" value="${state.page}" style="width:56px;padding:4px 6px" /> <button class="btn sm ghost" id="lgGo">${t('logs.goBtn')}</button></span>
     </div>`;
+}
 
+function hintHtml() {
+  const totalBytes = state.files.reduce((n, f) => n + (Number(f.bytes) || 0), 0);
+  const retDays = Number(state.limits.logRetentionDays) || 14;
+  const retLevel = esc(state.limits.logLevel || 'INFO');
+  let hint = t('logs.hint', retDays, retLevel, state.pageSize);
+  if (state.files.length) hint += t('logs.filesNote', state.files.length, esc(formatBytes(totalBytes)));
+  return hint;
+}
+
+/** 记录 root 内当前聚焦元素的 id 与光标位置（重绘后恢复，避免输入被打断）。 */
+function captureFocus(root) {
+  const a = (typeof document !== 'undefined') && document.activeElement;
+  if (!a || !a.id || !root.contains(a)) return null;
+  return {
+    id: a.id,
+    start: typeof a.selectionStart === 'number' ? a.selectionStart : null,
+    end: typeof a.selectionEnd === 'number' ? a.selectionEnd : null,
+  };
+}
+
+function restoreFocus(root, f) {
+  if (!f) return;
+  const el = root.querySelector('#' + f.id);
+  if (!el || typeof el.focus !== 'function') return;
+  try {
+    el.focus();
+    if (f.start != null && typeof el.setSelectionRange === 'function') el.setSelectionRange(f.start, f.end == null ? f.start : f.end);
+  } catch { /* ignore */ }
+}
+
+/** 全量渲染：工具栏 + 结果区。仅在初始/筛选切换/排序切换/清除等离散操作时调用。
+ *  注意：会重建 #lgQ 搜索框，因此输入过程中绝不能走这里（见 paintResults / rerender(..., false)）。 */
+function paint(ctx) {
+  const root = boundRoot;
+  if (!root) return;
+  const focus = captureFocus(root);
   root.innerHTML = `
     <div class="card">
       <div class="toolbar">
@@ -193,13 +222,32 @@ function paint(ctx) {
           <button class="btn sm ghost" id="lgExport">${t('logs.export')}</button>
         </div>
       </div>
-      <div class="hintline" style="margin:0 16px 12px">${hint}</div>
+      <div class="hintline" style="margin:0 16px 12px" id="lgHint">${hintHtml()}</div>
       <div class="card-b" style="padding:0" id="lgTable">${table()}</div>
-      ${pager}
+      ${pagerHtml()}
       <div class="hintline" style="margin:10px 16px 14px" id="lgCount"></div>
     </div>`;
 
   bind(ctx);
+  restoreFocus(root, focus);
+  syncCount();
+  scrollBottom();
+}
+
+/** 仅重绘结果区（表格 + 分页 + 计数 + 说明），不重建工具栏与搜索框。
+ *  搜索输入与全局 2s 轮询都走这里：避免重绘搜索框导致焦点/光标丢失、中文输入法（IME）组合被打断。 */
+function paintResults(ctx) {
+  const root = boundRoot;
+  if (!root) return;
+  const focus = captureFocus(root);
+  const tbl = root.querySelector('#lgTable');
+  if (tbl) tbl.innerHTML = table();
+  const pagerEl = root.querySelector('#lgPager');
+  if (pagerEl) pagerEl.outerHTML = pagerHtml();
+  const hintEl = root.querySelector('#lgHint');
+  if (hintEl) hintEl.innerHTML = hintHtml();
+  bindPager(ctx);
+  restoreFocus(root, focus);
   syncCount();
   scrollBottom();
 }
@@ -262,49 +310,21 @@ function syncCount() {
 
 /* ---------- 交互 ---------- */
 
-function bind(ctx) {
+/** 应用筛选补丁并刷新。full=true 全量重绘（会重建搜索框）；false 仅重绘结果区。
+ *  搜索输入/轮询/翻页一律走 full=false，保证搜索框不被重建、焦点与中文输入法不被打断。 */
+async function rerender(ctx, patch, full = true) {
+  Object.assign(state, patch);
+  state.pending = false;
+  await refresh(ctx, true, full);
+}
+
+/** 绑定分页按钮。paint() 后由 bind() 调用；paintResults() 重建分页块后需再次调用。 */
+function bindPager(ctx) {
   const root = boundRoot;
   if (!root) return;
-
-  const rerender = async (patch) => {
-    Object.assign(state, patch);
-    state.pending = false;
-    await refresh(ctx, true);
-  };
-
-  const level = root.querySelector('#lgLevel');
-  if (level) level.onchange = () => rerender({ level: level.value, page: 1 });
-  const task = root.querySelector('#lgTask');
-  if (task) task.onchange = () => rerender({ taskId: task.value, page: 1 });
-  const plat = root.querySelector('#lgPlat');
-  if (plat) plat.onchange = () => rerender({ platform: plat.value, page: 1 });
-
-  const q = root.querySelector('#lgQ');
-  if (q) {
-    let timer = null;
-    q.oninput = () => {
-      state.q = q.value;
-      clearTimeout(timer);
-      timer = setTimeout(() => rerender({ q: q.value, page: 1 }), 300);
-    };
-  }
-
-  const live = root.querySelector('#lgLive');
-  if (live) live.onclick = () => {
-    state.paused = !state.paused;
-    if (state.paused) state.livePending = false; // 取消已在等待的防抖刷新
-    syncCount();
-    toast(state.paused ? t('logs.pauseLiveToast') : t('logs.resumeLiveToast'));
-    if (!state.paused) refresh(ctx); // 恢复时立即补拉暂停期间的最新日志
-  };
-
-  const order = root.querySelector('#lgOrder');
-  if (order) order.onclick = () => rerender({ newestFirst: !state.newestFirst, page: 1 });
-
-  /* ---- 分页 ---- */
   const goto = (page) => {
     const p = Math.max(1, Math.min(state.pages, Number(page) || 1));
-    if (p !== state.page) rerender({ page: p });
+    if (p !== state.page) rerender(ctx, { page: p }, false);
   };
   const pg = (id, page) => {
     const b = root.querySelector(id);
@@ -318,6 +338,43 @@ function bind(ctx) {
   const goIn = root.querySelector('#lgPageGo');
   if (goBtn) goBtn.onclick = () => goto(goIn ? goIn.value : state.page);
   if (goIn) goIn.onkeydown = (e) => { if (e.key === 'Enter' && goBtn) goBtn.click(); };
+}
+
+function bind(ctx) {
+  const root = boundRoot;
+  if (!root) return;
+
+  const level = root.querySelector('#lgLevel');
+  if (level) level.onchange = () => rerender(ctx, { level: level.value, page: 1 });
+  const task = root.querySelector('#lgTask');
+  if (task) task.onchange = () => rerender(ctx, { taskId: task.value, page: 1 });
+  const plat = root.querySelector('#lgPlat');
+  if (plat) plat.onchange = () => rerender(ctx, { platform: plat.value, page: 1 });
+
+  const q = root.querySelector('#lgQ');
+  if (q) {
+    let timer = null;
+    q.oninput = () => {
+      state.q = q.value;
+      clearTimeout(timer);
+      // 局部更新结果（full=false）：不重建搜索框，输入可连续、中文输入法组合不被打断
+      timer = setTimeout(() => rerender(ctx, { q: q.value, page: 1 }, false), 300);
+    };
+  }
+
+  const live = root.querySelector('#lgLive');
+  if (live) live.onclick = () => {
+    state.paused = !state.paused;
+    if (state.paused) state.livePending = false; // 取消已在等待的防抖刷新
+    syncCount();
+    toast(state.paused ? t('logs.pauseLiveToast') : t('logs.resumeLiveToast'));
+    if (!state.paused) refresh(ctx, false, false); // 恢复时立即补拉暂停期间的最新日志
+  };
+
+  const order = root.querySelector('#lgOrder');
+  if (order) order.onclick = () => rerender(ctx, { newestFirst: !state.newestFirst, page: 1 });
+
+  bindPager(ctx);
 
   const copy = root.querySelector('#lgCopy');
   if (copy) copy.onclick = async () => {

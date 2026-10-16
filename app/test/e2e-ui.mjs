@@ -257,6 +257,39 @@ for (const { pg, needles, absent = [], minLen = 40 } of PAGES) {
     check(Number(rc?.result?.result?.value || 0) >= 1, '恢复后立即补拉最新日志', `resume 后 /api/logs 调用 ${rc?.result?.result?.value}`);
     await send('Runtime.evaluate', { expression: `window.fetch = window.__lgFetchLogs || window.fetch` });
 
+    /* 回归：关键字搜索框输入不被重绘打断。
+       此前搜索框在 paint() 里被整体重建，输入触发 300ms 防抖重绘后焦点/光标丢失、无法继续输入；
+       全局 2s 轮询同样会重绘。修复后搜索走局部重绘（paintResults），搜索框节点保持不变。
+       用节点标记 __lgKeep 判「同一 DOM 节点未被重建」，比只看焦点更灵敏。 */
+    await send('Runtime.evaluate', { expression: `(() => {
+      const q = document.querySelector('#lgQ');
+      if (!q) return;
+      q.__lgKeep = 1; q.focus(); q.value = '调度'; q.dispatchEvent(new Event('input', { bubbles: true }));
+    })()` });
+    await sleep(800); // 跨过 300ms 防抖 + 一次查询/重绘
+    const sq1 = await send('Runtime.evaluate', { expression: `JSON.stringify({
+      focus: (document.activeElement||{}).id || '',
+      val: (document.querySelector('#lgQ')||{}).value || '',
+      sameNode: (document.querySelector('#lgQ')||{}).__lgKeep === 1,
+    })`, returnByValue: true });
+    const s1 = JSON.parse(sq1?.result?.result?.value || '{}');
+    line(`   搜索框重绘回归: 焦点=${s1.focus} 值=${JSON.stringify(s1.val)} 同节点=${s1.sameNode}`);
+    check(s1.sameNode === true, '输入关键字后搜索框未被重建（同一 DOM 节点）', JSON.stringify(s1));
+    check(s1.focus === 'lgQ', '输入后搜索框保持焦点（可连续输入）', `focus=${s1.focus}`);
+    check(s1.val === '调度', '搜索框内容完整保留', JSON.stringify(s1.val));
+
+    await sleep(2600); // 再跨一个 2s 轮询周期：轮询重绘也不得夺走焦点/内容
+    const sq2 = await send('Runtime.evaluate', { expression: `JSON.stringify({
+      focus: (document.activeElement||{}).id || '',
+      val: (document.querySelector('#lgQ')||{}).value || '',
+      sameNode: (document.querySelector('#lgQ')||{}).__lgKeep === 1,
+    })`, returnByValue: true });
+    const s2 = JSON.parse(sq2?.result?.result?.value || '{}');
+    check(s2.sameNode && s2.focus === 'lgQ' && s2.val === '调度', '跨 2s 轮询后搜索框仍保持焦点与内容', JSON.stringify(s2));
+    // 清理：清空搜索并恢复完整列表
+    await send('Runtime.evaluate', { expression: `(() => { const q = document.querySelector('#lgQ'); if (q) { q.value = ''; q.dispatchEvent(new Event('input', { bubbles: true })); q.blur(); } })()` });
+    await sleep(500);
+
     /* 同类回归（总览页）：/api/status 迟到返回时，总览不得回写 #view 覆盖当前页。
        目标页选设置页——它不做 2s 轮询重绘，迟到覆盖不会被轮询刷掉，判据更灵敏；
        判据用总览独有的磁盘块 #view .pkdisk 与设置页页签计数双向校验。 */
