@@ -1,6 +1,6 @@
 // 更新管理器单元测试：覆盖版本对比、远程不可用、公开/私有仓库、检查/应用流程
 // 用 mock 全局 fetch 返回假 GitHub 响应，离线运行
-import { UpdateManager } from '../server/update.js';
+import { UpdateManager, parseVersion, compareVersions, pickLatestTag } from '../server/update.js';
 
 let bad = 0;
 const check = (cond, label, extra = '') => { if (!cond) bad++; console.log(`  ${cond ? 'PASS' : 'FAIL'}  ${label}${extra ? '  → ' + extra : ''}`); };
@@ -250,6 +250,82 @@ console.log('== K. getRepoConfig 命名空间映射（update* 键 → 内部 rep
   const cfg2 = { repo: 'foo/bar', branch: 'main', token: 't2' };
   const m2 = new UpdateManager({ appDir: TMP, getRepoConfig: () => cfg2 });
   check(m2._repo() === 'foo/bar' && m2._token() === 't2', '兼容裸键 repo/token', `${m2._repo()}/${m2._token()}`);
+}
+
+console.log('== L. 版本比较：远端更旧/相同都不得误报「可用更新」 ==');
+{
+  const m = new UpdateManager({ appDir: TMP });
+  // 截图场景：本地 v0.1.19（已部署），远端只更新到 v0.1.18 → 不得提示「可用更新」
+  check(m._computeHasUpdate({ version: '0.1.19' }, { version: '0.1.18' }) === false,
+    '本地版本更新（0.1.19）→ 不提示「可用更新」（截图误报回归）');
+  check(m._computeHasUpdate({ version: '0.1.18' }, { version: '0.1.19' }) === true, '远端严格更新 → 提示可用更新');
+  check(m._computeHasUpdate({ version: '0.1.19' }, { version: '0.1.19' }) === false, '版本相同 → 不提示');
+  check(m._computeHasUpdate({ version: '0.1.19' }, { version: 'v0.1.19' }) === false, 'v 前缀不影响比较');
+  check(m._computeHasUpdate({ version: '0.1.9' }, { version: '0.1.10' }) === true, '按数值比较（0.1.9 < 0.1.10，非字典序）');
+  check(m._computeHasUpdate({ version: '1.0.0' }, { version: '0.9.9' }) === false, '主版本更高 → 不提示');
+  check(m._computeHasUpdate({ version: '0.1.19', commit: 'aaaa11112222' }, { version: '0.1.19', commit: 'bbbb33334444' }) === true,
+    '版本相同但提交不同（分支 HEAD 领先）→ 提示');
+  check(m._computeHasUpdate({ version: '0.1.19', commit: 'aaaa11112222' }, { version: '0.1.19', commit: 'aaaa11112222' }) === false,
+    '版本与提交都相同 → 不提示');
+  check(m._computeHasUpdate({ version: '0.1.0' }, { unavailable: true }) === false, '远程不可见 → 不提示');
+  check(m._computeHasUpdate({ version: '0.0.0', commit: 'aaa' }, { version: '0.0.0', commit: 'bbb' }) === true,
+    '版本号不可解析时退回 commit 比对');
+}
+
+console.log('== M. pickLatestTag / compareVersions / parseVersion ==');
+{
+  check(pickLatestTag(['v0.1.18', 'v0.1.19']) === 'v0.1.19', '多标签取最高版本', pickLatestTag(['v0.1.18', 'v0.1.19']));
+  check(pickLatestTag(['v0.1.19', 'v0.1.18']) === 'v0.1.19', '与标签顺序无关');
+  check(pickLatestTag(['v0.1.9', 'v0.1.10']) === 'v0.1.10', '按数值取最大（非字典序）');
+  check(pickLatestTag(['release-2026', 'v1.0.0']) === 'v1.0.0', '忽略非版本号标签');
+  check(pickLatestTag(['v2.0.0-beta.1', 'v2.0.0']) === 'v2.0.0', '正式版优先于预发布版');
+  check(pickLatestTag([]) === '' && pickLatestTag(null) === '', '无候选/空值 → 空串');
+  check(compareVersions('0.1.19', '0.1.18') > 0 && compareVersions('0.1.18', '0.1.19') < 0 && compareVersions('v1.2.3', '1.2.3') === 0,
+    'compareVersions 语义正确');
+  check(compareVersions('nope', '1.0.0') === 0, '不可解析按相等处理（不误报）');
+  check(parseVersion('v0.1.19')?.patch === 19 && parseVersion('nope') === null, 'parseVersion 解析与拒识');
+}
+
+console.log('== N. 远端版本取「最高标签」：只打 tag 未发 Release 时不把旧 Release 当最新 ==');
+{
+  mockGitHub({
+    releases: { tag_name: 'v0.1.18', published_at: '2026-10-01T00:00:00Z', body: '旧版说明' },
+    tags: [{ name: 'v0.1.19' }, { name: 'v0.1.18' }],
+    commits: { sha: 'headsha123456', commit: { message: 'chore: x', committer: { date: '2026-10-02T00:00:00Z' } } },
+    repoPublic: true,
+  });
+  const m = new UpdateManager({ appDir: TMP });
+  await m.detectEnv();
+  await m.localInfo();
+  // 模拟已部署 v0.1.19 的实例（无构建 commit 信息，只能按版本号比对）
+  m.state.local = { version: '0.1.19', commit: '', branch: 'main', commitAt: null, tag: 'v0.1.19' };
+  await m.fetchRemote();
+  check(m.state.latest.version === '0.1.19', '远端版本取最高标签 v0.1.19（忽略更旧的 Release v0.1.18）', m.state.latest.version);
+  check(m.state.latest.tag === 'v0.1.19', 'latest.tag 同步为最高标签', m.state.latest.tag);
+  check(m.status().hasUpdate === false, '本地 v0.1.19 → 不误报「可用更新」', JSON.stringify(m.status().hasUpdate));
+}
+
+console.log('== O. 立即更新使用「更新源配置」的仓库（不写死 origin / 默认仓库） ==');
+{
+  mockGitHub({
+    releases: { tag_name: 'v9.9.9', published_at: '2026-10-02T00:00:00Z', body: '' },
+    tags: [{ name: 'v9.9.9' }],
+    commits: { sha: 'deadbeef0000', commit: { message: 'x', committer: { date: '2026-10-02T00:00:00Z' } } },
+    repoPublic: true,
+  });
+  const m = new UpdateManager({
+    appDir: TMP,
+    getRepoConfig: () => ({ updateRepo: 'acme/priv', updateGitUrl: 'https://github.com/acme/priv.git', updateBranch: 'release' }),
+  });
+  await m.detectEnv();
+  await m.localInfo();
+  // 固定为「无 git 仓库」环境：走手动指引分支，日志里会带出实际使用的远端地址
+  m.state.env = { gitAvailable: false, gitRoot: '', gitBin: '', dockerAvailable: false, inContainer: false };
+  await m.apply();
+  await new Promise((res) => setTimeout(res, 1200));
+  const logs = m.status().log.map((l) => l.msg).join('\n');
+  check(/https:\/\/github\.com\/acme\/priv\.git/.test(logs), '更新流程日志使用配置的仓库地址', logs.split('\n').slice(-2).join(' | '));
+  check(!/\borigin\b/.test(logs), '日志中不再出现写死的 origin 远端', /origin/.test(logs) ? logs : '');
 }
 
 console.log(bad === 0 ? '\n全部通过 ✅' : `\n${bad} 项失败 ❌`);

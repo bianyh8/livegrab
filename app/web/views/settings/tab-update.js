@@ -151,9 +151,10 @@ function paint(root, st) {
     </div>`).join('')
     : `<div class="empty" style="padding:14px 0">${t('settings.upLogEmpty')}</div>`;
 
-  // 更新源配置卡：允许覆盖默认仓库 / 分支 / Token（公共仓库可空，拉取时校验）
+  // 更新源配置卡：允许覆盖默认仓库 / 分支 / Token（公共仓库可空，拉取时校验）。
+  // 输入框初值一律取自后端「当前生效的更新源」（已按 UI 配置 > 环境变量 > 默认解析），前端不写死仓库。
   const custom = (kitRef && kitRef.state && kitRef.state.settings && kitRef.state.settings.customize) || {};
-  const repoVal = custom.updateRepo || st.repo || 'bianyh8/livegrab';
+  const repoVal = custom.updateRepo || st.repo || '';
   const branchVal = custom.updateBranch || st.branch || 'main';
   const tokenVal = custom.updateToken || ''; // 已配置时来自后端脱敏占位
   const configCard = `
@@ -212,7 +213,7 @@ function paint(root, st) {
             <button class="btn primary" id="upApply" ${applyDisabled ? 'disabled' : ''}>${ICON_DOWNLOAD}${t('settings.upApplyBtn')}</button>
             ${tip}
           </div>
-          <div class="hintline" style="margin-top:10px">${t('settings.upRepo', esc(st.repo || 'bianyh8/livegrab'), esc(st.branch || 'main'))}</div>
+          <div class="hintline" style="margin-top:10px">${t('settings.upRepo', esc(st.repo || st.gitUrl || '—'), esc(st.branch || 'main'))}</div>
         </div>
       </div>
 
@@ -288,8 +289,13 @@ function paint(root, st) {
       url = url.replace(/\.git$/, '');
     } else if (url) {
       url = 'https://github.com/' + url;
+    } else if (st.gitUrl) {
+      url = String(st.gitUrl).replace(/\.git$/, '');
+    } else if (repoVal) {
+      url = 'https://github.com/' + repoVal;
     } else {
-      url = 'https://github.com/' + (repoVal || 'bianyh8/livegrab');
+      toast(t('settings.upRepoEmpty'), 'warn');
+      return;
     }
     window.open(url, '_blank', 'noopener');
   };

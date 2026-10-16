@@ -167,19 +167,22 @@ const PAGES = [
 for (const { pg, needles, absent = [], minLen = 40 } of PAGES) {
   consoleErrors.length = 0;
   await send('Page.navigate', { url: `${BASE}/#/${pg}` });
-  /* 轮询等待目标页挂载：该页特征词已出现且视图文本连续两次一致才视为稳定。
-     固定 sleep 在负载高时会抓成上一页（历史串页误判），这里改为收敛等待。 */
+  /* 轮询等待目标页挂载：该页特征词已出现，且视图文本连续多次读数一致，才视为渲染稳定。
+     此前用「长度 > minLen」作为就绪条件之一——切页瞬间 #view 仍是上一页的长文本，
+     会被误判为「已就绪」，于是下一页（如回收站）在数据回来前就被采样 → 偶发 FAIL。
+     现改为必须命中特征词，并要求连续 3 次读数一致（收敛等待），彻底消除该时序抖动。 */
   let prevView = null;
-  for (let i = 0; i < 30; i++) {
+  let stable = 0;
+  for (let i = 0; i < 40; i++) {
     const q = await send('Runtime.evaluate', { expression: `((document.querySelector('#view')||{}).innerText||'')`, returnByValue: true });
     const txt = String(q?.result?.result?.value || '');
-    const ready = needles.some((n) => txt.includes(n)) || txt.trim().length > minLen;
-    if (ready && txt === prevView) break;
+    const ready = needles.some((n) => txt.includes(n)) && txt.trim().length > minLen;
+    if (ready && txt === prevView) { if (++stable >= 2) break; } else stable = 0;
     prevView = txt;
     await sleep(200);
   }
   const r = await send('Runtime.evaluate', {
-    expression: `JSON.stringify({view: (document.querySelector('#view')||{}).innerText || '', viewLen: ((document.querySelector('#view')||{}).innerHTML||'').length, loginHidden: !!document.querySelector('#loginPage.hide'), user: (document.querySelector('#userName')||{}).textContent, engineChip: (document.querySelector('#engineChip')||{}).textContent, disk: (document.querySelector('#diskText')||{}).textContent, hasDiskText: !!document.querySelector('#diskText'), hasTz: !!document.querySelector('#tzChip'), brand: (document.querySelector('.brand small')||{}).textContent || '', top: (document.querySelector('#topChip')||{}).textContent, topShown: (document.querySelector('#topChip')||{}).style.display !== 'none'})`,
+    expression: `JSON.stringify({view: (document.querySelector('#view')||{}).innerText || '', viewLen: ((document.querySelector('#view')||{}).innerHTML||'').length, hash: location.hash, loginHidden: !!document.querySelector('#loginPage.hide'), user: (document.querySelector('#userName')||{}).textContent, engineChip: (document.querySelector('#engineChip')||{}).textContent, disk: (document.querySelector('#diskText')||{}).textContent, hasDiskText: !!document.querySelector('#diskText'), hasTz: !!document.querySelector('#tzChip'), brand: (document.querySelector('.brand small')||{}).textContent || '', top: (document.querySelector('#topChip')||{}).textContent, topShown: (document.querySelector('#topChip')||{}).style.display !== 'none'})`,
     returnByValue: true,
   });
   const v = JSON.parse(r.result?.result?.value || '{}');
@@ -189,7 +192,7 @@ for (const { pg, needles, absent = [], minLen = 40 } of PAGES) {
   fs.writeFileSync(path.join(TMP, `view-${pg}.html`), v.view || '', 'utf8');
   const rendered = (v.view || '').trim().length > minLen;
   line(`\n4) ${pg}: 视图文本 ${(v.view || '').length} 字符 / HTML ${v.viewLen} / 截图 ${fs.existsSync(pngPath) ? fs.statSync(pngPath).size : 0} 字节`);
-  line(`   登录页已隐藏=${v.loginHidden} 用户=${v.user} 引擎=${v.engineChip} 磁盘=${v.disk} 时区chip=${v.hasTz} 顶栏=${v.topShown ? v.top : '(隐藏)'}`);
+  line(`   路由=${v.hash} 登录页已隐藏=${v.loginHidden} 用户=${v.user} 引擎=${v.engineChip} 磁盘=${v.disk} 时区chip=${v.hasTz} 顶栏=${v.topShown ? v.top : '(隐藏)'}`);
   line(`   视图前 120 字: ${(v.view || '').replace(/\n+/g, ' / ').slice(0, 120)}`);
   check(rendered, `${pg} 渲染出内容`);
   check(v.loginHidden === true, `${pg} 已通过鉴权进入控制台`);
@@ -208,10 +211,17 @@ for (const { pg, needles, absent = [], minLen = 40 } of PAGES) {
     await send('Runtime.evaluate', { expression: `(() => { const of = window.fetch; window.__lgFetch = of; window.fetch = (u, o) => { const s = String((u && u.url) || u); if (s.includes('/api/settings')) return new Promise((r) => setTimeout(() => r(of(u, o)), 800)); return of(u, o); }; return true; })()` });
     await send('Page.navigate', { url: `${BASE}/#/settings` });
     await sleep(200);
+    const raceAt = Date.now();
     await send('Page.navigate', { url: `${BASE}/#/logs` });
-    await sleep(2000);
-    const navq = await send('Runtime.evaluate', { expression: `JSON.stringify({t: ((document.querySelector('#view')||{}).innerText||'').slice(0, 160), tabs: document.querySelectorAll('#settingsTabs').length})`, returnByValue: true });
-    const nv = JSON.parse(navq?.result?.result?.value || '{}');
+    /* 收敛等待：等运行日志页渲染完成，且跨过设置页迟到绘制窗口（/api/settings 被延迟 800ms）。 */
+    let nv = {};
+    for (let i = 0; i < 40; i++) {
+      const navq = await send('Runtime.evaluate', { expression: `JSON.stringify({t: ((document.querySelector('#view')||{}).innerText||'').slice(0, 160), tabs: document.querySelectorAll('#settingsTabs').length})`, returnByValue: true });
+      nv = JSON.parse(navq?.result?.result?.value || '{}');
+      const converged = nv.tabs === 0 && String(nv.t || '').includes('最新在前');
+      if (converged && Date.now() - raceAt >= 1600) break;
+      await sleep(200);
+    }
     line(`   切页竞态回归: #settingsTabs=${nv.tabs} / 视图=${String(nv.t || '').replace(/\n+/g, ' / ').slice(0, 50)}`);
     check(nv.tabs === 0, '设置页加载中切走后，其迟到绘制不再覆盖新视图', `#settingsTabs=${nv.tabs}`);
     check(String(nv.t || '').includes('最新在前'), '切走后视图仍是目标页（运行日志）', String(nv.t || '').replace(/\n+/g, ' / ').slice(0, 50));
@@ -296,11 +306,20 @@ for (const { pg, needles, absent = [], minLen = 40 } of PAGES) {
     await send('Runtime.evaluate', { expression: `(() => { const of = window.fetch; window.__lgFetch2 = of; window.fetch = (u, o) => { const s = String((u && u.url) || u); if (s.includes('/api/status')) return new Promise((r) => setTimeout(() => r(of(u, o)), 800)); return of(u, o); }; return true; })()` });
     await send('Page.navigate', { url: `${BASE}/#/dashboard` });
     await sleep(200);
+    const raceAt2 = Date.now();
     await send('Page.navigate', { url: `${BASE}/#/settings` });
-    await sleep(2200);
-    const dashq = await send('Runtime.evaluate', { expression: `JSON.stringify({t: ((document.querySelector('#view')||{}).innerText||'').slice(0, 160), pk: document.querySelectorAll('#view .pkdisk').length, tabs: document.querySelectorAll('#settingsTabs').length})`, returnByValue: true });
-    const dv = JSON.parse(dashq?.result?.result?.value || '{}');
-    line(`   切页竞态回归(总览): #view .pkdisk=${dv.pk} / #settingsTabs=${dv.tabs} / 视图=${String(dv.t || '').replace(/\n+/g, ' / ').slice(0, 40)}`);
+    /* 收敛等待：等设置页渲染完成（出现设置页页签与「命名规则」），且至少跨过迟到绘制的窗口
+       （/api/status 被延迟 800ms，其迟到回调必然已发生）后再采样判据。
+       固定 sleep 在负载高时会采到「设置页还没渲染完」的中间态（tabs=0）→ 偶发 FAIL。 */
+    let dv = {};
+    for (let i = 0; i < 40; i++) {
+      const dashq = await send('Runtime.evaluate', { expression: `JSON.stringify({t: ((document.querySelector('#view')||{}).innerText||'').slice(0, 160), pk: document.querySelectorAll('#view .pkdisk').length, tabs: document.querySelectorAll('#settingsTabs').length, hash: location.hash, title: (document.querySelector('#pageTitle')||{}).textContent || ''})`, returnByValue: true });
+      dv = JSON.parse(dashq?.result?.result?.value || '{}');
+      const converged = dv.pk === 0 && dv.tabs === 1 && String(dv.t || '').includes('命名规则');
+      if (converged && Date.now() - raceAt2 >= 1600) break;
+      await sleep(200);
+    }
+    line(`   切页竞态回归(总览): hash=${dv.hash} title=${dv.title} #view .pkdisk=${dv.pk} / #settingsTabs=${dv.tabs} / 视图=${String(dv.t || '').replace(/\n+/g, ' / ').slice(0, 40)}`);
     check(dv.pk === 0 && dv.tabs === 1, '总览页迟到绘制不再回写 #view（设置页未被覆盖）', `pkdisk=${dv.pk} settingsTabs=${dv.tabs}`);
     check(String(dv.t || '').includes('命名规则'), '切走后视图仍是目标页（设置）', String(dv.t || '').replace(/\n+/g, ' / ').slice(0, 40));
     await send('Runtime.evaluate', { expression: `window.fetch = window.__lgFetch2 || window.fetch` });
@@ -337,7 +356,10 @@ for (const { pg, needles, absent = [], minLen = 40 } of PAGES) {
     // 系统更新页签：模块顺序应为 更新源配置（置顶）→ 更新管理 → 左「更新说明」/ 右「更新日志」
     await send('Runtime.evaluate', { expression: `document.querySelector('#settingsTabs [data-tab="update"]') && document.querySelector('#settingsTabs [data-tab="update"]').click()`, returnByValue: true });
     let u = {};
-    for (let i = 0; i < 30; i++) { // 收敛等待：更新页签异步渲染（先拉 updateStatus/check，可能较慢）
+    /* 收敛等待：更新页签异步渲染——进入时先拉 updateStatus，未检查过还会再触发一次 check，
+       而 check 要访问 GitHub（离线/网络受限时按 15s 超时计），最慢约 16s 才落到 paint。
+       固定等待 9s 会在网络受限时抓到「加载中」空壳 → 偶发 FAIL；这里给足 24s 预算。 */
+    for (let i = 0; i < 80; i++) {
       const utab = await send('Runtime.evaluate', {
         expression: `JSON.stringify((() => {
           const host = document.querySelector('#tabHost');

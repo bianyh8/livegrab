@@ -663,40 +663,17 @@ function openMobilePlayer(ctx, opts, info, mode, url) {
     rateBtn.textContent = rates[rateIdx].toFixed(1) + 'x';
   };
 
-  /* 竖屏（默认，contain 完整显示）↔ 横屏：优先调用 screen.orientation.lock 锁定方向；
-     不支持或锁失败时提示用户手动旋转。不强制 CSS 旋转容器，避免视频内容被转 sideways。
-     物理横屏 / lock 生效后，容器自然使用 100vw/100vh，进度条与文字随 viewport 变为横排。 */
+  /* 竖屏（默认，contain 完整显示）↔ 横屏：点击「横屏」直接强制切到横屏视图——
+     给播放器容器加 .pv-land（宽高互换 + 整体旋转 90°），进度条/时间/按钮随容器一起转为横排。
+     不再调用 screen.orientation.lock（iOS Safari 等根本不支持，点了只会弹「不支持/锁失败」），
+     也不在 JS 里判断设备方向：用户点了就是横屏，不会因设备未转屏或一次自动同步把选择改回去。
+     设备本身转为横屏后，由 app.css 的 (orientation:landscape) 媒体查询取消旋转，回到正常铺满。 */
   let landscape = false;
-  const updateOrientIcon = () => { orientBtn.classList.toggle('land', landscape); };
-  const ensureFullscreen = async () => {
-    const fs = document.fullscreenElement || document.webkitFullscreenElement;
-    if (!fs && playerEl.requestFullscreen) {
-      try { await playerEl.requestFullscreen(); } catch { /* ignore */ }
-    }
+  const applyOrient = () => {
+    playerEl.classList.toggle('pv-land', landscape);
+    orientBtn.classList.toggle('land', landscape);
   };
-  const toggleOrient = async () => {
-    landscape = !landscape;
-    updateOrientIcon();
-    const target = landscape ? 'landscape' : 'portrait';
-    if (screen.orientation && screen.orientation.lock) {
-      await ensureFullscreen();
-      try {
-        await screen.orientation.lock(target);
-      } catch {
-        toast(t('ui.orientLockFailed'), 'warn');
-      }
-    } else {
-      toast(t('ui.orientLockUnsupported'), 'warn');
-    }
-  };
-  orientBtn.onclick = toggleOrient;
-  /* 用户手动旋转设备后同步按钮图标 */
-  const onOrientResize = () => {
-    const isLand = window.innerWidth > window.innerHeight;
-    if (isLand !== landscape) { landscape = isLand; updateOrientIcon(); }
-  };
-  window.addEventListener('resize', onOrientResize);
-  window.addEventListener('orientationchange', onOrientResize);
+  orientBtn.onclick = () => { landscape = !landscape; applyOrient(); };
 
   /* 无操作 3 秒自动隐藏控制，触屏/移动即显示（沉浸观看） */
   let hideTimer = null;
@@ -746,15 +723,12 @@ function openMobilePlayer(ctx, opts, info, mode, url) {
     clearTimeout(hideTimer);
     playerEl.removeEventListener('touchstart', showBar);
     playerEl.removeEventListener('mousemove', showBar);
-    window.removeEventListener('resize', onOrientResize);
-    window.removeEventListener('orientationchange', onOrientResize);
     document.removeEventListener('fullscreenchange', onFsChange);
     document.removeEventListener('webkitfullscreenchange', onFsChange);
     video.removeEventListener('webkitendfullscreen', onIosFsEnd);
     window.removeEventListener('popstate', onPop);
     // 非返回键关闭时，回退掉自己压入的那条历史（避免残留一步空历史）
     if (!poppedBack && history.state && history.state.lgPlayer) { try { history.back(); } catch { /* ignore */ } }
-    try { if (screen.orientation && screen.orientation.unlock) screen.orientation.unlock(); } catch { /* ignore */ }
   });
 }
 

@@ -307,13 +307,14 @@ Settings += {
 - recorder/media：使用 `app/test/fake-ffmpeg.mjs`（伪造 ffmpeg：忽略参数、按 `-f segment` 语义写递增文件、读 stdin 的 `q` 后正常退出）跑通"启动 → 分段轮转 → 优雅停止 → 分段收尾"全链路。
 - server：启动后在随机端口跑一遍主要 API 的 smoke（不依赖 ffmpeg）。
 
-实测（v0.1.14 复测）：`node app/test/run.js` → **PASS 269 ｜ FAIL 0**（含 6 项 web 视图守卫静态断言；无 ffmpeg、无网络）；
-`node app/test/update-manager.mjs` → 全部通过（mock GitHub，离线）；
+实测（v0.1.20 复测）：`node app/test/run.js` → **PASS 271 ｜ FAIL 0**（含 8 项 web 视图守卫静态断言，其中新增「`nextFrame()` 必须带 setTimeout 兜底」；无 ffmpeg、无网络）；
+`node app/test/update-manager.mjs` → 全部通过（mock GitHub，离线；L/M/N/O 四组新增：远端更旧不得误报「可用更新」、`pickLatestTag` 取最高版本、只打 tag 未发 Release 时取最高标签、「立即更新」按配置的更新源而非写死的 origin）；
 `node app/test/update-git-flow.mjs` → 全部通过（架构 B 容器更新链路，离线自建 git 场景）；
 `node app/test/db-sqlite.mjs` → 82 通过（v1→v2 库作废重建等）；
 `node app/test/check-docker.mjs` → ALL PASS（37 项：静态校验打包三件套 + 容器形态环境变量真起一次服务；宿主 8080 被占用时自动换端口冒烟）；
 `node app/test/close-http.mjs` → 全部通过（关闭 HTTP 服务：对照组复现「页面开着 SSE 长连接时 `server.close()` 不回调」，修复后 `closeHttpServer` 在超时兜底内返回）；
-`node app/test/e2e-ui.mjs` → 真实浏览器端到端（需要 Edge/Chrome：登录流程、逐页渲染、切页竞态回归、SSE 与前端报错检查，缺浏览器时自动跳过）；
+`node app/test/e2e-ui.mjs` → 真实浏览器端到端（需要 Edge/Chrome：登录流程、逐页渲染、切页竞态回归、日志暂停/搜索框、更新页模块顺序、SSE 与前端报错检查，缺浏览器时自动跳过）。
+**时序断言一律「收敛等待」**：不用固定 sleep，改为轮询到「特征词出现 + 连续多次读数一致」再采样，并给足异步预算（更新页签要等 GitHub 检查超时，最长约 16s → 预算 24s），避免负载/网络抖动造成偶发 FAIL；
 `node app/test/e2e-ffmpeg.mjs` → 真实 ffmpeg 录制链路（缺 ffmpeg 时自动跳过）；
 `node app/test/e2e-douyin.mjs` → 抖音真实房间录制（需要真实 ffmpeg + 能访问抖音 + 有房间在播，否则自动跳过）。
 
@@ -330,8 +331,8 @@ app/server/  server.js scheduler.js recorder.js media.js storage.js play.js nami
              store.js auth.js logger.js notify.js util.js httpClose.js
              resolvers/{index,bilibili,douyin,cn,direct,http}.js
 app/web/     index.html app.css app.js api.js ui.js
-             views/{dashboard,tasks,files,logs}.js
-             views/settings/{index,tabkit,tab-rec,tab-naming,tab-platform,tab-notify,tab-security}.js
+             views/{dashboard,tasks,files,logs,trash}.js
+             views/settings/{index,tabkit,tab-rec,tab-store,tab-naming,tab-platform,tab-notify,tab-security,tab-update}.js
 app/test/    run.js fake-ffmpeg.mjs fake-media.mjs e2e-ui.mjs e2e-ffmpeg.mjs e2e-douyin.mjs check-docker.mjs
              update-manager.mjs update-git-flow.mjs db-sqlite.mjs close-http.mjs
 ```

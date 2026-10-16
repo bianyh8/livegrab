@@ -30,6 +30,7 @@ const runtime = {
   loaded: {},
   view: null,
   viewSeq: 0,
+  navSeq: 0,
   tick: 0,
   viewRaf: false,
   loggedInAt: null,
@@ -290,11 +291,17 @@ function stopView() {
   runtime.view = null;
 }
 
-/** 等一帧，避免先清空 DOM 再异步加载模块导致的可见闪烁 */
+/** 等一帧，避免先清空 DOM 再异步加载模块导致的可见闪烁。
+    注意：不能只依赖 requestAnimationFrame —— 页面在后台标签页、窗口被遮挡、无头/节流渲染
+    或低电量省电模式下，rAF 可能长时间不回调甚至完全停止。此时若只等 rAF，handleRoute 会
+    永久卡在这一步：地址栏 hash 变了、页面标题也更新了，但视图始终不重绘（表现为「点导航没反应」），
+    且不会有任何报错。故加一个定时器兜底，保证渲染一定会继续往下走。 */
 function nextFrame() {
   return new Promise((resolve) => {
-    if (typeof requestAnimationFrame === 'function') requestAnimationFrame(() => resolve());
-    else setTimeout(resolve, 0);
+    let settled = false;
+    const fin = () => { if (!settled) { settled = true; resolve(); } };
+    if (typeof requestAnimationFrame === 'function') requestAnimationFrame(fin);
+    setTimeout(fin, 48);
   });
 }
 
@@ -333,6 +340,13 @@ async function handleRoute(first) {
   const root = el('view');
   if (!root) return;
 
+  /* 本次导航序号：只有「最后一次」导航有权渲染。
+     两次导航在极短时间内相继发生（例如总览数据还在路上就切到设置页）时，两次 handleRoute
+     会各自挂在 import/等帧的 await 上并发推进。若先发起的旧导航晚于新导航恢复，它会重新把
+     runtime.view 抢回自己，并在 render 里重新武装模块级 boundRoot —— 于是旧视图的迟到绘制
+     反而覆盖了新视图（表现为「切到设置页后又被总览盖掉」）。用序号把过期的导航挡在渲染之前。 */
+  const myNav = (runtime.navSeq += 1);
+
   // 旧视图立即作废（DOM 先留着，等新视图渲染时再清空，避免闪烁）：
   // 之后它任何迟到的异步绘制都会因 boundRoot/token 失效而被丢弃。
   stopView();
@@ -342,12 +356,16 @@ async function handleRoute(first) {
     mod = await import('./views/' + route.file + '.js');
   } catch (e) {
     console.error('[LiveGrab] 视图模块加载失败', page, e);
+    if (runtime.navSeq !== myNav) return; // 已被更新的导航接管：不要动 DOM，也不要作废它的视图
     stopView();
     root.innerHTML = `<div class="card"><div class="empty">${t('pageLoad.failed', escText(e && e.message || e))}</div></div>`;
     return;
   }
+  if (runtime.navSeq !== myNav) return; // 已被更新的导航取代：直接放弃，不碰 DOM / runtime.view
 
   await nextFrame();
+  if (runtime.navSeq !== myNav) return;
+
   if (changed) root.innerHTML = '';
   runtime.view = { page, destroy: null, refresh: null, seq: (runtime.viewSeq += 1) };
   const myToken = runtime.view;

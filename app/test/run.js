@@ -973,6 +973,13 @@ function testViewGuards() {
   ok(/makeViewCtx\(/.test(appSrc), 'app.js 为每次渲染注入绑定 token 的 ctx 门面');
   ok(/isActive = \(\) => runtime\.view === token/.test(appSrc), 'ctx.isActive() 能反映当前活动视图');
   ok(/stopView\(\);\s*\n\s*\n\s*let mod;/.test(appSrc), '路由切换先作废旧视图（在导入新模块之前）');
+
+  /* nextFrame 不能只等 requestAnimationFrame：后台标签页 / 被遮挡窗口 / 无头或节流渲染 /
+     省电模式下 rAF 可能长时间不回调，只等它会让 handleRoute 永久卡死（视图不再重绘、无报错）。
+     必须带定时器兜底。 */
+  const nf = appSrc.match(/function nextFrame\(\)\s*\{[\s\S]*?\n\}/);
+  ok(!!nf, 'app.js 存在 nextFrame()（路由渲染前的等帧）');
+  ok(!!nf && /setTimeout\(/.test(nf[0]), 'nextFrame() 带 setTimeout 兜底（rAF 被节流/停止时路由不会卡死）');
 }
 
 // ============ 主流程 ============

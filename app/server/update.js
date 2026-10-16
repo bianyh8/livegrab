@@ -1,7 +1,7 @@
 /* LiveGrab · server/update.js —— 更新管理器
    职责：① 读取本地版本信息（package.json version + git commit/分支/提交时间）；
-   ② 从 GitHub API（bianyh8/livegrab）拉取最新版本与提交，做对比；
-   ③ 「立即更新」后台任务：git fetch + git pull（环境支持时），否则给出手动更新指引；
+   ② 从「更新源配置」指定的仓库（UI 配置 > 环境变量 > 内置默认）经 GitHub API 拉取最新版本与提交，做对比；
+   ③ 「立即更新」后台任务：按配置的仓库地址 fetch + pull（环境支持时），否则给出手动更新指引；
    ④ 内存态更新进度与日志（前端轮询 /api/update/status 获取）。
    日志约定：所有更新事件（环境自检/检查对比/拉取/安装/重启）都经 _log 同步写入日志文件
    （前缀 [更新]，与「运行日志」页同一套 logger）；检查结果相同不重复记，避免刷屏。
@@ -47,6 +47,48 @@ function parseOwnerRepoFromGitHubUrl(url) {
     if (parts.length >= 2) return `${parts[0]}/${parts[1]}`;
   } catch { /* ignore */ }
   return '';
+}
+
+/** 解析版本号（可带 v 前缀 / 预发布后缀）为可比较对象；不可解析返回 null。 */
+export function parseVersion(v) {
+  const m = String(v == null ? '' : v).trim().replace(/^v/i, '')
+    .match(/^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?/);
+  if (!m) return null;
+  return { major: +m[1], minor: +m[2], patch: +m[3], pre: m[4] || '' };
+}
+
+/** 比较两个「已解析」版本：a>b 返回正数，a<b 返回负数，相等返回 0。
+    规则：主次修订号逐段比；同号时「无预发布后缀」视为正式版 > 带后缀的预发布版；
+    同为预发布按字典序（满足 semver 对纯数字/字母串的基本要求）。 */
+export function cmpParsedVersion(x, y) {
+  if (!x || !y) return 0;
+  if (x.major !== y.major) return x.major - y.major;
+  if (x.minor !== y.minor) return x.minor - y.minor;
+  if (x.patch !== y.patch) return x.patch - y.patch;
+  if (!x.pre && y.pre) return 1;
+  if (x.pre && !y.pre) return -1;
+  if (x.pre === y.pre) return 0;
+  return x.pre < y.pre ? -1 : 1;
+}
+
+/** 语义化版本比较：a>b 返回正数，a<b 返回负数，相等返回 0（任一不可解析按 0 处理）。 */
+export function compareVersions(a, b) {
+  return cmpParsedVersion(parseVersion(a), parseVersion(b));
+}
+
+/** 从候选标签里挑出语义化版本最高的一个（含 v 前缀原样返回）；无有效版本返回 ''。
+    GitHub 的 /tags 顺序由提交时间决定、/releases/latest 只认「最新 Release」，
+    二者都可能在「打了 tag 但没发 Release」时给出偏旧的版本，故统一取最大版本号。 */
+export function pickLatestTag(candidates) {
+  let bestTag = '', bestV = null;
+  for (const raw of (candidates || [])) {
+    const name = String(raw || '').trim();
+    if (!name) continue;
+    const v = parseVersion(name);
+    if (!v) continue;
+    if (!bestV || cmpParsedVersion(v, bestV) > 0) { bestV = v; bestTag = name; }
+  }
+  return bestTag;
 }
 
 export class UpdateManager {
@@ -310,7 +352,13 @@ export class UpdateManager {
       return this.state.latest;
     }
 
-    const tagName = (rel && rel.tag_name) || (tags && tags.length && tags[0].name) || '';
+    // 版本号取「候选标签中语义化版本最高者」，而不是 releases/latest 或 tags[0]：
+    // 只推 tag 未发 Release 时 releases/latest 会偏旧，/tags 的顺序也不保证按版本号排列，
+    // 直接用它们会把旧版本当成「最新」，进而对已是最新的本地版本误报「可用更新」。
+    const candidates = [];
+    if (rel && rel.tag_name) candidates.push(rel.tag_name);
+    for (const t of (tags || [])) if (t && t.name) candidates.push(t.name);
+    const tagName = pickLatestTag(candidates) || (rel && rel.tag_name) || (tags && tags.length && tags[0] && tags[0].name) || '';
     const version = String(tagName || '').replace(/^v/i, '');
     // 权威「最新代码」以分支 HEAD 的 commit sha 为准：release 的 target_commitish 通常只是分支/标签名，
     // 不能用于精确比对（例如 v0.1.0 标签可能指向旧提交，而 main 最新提交才是真正要去比对的）。
@@ -427,19 +475,23 @@ export class UpdateManager {
           ? '容器内未检测到代码仓库（首次启动克隆失败，或镜像过旧未内置 git）'
           : '未检测到可用 git 仓库，无法在线拉取代码');
         const branch = this._branch();
+        const gitUrl = this._gitUrl();
       this._log('INFO', env.inContainer
           ? '请检查容器网络；私有仓库需配置 LIVEGRAB_GITHUB_TOKEN。重启容器会重试自动克隆；或在宿主机执行：docker compose up -d --build'
-          : `请在源码目录手动执行：git pull origin ${branch} && npm install`);
+          : `请在源码目录手动执行：git pull ${gitUrl} ${branch} && npm install`);
         this._log('INFO', '已生成手动更新指引。重建并重启容器后生效。');
         this._phase('done', 100, '需手动重建镜像更新');
         return;
       }
 
+      // 更新源完全取自「更新源配置」（UI > 环境变量 > 默认），不写死仓库：
+      // 直接以配置的仓库地址作为 fetch/pull 的远端，避免仓库里残留的 origin 指向别处导致拉到旧代码。
       const branch = this._branch();
+      const gitUrl = this._gitUrl();
       // ② fetch（私有仓库注入认证，避免依赖本机凭据）
       this._phase('fetch', 20, '拉取远端代码');
-      this._log('INFO', '准备拉取代码…');
-      const fetchR = await run('git', [...this._gitAuthArgs(), 'fetch', 'origin', branch], { cwd: env.gitRoot, timeout: 120000 });
+      this._log('INFO', `准备从更新源拉取代码：${gitUrl}（分支 ${branch}）…`);
+      const fetchR = await run('git', [...this._gitAuthArgs(), 'fetch', gitUrl, branch], { cwd: env.gitRoot, timeout: 120000 });
       if (!fetchR.ok) {
         this._phase('error', 25, '');
         const detail = (fetchR.err || fetchR.out || '').split('\n').slice(0, 3).join(' ').trim();
@@ -449,10 +501,10 @@ export class UpdateManager {
       this._log('OK', '代码拉取成功');
       this.state.progress = 40;
 
-      // ③ 对比本地与远端 HEAD
+      // ③ 对比本地与远端 HEAD（远端 commit 即刚 fetch 下来的 FETCH_HEAD）
       const [cur, remote] = await Promise.all([
         run('git', ['rev-parse', 'HEAD'], { cwd: env.gitRoot }),
-        run('git', ['rev-parse', `origin/${branch}`], { cwd: env.gitRoot }),
+        run('git', ['rev-parse', 'FETCH_HEAD'], { cwd: env.gitRoot }),
       ]);
       const curSha = cur.ok ? cur.out.trim() : '';
       const remoteSha = remote.ok ? remote.out.trim() : '';
@@ -465,12 +517,12 @@ export class UpdateManager {
       // ④ 快进拉取
       this._phase('pull', 55, `拉取最新代码 ${branch}`);
       this._log('INFO', `正在更新到 ${latest.tag} (${remoteSha.slice(0, 12)})…`);
-      const pullR = await run('git', [...this._gitAuthArgs(), 'pull', '--ff-only', 'origin', branch], { cwd: env.gitRoot, timeout: 120000 });
+      const pullR = await run('git', [...this._gitAuthArgs(), 'pull', '--ff-only', gitUrl, branch], { cwd: env.gitRoot, timeout: 120000 });
       if (!pullR.ok) {
         this._phase('error', 60, '');
         const detail = (pullR.err || pullR.out || '').split('\n').slice(0, 3).join(' ').trim();
         this._log('ERR', `代码更新失败（非快进或本地有改动，exit ${pullR.code}）：${detail || '无输出'}`);
-        this._log('INFO', '请先提交或暂存本地改动后重试，或手动执行 git pull origin ' + branch);
+        this._log('INFO', `请先提交或暂存本地改动后重试，或手动执行 git pull ${gitUrl} ${branch}`);
         return;
       }
       this._log('OK', `代码已更新到 ${latest.tag}`);
@@ -523,13 +575,25 @@ export class UpdateManager {
 
   /* ---------- 状态输出 ---------- */
 
-  /** 计算是否真的有更新：优先按 commit sha 比对（最权威），commit 不可得时退回版本号比对。 */
+  /** 计算是否真的有更新。判据按优先级：
+      ① 版本号可比时以语义化版本为准——只有远端「严格更新」才算有更新，
+         远端更旧（本地已更新到更高版本）或版本相同一律不算，避免误报「可用更新」；
+      ② 版本号相同（或不可解析）时再看 commit：两端 commit 都可得且不同才算有更新
+         （覆盖「同版本号但有新提交」的分支 HEAD 领先场景）；
+      ③ 都没有则退回原始字符串不等比较（旧镜像无构建信息的兜底）。 */
   _computeHasUpdate(local, latest) {
     if (!latest || latest.unavailable) return false;
+    const lv = parseVersion(local && local.version);
+    const rv = parseVersion(latest && latest.version);
     const lc = local && local.commit ? String(local.commit).slice(0, 12) : '';
     const rc = latest && latest.commit ? String(latest.commit).slice(0, 12) : '';
-    if (lc && rc) return lc !== rc; // 两端都能拿到 commit：以 commit 为准（避免版本号滞后/发布标签错位造成的误报）
-    // commit 不可得（如未注入构建信息的旧镜像）：退回版本号比对
+    if (lv && rv) {
+      const cmp = cmpParsedVersion(rv, lv);
+      if (cmp > 0) return true;   // 远端版本严格更高 → 有更新
+      if (cmp < 0) return false;  // 远端版本更低（本地更新）→ 不提示更新
+      return !!(lc && rc && lc !== rc); // 版本相同：仅当提交确实不同才提示
+    }
+    if (lc && rc) return lc !== rc;
     return !!(latest.version && local && local.version && latest.version !== local.version);
   }
 
