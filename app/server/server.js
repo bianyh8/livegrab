@@ -15,6 +15,7 @@ import { Notifier } from './notify.js';
 import { Scheduler } from './scheduler.js';
 import { PlayManager } from './play.js';
 import { UpdateManager } from './update.js';
+import { closeAllSse, closeHttpServer } from './httpClose.js';
 import * as media from './media.js';
 import { resolveRoom, platformList, PLATFORMS } from './resolvers/index.js';
 import { previewNaming, VARIABLES, DEFAULT_OPTIONS, qualityLabel, NAMING_OPTION_CHOICES } from './naming.js';
@@ -202,8 +203,11 @@ async function bootstrap() {
     for (const [, rec] of scheduler.detached) { try { await rec.stop('shutdown'); } catch { /* ignore */ } }
     try { await store.persist(); } catch (e) { logger.error(`重启前持久化失败：${e?.message || e}`); }
     try { store.close(); } catch { /* ignore */ }
-    // 先释放端口，再启动新进程，避免新实例 EADDRINUSE
-    await new Promise((resolve) => server.close(() => resolve()));
+    // 先释放端口，再启动新进程，避免新实例 EADDRINUSE。
+    // 注意：必须主动断开 SSE 长连接并带超时兜底（closeHttpServer），
+    // 否则 server.close() 会因页面开着的 /api/events 连接永不回调 → 不重启、页面打不开。
+    await closeHttpServer(server, sseClients, 3000);
+    logger.info('HTTP 服务已停止，正在启动新进程加载新版本…');
     const child = spawn(process.execPath, process.argv.slice(1), {
       cwd: process.cwd(),
       env: process.env,
@@ -872,6 +876,7 @@ async function main() {
     }
     try { await store.persist(); } catch (e) { logger.error(`优雅退出时 SQLite 持久化失败：${e?.message || e}`); }
     store.close();
+    closeAllSse(sseClients); // 断开 SSE，避免 server.close() 被长连接拖住（下方 8s 兜底仍在）
     server.close(() => process.exit(0));
     setTimeout(() => process.exit(0), 8000);
   };

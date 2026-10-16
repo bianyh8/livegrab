@@ -312,6 +312,7 @@ Settings += {
 `node app/test/update-git-flow.mjs` → 全部通过（架构 B 容器更新链路，离线自建 git 场景）；
 `node app/test/db-sqlite.mjs` → 82 通过（v1→v2 库作废重建等）；
 `node app/test/check-docker.mjs` → ALL PASS（37 项：静态校验打包三件套 + 容器形态环境变量真起一次服务；宿主 8080 被占用时自动换端口冒烟）；
+`node app/test/close-http.mjs` → 全部通过（关闭 HTTP 服务：对照组复现「页面开着 SSE 长连接时 `server.close()` 不回调」，修复后 `closeHttpServer` 在超时兜底内返回）；
 `node app/test/e2e-ui.mjs` → 真实浏览器端到端（需要 Edge/Chrome：登录流程、逐页渲染、切页竞态回归、SSE 与前端报错检查，缺浏览器时自动跳过）；
 `node app/test/e2e-ffmpeg.mjs` → 真实 ffmpeg 录制链路（缺 ffmpeg 时自动跳过）；
 `node app/test/e2e-douyin.mjs` → 抖音真实房间录制（需要真实 ffmpeg + 能访问抖音 + 有房间在播，否则自动跳过）。
@@ -326,12 +327,13 @@ Settings += {
 
 ```
 app/server/  server.js scheduler.js recorder.js media.js storage.js play.js naming.js
-             store.js auth.js logger.js notify.js util.js
+             store.js auth.js logger.js notify.js util.js httpClose.js
              resolvers/{index,bilibili,douyin,cn,direct,http}.js
 app/web/     index.html app.css app.js api.js ui.js
              views/{dashboard,tasks,files,logs}.js
              views/settings/{index,tabkit,tab-rec,tab-naming,tab-platform,tab-notify,tab-security}.js
 app/test/    run.js fake-ffmpeg.mjs fake-media.mjs e2e-ui.mjs e2e-ffmpeg.mjs e2e-douyin.mjs check-docker.mjs
+             update-manager.mjs update-git-flow.mjs db-sqlite.mjs close-http.mjs
 ```
 （早期设计里提到的 `resolvers/index.js` 之外没有单独的 `resolvers/bilibili.ts` 等；`ui.js` 为新增的通用组件库；无 `http.js`，HTTP 层在 `server.js` 内。）
 
