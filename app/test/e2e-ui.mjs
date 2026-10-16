@@ -324,6 +324,45 @@ for (const { pg, needles, absent = [], minLen = 40 } of PAGES) {
     check(String(dv.t || '').includes('命名规则'), '切走后视图仍是目标页（设置）', String(dv.t || '').replace(/\n+/g, ' / ').slice(0, 40));
     await send('Runtime.evaluate', { expression: `window.fetch = window.__lgFetch2 || window.fetch` });
   }
+  if (pg === 'tasks') {
+    /* 回归：任务管理查询框输入不被重绘打断（用户报「刚输入一个字就查询、查询不能正常用」）。
+       此前 #tkQ 搜索防抖走全量 paint() 整体重建，输入触发重绘后焦点/光标丢失、无法连续输入；
+       全局 2s 轮询同样全量重绘抢焦点。修复后搜索/翻页/轮询都走局部重绘（paintResults），
+       搜索框节点保持不变。用节点标记 __tkKeep 判「同一 DOM 节点未被重建」，比只看焦点更灵敏。
+       注意：查询条件默认折叠，先点折叠头展开（该步会全量重建一次 #tkQ），再标记+输入。 */
+    await send('Runtime.evaluate', { expression: `document.querySelector('#tkFilterToggle') && document.querySelector('#tkFilterToggle').click()` });
+    await sleep(400); // 等展开后的全量重绘完成（此步会重建一次 #tkQ）
+    await send('Runtime.evaluate', { expression: `(() => {
+      const q = document.querySelector('#tkQ');
+      if (!q) return;
+      q.__tkKeep = 1; q.focus(); q.value = '验证'; q.dispatchEvent(new Event('input', { bubbles: true }));
+    })()` });
+    await sleep(900); // 跨过 300ms 防抖 + 一次查询/重绘
+    const tq1 = await send('Runtime.evaluate', { expression: `JSON.stringify({
+      focus: (document.activeElement||{}).id || '',
+      val: (document.querySelector('#tkQ')||{}).value || '',
+      sameNode: (document.querySelector('#tkQ')||{}).__tkKeep === 1,
+      summary: ((document.querySelector('#tkFilterToggle .tq-summary')||{}).innerText || '').trim(),
+    })`, returnByValue: true });
+    const t1 = JSON.parse(tq1?.result?.result?.value || '{}');
+    line(`   任务查询框重绘回归: 焦点=${t1.focus} 值=${JSON.stringify(t1.val)} 同节点=${t1.sameNode} 摘要=${JSON.stringify(t1.summary)}`);
+    check(t1.sameNode === true, '输入关键字后任务查询框未被重建（同一 DOM 节点）', JSON.stringify(t1));
+    check(t1.focus === 'tkQ', '输入后任务查询框保持焦点（可连续输入）', `focus=${t1.focus}`);
+    check(t1.val === '验证', '任务查询框内容完整保留', JSON.stringify(t1.val));
+    check(String(t1.summary).includes('验证'), '查询条件摘要已反映当前关键字（确认走了局部重绘）', JSON.stringify(t1.summary));
+
+    await sleep(2600); // 再跨一个 2s 轮询周期：轮询重绘也不得夺走焦点/内容
+    const tq2 = await send('Runtime.evaluate', { expression: `JSON.stringify({
+      focus: (document.activeElement||{}).id || '',
+      val: (document.querySelector('#tkQ')||{}).value || '',
+      sameNode: (document.querySelector('#tkQ')||{}).__tkKeep === 1,
+    })`, returnByValue: true });
+    const t2 = JSON.parse(tq2?.result?.result?.value || '{}');
+    check(t2.sameNode && t2.focus === 'tkQ' && t2.val === '验证', '跨 2s 轮询后任务查询框仍保持焦点与内容', JSON.stringify(t2));
+    // 清理：清空查询并恢复完整列表
+    await send('Runtime.evaluate', { expression: `(() => { const q = document.querySelector('#tkQ'); if (q) { q.value = ''; q.dispatchEvent(new Event('input', { bubbles: true })); q.blur(); } })()` });
+    await sleep(600);
+  }
   if (pg === 'dashboard') {
     // 磁盘信息只在「存储统计」卡出现一次（DOM 计数，比文本匹配更稳）
     const dq = await send('Runtime.evaluate', { expression: `document.querySelectorAll('#view .pkdisk').length`, returnByValue: true });

@@ -64,7 +64,8 @@ export async function render(root, ctx) {
     state.bound = true;
     offModal = ctx.on('open-task-modal', (id) => { if (id) openTaskDialog(ctx, id); else state.openNew = true; });
   }
-  ctx.onRefresh(() => tick(ctx));
+  // 全局 2s 轮询只做局部重绘（paintResults），不得重建工具栏/搜索框而抢走输入焦点
+  ctx.onRefresh(() => tick(ctx, false));
   await tick(ctx, true);
 }
 
@@ -75,7 +76,7 @@ export function destroy() {
   boundRoot = null;
 }
 
-async function tick(ctx, initial) {
+async function tick(ctx, full) {
   if (state.pending) return;
   state.pending = true;
   try {
@@ -100,9 +101,11 @@ async function tick(ctx, initial) {
     state.total = Number((r && r.total) || state.tasks.length);
     state.pages = Math.max(1, Number((r && r.pages) || 1));
     if (state.openNew) { state.openNew = false; openTaskDialog(ctx, null); }
-    paint(ctx, initial);
+    // full=true → 全量重绘（初始/筛选/排序/折叠/排序移动等离散操作）；
+    // full=false → 仅重绘结果区（搜索防抖/翻页/2s 轮询），不重建工具栏与搜索框，避免焦点丢失。
+    if (full) paint(ctx, true); else paintResults(ctx);
   } catch (e) {
-    if (initial && boundRoot) {
+    if (full && boundRoot) {
       boundRoot.innerHTML = `<div class="card"><div class="empty">${t('tasks.loadFailed', esc(e.message || e))}</div></div>`;
     }
   } finally {
@@ -151,19 +154,70 @@ function platName(id) {
 
 /* ---------- 渲染 ---------- */
 
+/* 记录 root 内当前聚焦元素的 id 与光标位置（重绘后恢复，避免输入被打断）。 */
+function captureFocus(root) {
+  const a = (typeof document !== 'undefined') && document.activeElement;
+  if (!a || !a.id || !root.contains(a)) return null;
+  return {
+    id: a.id,
+    start: typeof a.selectionStart === 'number' ? a.selectionStart : null,
+    end: typeof a.selectionEnd === 'number' ? a.selectionEnd : null,
+  };
+}
+function restoreFocus(root, f) {
+  if (!f) return;
+  const el = root.querySelector('#' + f.id);
+  if (!el || typeof el.focus !== 'function') return;
+  try {
+    el.focus();
+    if (f.start != null && typeof el.setSelectionRange === 'function') el.setSelectionRange(f.start, f.end == null ? f.start : f.end);
+  } catch { /* ignore */ }
+}
+
+/* 结果区指纹：paint 与 paintResults 共用同一套判据，数据/筛选/勾选/翻页无变化时跳过重绘。 */
+function listHash() {
+  const list = state.tasks;
+  return JSON.stringify(list.map((t) => [
+    t.id, t.status, t.queueReason, t.retryCount, t.statusMessage, t.qualityLabel,
+    t.live && t.live.elapsedSec, t.live && t.live.bytes, t.live && t.live.segmentIndex, t.updatedAt,
+  ])) + '|' + state.q + '|' + state.platform + '|' + state.liveStatus + '|' + state.status + '|' + state.sort + '|' + state.sortDir + '|' + Array.from(state.selected).join(',') + '|p' + state.page + '|tot' + state.total;
+}
+
+/* 仅重绘结果区（表格 + 分页 + 查询条件摘要），不重建工具栏与搜索框。
+   搜索输入防抖、翻页与全局 2s 轮询都走这里：避免重建 #tkQ 导致焦点/光标丢失、
+   中文输入法（IME）组合被打断——这正是任务管理「查询不能正常用、刚输入一个字就查询」的根因。 */
+function paintResults(ctx) {
+  const root = boundRoot;
+  if (!root) return;
+  if (state.page > state.pages) state.page = state.pages;
+  const list = state.tasks;
+  const hash = listHash();
+  if (hash === state.hash) { syncBatchBar(); return; }
+  state.hash = hash;
+  const focus = captureFocus(root);
+  const tbl = root.querySelector('#tkTable');
+  if (tbl) tbl.innerHTML = table(list);
+  const pagerEl = root.querySelector('#tkPager');
+  if (pagerEl) pagerEl.outerHTML = pagerHTML('tkPager', state.page, state.pages, state.total);
+  const sumEl = root.querySelector('#tkFilterToggle .tq-summary');
+  if (sumEl) sumEl.innerHTML = filterSummary();
+  bindTable(ctx);
+  bindPager(root, 'tkPager', state, () => { state.hash = ''; tick(ctx, false); });
+  syncBatchBar();
+  restoreFocus(root, focus);
+}
+
 function paint(ctx, force) {
   const root = boundRoot;
   if (!root) return;
   if (state.page > state.pages) state.page = state.pages;
   const list = state.tasks;
   const pageList = list;
-  const hash = JSON.stringify(list.map((t) => [
-    t.id, t.status, t.queueReason, t.retryCount, t.statusMessage, t.qualityLabel,
-    t.live && t.live.elapsedSec, t.live && t.live.bytes, t.live && t.live.segmentIndex, t.updatedAt,
-  ])) + '|' + state.q + '|' + state.platform + '|' + state.liveStatus + '|' + state.status + '|' + state.sort + '|' + state.sortDir + '|' + Array.from(state.selected).join(',') + '|p' + state.page + '|tot' + state.total;
+  const hash = listHash();
   if (!force && hash === state.hash) { syncBatchBar(); return; }
   state.hash = hash;
 
+  const focus = captureFocus(root);
   root.innerHTML = `
     <div class="card">
       <div class="tq-toggle" id="tkFilterToggle" role="button">
@@ -214,6 +268,7 @@ function paint(ctx, force) {
     </div>`;
 
   bind(ctx);
+  restoreFocus(root, focus);
 }
 
 /* 拉取符合当前筛选的全量任务（不带分页参数时后端返回全量）：
@@ -369,36 +424,16 @@ function rowActions(item) {
 
 /* ---------- 交互 ---------- */
 
-function bind(ctx) {
+/* 绑定表格内元素（自定义排序移动 / 全选 / 行勾选 / 行内操作）。
+   全量 paint 与局部 paintResults 都会重建 #tkTable，行内按钮需重新绑定，故单独抽出；
+   工具栏、批量条不在 #tkTable 内，保持原绑定，不在此重复绑。 */
+function bindTable(ctx) {
   const root = boundRoot;
   if (!root) return;
-  boundCtx = ctx;
 
   root.querySelectorAll('[data-mv]').forEach((btn) => {
     btn.onclick = () => moveTask(btn.dataset.id, btn.dataset.mv === 'up' ? -1 : 1);
   });
-
-  const q = root.querySelector('#tkQ');
-  if (q) {
-    let timer = null;
-    q.oninput = () => {
-      state.q = q.value;
-      clearTimeout(timer);
-      timer = setTimeout(() => { state.page = 1; state.hash = ''; tick(ctx, true); }, 200);
-    };
-  }
-  const fToggle = root.querySelector('#tkFilterToggle');
-  if (fToggle) fToggle.onclick = () => { state.filterOpen = !state.filterOpen; state.hash = ''; paint(ctx, true); };
-  const bindSel = (id, key) => {
-    const node = root.querySelector(id);
-    if (!node) return;
-    node.onchange = () => { state[key] = node.value; state.page = 1; state.hash = ''; tick(ctx, true); };
-  };
-  bindSel('#tkPlat', 'platform');
-  bindSel('#tkLive', 'liveStatus');
-  bindSel('#tkStatus', 'status');
-  bindSel('#tkSort', 'sort');
-  bindSel('#tkSortDir', 'sortDir');
 
   const all = root.querySelector('#tkAll');
   if (all) all.onchange = () => {
@@ -418,23 +453,6 @@ function bind(ctx) {
       syncBatchBar();
     };
   });
-
-  root.querySelector('#tkNew').onclick = (e) => {
-    if (e) e.stopPropagation(); // 按钮位于查询条件折叠头内，避免冒泡触发折叠切换
-    openTaskDialog(ctx, null);
-  };
-  root.querySelector('#tkExport').onclick = () => { void exportCsv(); };
-
-  const selAll = root.querySelector('#tkSelAll');
-  if (selAll) selAll.onclick = () => {
-    void (async () => {
-      const ids = await fetchAllIds();
-      const allSel = ids.length > 0 && ids.every((id) => state.selected.has(id));
-      ids.forEach((id) => { allSel ? state.selected.delete(id) : state.selected.add(id); });
-      state.hash = '';
-      paint(ctx, true);
-    })();
-  };
 
   root.querySelectorAll('[data-act]').forEach((btn) => {
     btn.onclick = async () => {
@@ -472,13 +490,60 @@ function bind(ctx) {
       }
     };
   });
+}
+
+function bind(ctx) {
+  const root = boundRoot;
+  if (!root) return;
+  boundCtx = ctx;
+
+  const q = root.querySelector('#tkQ');
+  if (q) {
+    let timer = null;
+    q.oninput = () => {
+      state.q = q.value;
+      clearTimeout(timer);
+      // 只走局部重绘（paintResults），绝不重建搜索框；300ms 防抖给足连续输入/中文组词时间
+      timer = setTimeout(() => { state.page = 1; tick(ctx, false); }, 300);
+    };
+  }
+  const fToggle = root.querySelector('#tkFilterToggle');
+  if (fToggle) fToggle.onclick = () => { state.filterOpen = !state.filterOpen; state.hash = ''; paint(ctx, true); };
+  const bindSel = (id, key) => {
+    const node = root.querySelector(id);
+    if (!node) return;
+    node.onchange = () => { state[key] = node.value; state.page = 1; state.hash = ''; tick(ctx, true); };
+  };
+  bindSel('#tkPlat', 'platform');
+  bindSel('#tkLive', 'liveStatus');
+  bindSel('#tkStatus', 'status');
+  bindSel('#tkSort', 'sort');
+  bindSel('#tkSortDir', 'sortDir');
+
+  root.querySelector('#tkNew').onclick = (e) => {
+    if (e) e.stopPropagation(); // 按钮位于查询条件折叠头内，避免冒泡触发折叠切换
+    openTaskDialog(ctx, null);
+  };
+  root.querySelector('#tkExport').onclick = () => { void exportCsv(); };
+
+  const selAll = root.querySelector('#tkSelAll');
+  if (selAll) selAll.onclick = () => {
+    void (async () => {
+      const ids = await fetchAllIds();
+      const allSel = ids.length > 0 && ids.every((id) => state.selected.has(id));
+      ids.forEach((id) => { allSel ? state.selected.delete(id) : state.selected.add(id); });
+      state.hash = '';
+      paint(ctx, true);
+    })();
+  };
 
   root.querySelectorAll('[data-batch]').forEach((btn) => {
     btn.onclick = () => batch(ctx, btn.dataset.batch);
   });
-  // 翻页需重新向后端请求对应页数据
-  bindPager(root, 'tkPager', state, () => { state.hash = ''; tick(ctx, true); });
+  // 翻页需重新向后端请求对应页数据；走局部重绘，避免重建工具栏/搜索框
+  bindPager(root, 'tkPager', state, () => { state.hash = ''; tick(ctx, false); });
 
+  bindTable(ctx);
   syncBatchBar();
 }
 

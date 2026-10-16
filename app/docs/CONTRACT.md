@@ -307,13 +307,13 @@ Settings += {
 - recorder/media：使用 `app/test/fake-ffmpeg.mjs`（伪造 ffmpeg：忽略参数、按 `-f segment` 语义写递增文件、读 stdin 的 `q` 后正常退出）跑通"启动 → 分段轮转 → 优雅停止 → 分段收尾"全链路。
 - server：启动后在随机端口跑一遍主要 API 的 smoke（不依赖 ffmpeg）。
 
-实测（v0.1.22 复测）：`node app/test/run.js` → **PASS 293 ｜ FAIL 0**（含 13 项 web 视图守卫静态断言与 17 项更新链路守卫断言：`nextFrame()` 必须带 setTimeout 兜底、强制横屏的旋转必须落在内层舞台 `#plStage`（不得写在全屏元素 `#plBox` 上）、git 必须走 HTTP/1.1 + 降级重试、`GIT_TERMINAL_PROMPT=0`、快进用本地 `FETCH_HEAD`、快照通道与容器克隆重试；无 ffmpeg、无网络）；
+实测（v0.1.23 复测）：`node app/test/run.js` → **PASS 297 ｜ FAIL 0**（含 17 项 web 视图守卫静态断言与 17 项更新链路守卫断言：`nextFrame()` 必须带 setTimeout 兜底、强制横屏的旋转必须落在内层舞台 `#plStage`（不得写在全屏元素 `#plBox` 上）、任务查询防抖必须走局部重绘 `paintResults`（不得全量重建 `#tkQ` 抢焦点，防抖 300ms，2s 轮询同样只局部重绘）、git 必须走 HTTP/1.1 + 降级重试、`GIT_TERMINAL_PROMPT=0`、快进用本地 `FETCH_HEAD`、快照通道与容器克隆重试；无 ffmpeg、无网络）；
 `node app/test/update-manager.mjs` → 全部通过（mock GitHub，离线；P/Q/R 三组新增：传输层降级参数与报错分级、fetch 参数只认配置的更新源、快照地址推导与标记读写、tar.gz 解析落地（含超长路径 pax/GNU longname））；
 `node app/test/update-git-flow.mjs` → 全部通过（架构 B 容器更新链路，离线自建 git 场景；新增「拉取失败后的处理流程」：三档降级重试 → 本地快进 → 快照通道覆盖/清理上游已删文件 → 内容指纹安全自愈对齐 git 索引 → 安全闸门拒绝覆盖本地改动）；
 `node app/test/db-sqlite.mjs` → 82 通过（v1→v2 库作废重建等）；
 `node app/test/check-docker.mjs` → ALL PASS（37 项：静态校验打包三件套 + 容器形态环境变量真起一次服务；宿主 8080 被占用时自动换端口冒烟）；
 `node app/test/close-http.mjs` → 全部通过（关闭 HTTP 服务：对照组复现「页面开着 SSE 长连接时 `server.close()` 不回调」，修复后 `closeHttpServer` 在超时兜底内返回）；
-`node app/test/e2e-ui.mjs` → 真实浏览器端到端（需要 Edge/Chrome：登录流程、逐页渲染、切页竞态回归、日志暂停/搜索框、更新页模块顺序、**手机播放器强制横屏**、SSE 与前端报错检查，缺浏览器时自动跳过）。
+`node app/test/e2e-ui.mjs` → 真实浏览器端到端（需要 Edge/Chrome：登录流程、逐页渲染、切页竞态回归、日志暂停/搜索框、任务查询框防抖不重绘、更新页模块顺序、**手机播放器强制横屏**、SSE 与前端报错检查，缺浏览器时自动跳过）。
 **手机播放器「横屏」的回归方式（必须保留）**：把视口模拟为 390×844 手机 + 开 `Emulation.setFocusEmulationEnabled`（无头下页面默认被当后台，合成输入不算用户激活、`requestFullscreen` 会被 `not granted` 拒绝），在真实点击手势里打开播放器拿到**真全屏**，再真实点击「横屏」，断言舞台宽高互换 + `rotate(90deg)`、控制条随之转为竖排。**前提是全屏真的生效**——旋转写在 `#plBox` 上时，全屏元素会被 UA 强制 `transform:none !important`，这个 bug 只在全屏下才复现（旧写法跑该断言会稳定 FAIL，已做负向对照）。
 **时序断言一律「收敛等待」**：不用固定 sleep，改为轮询到「特征词出现 + 连续多次读数一致」再采样，并给足异步预算（更新页签要等 GitHub 检查超时，最长约 16s → 预算 24s），避免负载/网络抖动造成偶发 FAIL；
 `node app/test/e2e-ffmpeg.mjs` → 真实 ffmpeg 录制链路（缺 ffmpeg 时自动跳过）；

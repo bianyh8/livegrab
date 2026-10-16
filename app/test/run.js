@@ -994,6 +994,16 @@ function testViewGuards() {
   ok(/\.pv-mobile\.pv-land\s+\.pv-stage\s*\{[^}]*transform\s*:\s*translate\(-50%,\s*-50%\)\s*rotate\(90deg\)/.test(cssSrc), '强制横屏：舞台宽高互换 + 旋转 90°');
   ok(/@media\s*\(orientation:landscape\)\s*\{[\s\S]{0,220}?\.pv-mobile\.pv-land\s+\.pv-stage\s*\{[^}]*transform\s*:\s*none/.test(cssSrc), '设备真转横屏后由媒体查询取消旋转（不靠 JS 判断方向）');
   ok(!/orientLockFailed|orientLockUnsupported/.test(uiSrc), '方向锁失败不再弹提示（CSS 旋转兜底，不打断观看）');
+
+  /* 任务管理查询框（用户报「刚输入一个字就查询、查询不能正常用」）：
+     搜索防抖必须走局部重绘（paintResults），绝不能触发全量 paint() 重建 #tkQ，
+     否则每敲一个字焦点/光标就丢、无法连续输入；2s 轮询同样只局部重绘，不得抢焦点；
+     防抖 300ms 给足连续输入/中文组词时间。 */
+  const tasksSrc = fs.readFileSync(path.join(APP_DIR, 'web', 'views', 'tasks.js'), 'utf8');
+  ok(/function paintResults\s*\(/.test(tasksSrc), '任务视图有 paintResults()（只重绘结果区，不重建搜索框）');
+  ok(/setTimeout\(\(\) => \{ state\.page = 1; tick\(ctx, false\); \}, 300\)/.test(tasksSrc), '任务查询防抖 = 局部重绘 tick(ctx,false) + 300ms（不再一输就查、不抢焦点）');
+  ok(/ctx\.onRefresh\(\(\) => tick\(ctx, false\)\)/.test(tasksSrc), '任务视图 2s 轮询走局部重绘（不得抢走搜索框焦点）');
+  ok(/function bindTable\s*\(/.test(tasksSrc) && /bindTable\(ctx\)/.test(tasksSrc), '局部重绘后重绑表格行内按钮（换数据不换操作）');
 }
 
 /* 更新链路守卫（静态扫描）：拉取必须在「弱网/代理会改写长连接」的现实下仍然可用，
