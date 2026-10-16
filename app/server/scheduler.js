@@ -909,7 +909,7 @@ export class Scheduler {
         const p = this.platformOf(task.platform);
         if (settings.platformEnabled?.[task.platform] === false) continue;
         // 只有真正要轮询直播间时才打印「开始」，整轮结束（且至少轮询过）再打印「结束」
-        if (!polledAny) { this.logger.info('轮询直播间状态开始：'); polledAny = true; }
+        if (!polledAny) { this.logger.info('轮询直播间状态开始'); polledAny = true; }
         const pollLabel = `${task.anchorName || task.roomId || task.id}（${p?.name || task.platform}）`;
 
         let info;

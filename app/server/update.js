@@ -389,8 +389,8 @@ export class UpdateManager {
       } else {
         this._phase('install', 82, '安装依赖（app 目录）');
       }
-      this._log('INFO', '安装依赖 npm install…');
-      const npmR = await run('npm', ['install'], { cwd: path.join(env.gitRoot, 'app'), timeout: 300000 });
+      this._log('INFO', '安装依赖 npm install --omit=dev…');
+      const npmR = await run('npm', ['install', '--omit=dev', '--no-audit', '--no-fund'], { cwd: path.join(env.gitRoot, 'app'), timeout: 300000 });
       if (!npmR.ok) {
         // 退出码非 0 也算警告（npm 偶发警告但 exit 0 属正常）：带 stderr 尾部便于定位
         const detail = (npmR.err || npmR.out || '').split('\n').slice(-3).join(' ').trim();

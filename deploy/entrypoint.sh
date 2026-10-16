@@ -104,6 +104,16 @@ if [ ! -f "$APP_DIR/server/server.js" ]; then
   APP_DIR="$IMAGE_APP"
 fi
 
+# 自愈：运行目录缺少 node_modules（被某次失败的 npm install 破坏/清空）时，
+# 先从镜像内置的 /app/node_modules 原样拷回一份好的原生模块（better-sqlite3 等），
+# 避免「启动即崩溃 / 页面打不开」。仅当缺失时拷贝，已存在则不触碰（保留 npm install 的成果）。
+if [ ! -d "$APP_DIR/node_modules" ] && [ -d "$IMAGE_APP/node_modules" ]; then
+  log "运行目录缺少 node_modules，从镜像内置恢复：$IMAGE_APP/node_modules → $APP_DIR/node_modules"
+  evt WARN "运行目录缺少 node_modules，从镜像内置恢复（免现场编译 better-sqlite3）"
+  cp -a "$IMAGE_APP/node_modules" "$APP_DIR/node_modules" 2>/dev/null || \
+    log "node_modules 恢复失败，将依赖后续 npm install"
+fi
+
 cd "$APP_DIR" || { log "无法进入 $APP_DIR"; exit 1; }
 
 # 依赖校正：有网时补齐/升级依赖；失败（离线等）不阻断启动，继续使用现有 node_modules
