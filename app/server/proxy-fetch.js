@@ -77,29 +77,52 @@ function connectToProxy(proxyUrl) {
   });
 }
 
-/** 经代理向目标发起 CONNECT 隧道：返回到目标的 socket（secure 目标再包一层 TLS）。 */
+/** 经代理向目标发起 CONNECT 隧道：返回到目标的 socket（secure 目标再包一层 TLS）。
+ *  注意：这里手写 CONNECT 握手，不用 http.request({socket})——
+ *  Node 的 http 客户端不会对「已连接的 socket」重新触发 connect 事件去写请求头，
+ *  用 http.request 传 socket 会导致 CONNECT 根本写不出去（表现为「开了代理却连不通」）。 */
 function createTunnel(proxyUrl, targetHost, targetPort, secure) {
   return connectToProxy(proxyUrl).then((proxySocket) => new Promise((resolve, reject) => {
-    const creq = http.request({
-      socket: proxySocket, // 复用与代理的连接
-      agent: false,
-      method: 'CONNECT',
-      path: `${targetHost}:${targetPort}`,
-      headers: { Host: `${targetHost}:${targetPort}` },
-      timeout: 15000,
-    });
-    creq.on('connect', (res, socket) => {
-      if (res.statusCode !== 200) { socket.destroy?.(); reject(new Error(`代理 CONNECT 失败：HTTP ${res.statusCode}`)); return; }
+    let buf = Buffer.alloc(0);
+    let settled = false;
+    function cleanup() {
+      proxySocket.removeListener('data', onData);
+      proxySocket.removeListener('error', onErr);
+    }
+    function fail(err) {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      try { proxySocket.destroy(); } catch { /* ignore */ }
+      reject(err);
+    }
+    function done(sock) {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve(sock);
+    }
+    function onData(chunk) {
+      buf = Buffer.concat([buf, chunk]);
+      const idx = buf.indexOf('\r\n\r\n');
+      if (idx < 0) { if (buf.length > 16384) fail(new Error('代理 CONNECT 响应头过大')); return; }
+      const statusLine = buf.slice(0, idx).toString('latin1').split('\r\n')[0] || '';
+      const code = Number((/^HTTP\/\d\.\d\s+(\d{3})/.exec(statusLine) || [])[1]) || 0;
+      const rest = buf.slice(idx + 4);
+      if (code < 200 || code >= 300) { fail(new Error(`代理 CONNECT 失败：${statusLine || '无响应'}`)); return; }
+      if (rest.length) { try { proxySocket.pause(); proxySocket.unshift(rest); } catch { /* 极少见：忽略 */ } } // 头部之后若已带数据，退回给后续读取
       if (secure) {
-        const tlsSock = tls.connect({ socket, servername: targetHost }, () => resolve(tlsSock));
-        tlsSock.on('error', reject);
+        const tlsSock = tls.connect({ socket: proxySocket, servername: targetHost }, () => done(tlsSock));
+        tlsSock.on('error', fail);
       } else {
-        resolve(socket);
+        done(proxySocket);
       }
-    });
-    creq.on('error', reject);
-    creq.on('timeout', () => { creq.destroy(new Error('代理 CONNECT 超时')); });
-    creq.end();
+    }
+    function onErr(e) { fail(e); }
+    proxySocket.on('data', onData);
+    proxySocket.on('error', onErr);
+    if (typeof proxySocket.setTimeout === 'function') proxySocket.setTimeout(15000, () => fail(new Error('代理 CONNECT 超时')));
+    proxySocket.write(`CONNECT ${targetHost}:${targetPort} HTTP/1.1\r\nHost: ${targetHost}:${targetPort}\r\n\r\n`);
   }));
 }
 

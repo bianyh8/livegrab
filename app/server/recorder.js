@@ -28,10 +28,13 @@ export function reconnectDelay({ blocked = false, attempt = 1 } = {}) {
 }
 
 export class Recorder extends EventEmitter {
-  constructor({ task, settings, naming, logger, resolveStream, mediaMod = media, probeOffline = null, metaDir = null }) {
+  constructor({ task, settings, getSettings, naming, logger, resolveStream, mediaMod = media, probeOffline = null, metaDir = null }) {
     super();
     this.task = task;
-    this.settings = settings;
+    // settings 实时读取：store.updateSettings 用 deepMerge 产出「新对象」替换 store.settings，
+    // 若在任务启动时快照，运行中开关「按平台代理」后，下一次重连/重新解析仍会用旧值。
+    // 统一走 getSettings()（scheduler 注入 () => store.settings），保守兼容直接传 settings 的旧用法。
+    this._getSettings = typeof getSettings === 'function' ? getSettings : () => settings || {};
     this.naming = naming;
     this.logger = logger;
     this.resolveStream = resolveStream;
@@ -58,6 +61,8 @@ export class Recorder extends EventEmitter {
     this._detailTick = 0;     // 周期详情日志计数
     this._segStartAt = null;  // 当前分段开始时间，用于实时「今日已录时长」
   }
+
+  get settings() { return this._getSettings(); }
 
   _meta() { return { taskId: this.task.id, taskName: this.task.anchorName || this.task.title || this.task.id }; }
 

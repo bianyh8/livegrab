@@ -19,7 +19,8 @@ import { Auth, parseCookies } from '../server/auth.js';
 import { PlayManager } from '../server/play.js';
 import * as resolvers from '../server/resolvers/index.js';
 import * as proxyFetch from '../server/proxy-fetch.js';
-import { isPullBlocked, reconnectDelay } from '../server/recorder.js';
+import { buildRecordArgs } from '../server/media.js';
+import { isPullBlocked, reconnectDelay, Recorder } from '../server/recorder.js';
 import { sortFileRows } from '../server/file-order.js';
 import { byteLength, parseRange, safeJoin, formatBytes, formatDuration, HttpError, uid, VERSION, errText } from '../server/util.js';
 import { seekRatio } from '../web/ui.js';
@@ -716,6 +717,37 @@ function testFileOrder() {
   const noTs = [row('s_x', null, 'segment', 0, 'x.ts'), row('s_y', '2026-10-16T10:00:00Z', 'segment', 0, 'y.ts')];
   eq(sortFileRows(noTs.slice())[0].f.name, 'y.ts', '缺时间的排在有时间的之后');
 }
+
+/* 代理开关全链路（用户要求：打开代理后抖音解析与录制都走代理）。
+   关键点：Recorder 必须实时读取 store.settings——updateSettings 用 deepMerge 产出新对象替换，
+   若启动时快照，运行中开关代理后重连/重新解析仍用旧值。 */
+function testRecorderLiveProxy() {
+  suite('代理开关：录制器实时读取 settings（打开后抖音即走代理）');
+  const ff = { info() {}, warn() {}, error() {}, debug() {} };
+  const task = { id: 't_liveproxy', platform: 'douyin', container: 'ts', segmentMode: 'time', quality: 'origin' };
+  let settings = { platformUseProxy: { douyin: false }, proxy: 'http://127.0.0.1:7890' };
+  const rec = new Recorder({ task, getSettings: () => settings, naming: {}, logger: ff, resolveStream: async () => ({}) });
+
+  eq(rec.settings.proxy, 'http://127.0.0.1:7890', '构造后可读到当前 settings');
+  eq(proxyFetch.effectiveProxyForPlatform('douyin', rec.settings), '', '开关未开 → 直连（空）');
+
+  // 模拟用户在设置里打开抖音代理：updateSettings 用「新对象」替换 store.settings
+  settings = { platformUseProxy: { douyin: true }, proxy: 'http://127.0.0.1:7890' };
+  eq(rec.settings.platformUseProxy.douyin, true, '替换 settings 对象后，录制器仍读到最新开关（非快照）');
+  eq(proxyFetch.effectiveProxyForPlatform('douyin', rec.settings), 'http://127.0.0.1:7890', '打开代理后抖音解析/录制生效代理=该地址');
+  eq(proxyFetch.effectiveProxyForPlatform('bilibili', rec.settings), '', '其它平台未开 → 仍直连');
+
+  // 清空全局代理地址：即使开关开着也应直连（需求：开启且已维护代理才走）
+  settings = { platformUseProxy: { douyin: true }, proxy: '' };
+  eq(proxyFetch.effectiveProxyForPlatform('douyin', rec.settings), '', '无全局代理地址 → 直连');
+
+  // 录制侧：开启代理时 ffmpeg 参数必须带 -http_proxy（拉流走代理）；未开则不带
+  const base = { streamUrl: 'http://x/y.m3u8', outputPattern: 'o_%03d.ts', container: 'ts', segmentMode: 'time', segmentMinutes: 1800, headers: {}, audioOnly: false, userAgent: '', isHttp: true };
+  const withPx = buildRecordArgs({ ...base, proxy: 'http://127.0.0.1:7890' });
+  const pi = withPx.indexOf('-http_proxy');
+  ok(pi >= 0 && withPx[pi + 1] === 'http://127.0.0.1:7890', '开启代理时 ffmpeg 参数含 -http_proxy <代理地址>（录制拉流走代理）');
+  ok(buildRecordArgs({ ...base, proxy: '' }).indexOf('-http_proxy') < 0, '未开代理时不含 -http_proxy（直连）');
+}
 // ============ 5. 并发排队（D16） ============
 // ============ 4b. 并发重复启动保护 ============
 async function testPullBlockedBackoff() {
@@ -1268,6 +1300,10 @@ async function testProxy() {
   ok(/getProxy/.test(upd) && /_proxy\(\)/.test(upd), 'UpdateManager 注入 getProxy 读取全局代理');
   ok(/await this\._fetch\(/.test(upd) && /httpGetViaProxy|httpGetBufferViaProxy/.test(upd), 'GitHub API / 快照下载经代理客户端（无代理时回退 fetch）');
   ok(/HTTPS_PROXY/.test(upd) && /HTTP_PROXY/.test(upd), 'git fetch 经 HTTPS_PROXY/HTTP_PROXY 走代理');
+
+  // CONNECT 隧道必须手写握手：用 http.request({socket}) 时 Node 不会写 CONNECT（开了代理反而连不通）
+  const pf = fs.readFileSync(path.join(APP_DIR, 'server', 'proxy-fetch.js'), 'utf8');
+  ok(/CONNECT \$\{targetHost\}:\$\{targetPort\}/.test(pf), 'CONNECT 隧道用手写握手（不依赖 http.request 的 socket 选项）');
 }
 
 // ============ 主流程 ============
@@ -1275,7 +1311,7 @@ async function testProxy() {
   console.log(`LiveGrab 测试开始（临时目录 ${tmpRoot}）`);
   await rmrf(tmpRoot);
   await fsp.mkdir(tmpRoot, { recursive: true });
-  const suites = [testUtil, testNaming, testStore, testResolvers, testAuth, testRecordChain, testRemuxFollowGlobal, testPullBlockedBackoff, testConcurrentStart, testRepeatSessionNaming, testTodayStats, testQueue, testHttp, testViewGuards, testUpdateGuards, testProxy, testSegmentEndReason, testSegmentGuards, testFfmpegGuards, testFileScanGuards, testFileOrder];
+  const suites = [testUtil, testNaming, testStore, testResolvers, testAuth, testRecordChain, testRemuxFollowGlobal, testPullBlockedBackoff, testConcurrentStart, testRepeatSessionNaming, testTodayStats, testQueue, testHttp, testViewGuards, testUpdateGuards, testProxy, testSegmentEndReason, testSegmentGuards, testFfmpegGuards, testFileScanGuards, testFileOrder, testRecorderLiveProxy];
   for (const s of suites) {
     try { await s(); } catch (e) {
       failed++;

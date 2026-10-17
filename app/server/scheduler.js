@@ -450,14 +450,14 @@ export class Scheduler {
     await this.store.addSession(session);
 
     const recorder = new Recorder({
-      task, settings, naming: this.store.naming, logger: this.logger, resolveStream,
+      task, settings, getSettings: () => this.store.settings, naming: this.store.naming, logger: this.logger, resolveStream,
       mediaMod: this.mediaMod || undefined,
       metaDir: path.join(this.store.configDir, 'meta', task.id), // seg 列表等临时文件放元数据目录，不进录制目录
       // 下播检测：ffmpeg 意外退出时先探一次直播状态，主播已下播就直接正常收尾，不进入断流重连
       probeOffline: async () => {
         try {
           const info = await this._probe(task.sourceUrl || `${task.platform}:${task.roomId}`, {
-            platform: task.platform, settings, logger: this.logger,
+            platform: task.platform, settings: this.store.settings, logger: this.logger,
           });
           return info.liveStatus === 'offline';
         } catch { return false; }
