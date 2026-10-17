@@ -15,7 +15,7 @@ import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import zlib from 'node:zlib';
-import { httpGetViaProxy } from './proxy-fetch.js';
+import { httpGetViaProxy, normalizeProxy } from './proxy-fetch.js';
 
 const UA = 'LiveGrab-update-manager';
 const DEFAULT_REPO = process.env.LIVEGRAB_REPO || 'bianyh8/livegrab';
@@ -297,7 +297,7 @@ export class UpdateManager {
   /** 系统更新代理地址：由 server.js 注入（读取 store.settings.proxy）。空表示不使用代理。 */
   _proxy() {
     const v = (this.getProxy && this.getProxy()) || '';
-    return v ? String(v).trim() : '';
+    return v ? normalizeProxy(v) : '';
   }
 
   /** 统一的 HTTP GET：设置了代理则经代理（零依赖 CONNECT 隧道），否则走原生 fetch。
@@ -406,13 +406,28 @@ export class UpdateManager {
       env.HTTP_PROXY = proxy;
       env.https_proxy = proxy;
       env.http_proxy = proxy;
+      // 不同 git/curl 版本对代理环境变量的支持不一致（尤其 socks 代理常只认 ALL_PROXY）；
+      // 一并注入，并清空可能存在的 NO_PROXY，避免 github.com 被意外绕过代理导致“有时能过、有时直连失败”。
+      env.ALL_PROXY = proxy;
+      env.all_proxy = proxy;
+      env.NO_PROXY = '';
+      env.no_proxy = '';
     }
     return env;
   }
 
+  /** git 传输层的显式代理参数：用 -c 写进本次命令，最可靠——
+   *  只依赖 HTTPS_PROXY/HTTP_PROXY 环境变量时，部分 git/curl 组合（尤其 socks5）不会生效，
+   *  表现为“配了代理仍偶尔拉取失败”。这里对 http/https 都显式指定，HTTP 与 SOCKS 代理均可用。 */
+  _gitProxyArgs() {
+    const proxy = this._proxy();
+    if (!proxy) return [];
+    return ['-c', `http.proxy=${proxy}`, '-c', `https.proxy=${proxy}`];
+  }
+
   /** 组装一次 fetch 的完整参数（传输层抗抖动参数 + 认证参数 + 兜底超时）。 */
   _buildFetchArgs(gitUrl, branch, { legacyRefs = false } = {}) {
-    return [...gitTransportArgs({ legacyRefs }), ...this._gitAuthArgs(), 'fetch', gitUrl, branch];
+    return [...this._gitProxyArgs(), ...gitTransportArgs({ legacyRefs }), ...this._gitAuthArgs(), 'fetch', gitUrl, branch];
   }
 
   /** git 拉取（带降级重试）。返回 { ok, code, out, err, attempt, label, tried }。

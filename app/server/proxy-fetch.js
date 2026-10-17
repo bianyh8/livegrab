@@ -18,12 +18,21 @@ export const DESKTOP_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit
 
 /* ---------- 按平台计算「生效代理」 ---------- */
 
+/** 归一化代理地址：缺协议时默认补 http://。
+ *  git 的 -c http.proxy、ffmpeg 的 -http_proxy、本文件的 CONNECT 隧道（new URL）都要求带协议；
+ *  用户常只填 `127.0.0.1:7890`，不补协议会直接抛 Invalid URL（表现为“配了代理却用不了/时好时坏”）。 */
+export function normalizeProxy(proxy) {
+  const s = String(proxy || '').trim();
+  if (!s) return '';
+  return /^[a-z][a-z0-9+.-]*:\/\//i.test(s) ? s : `http://${s}`;
+}
+
 /** 生效代理 = 该平台开关开启 且 全局代理已配置；否则返回空（走直连）。
  *  对应需求：「启用并且维护了代理的话，则使用代理连接，否则正常连接」。 */
 export function effectiveProxyForPlatform(platformId, settings) {
   const on = !!(settings && settings.platformUseProxy && settings.platformUseProxy[platformId]);
   const proxy = (settings && settings.proxy) || '';
-  return on && proxy ? proxy : '';
+  return on && proxy ? normalizeProxy(proxy) : '';
 }
 
 /* ---------- 解析器会话内生效代理（AsyncLocalStorage，并发安全） ---------- */

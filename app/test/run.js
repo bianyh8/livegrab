@@ -1289,6 +1289,12 @@ async function testProxy() {
   eq(effectiveProxyForPlatform('douyin', { platformUseProxy: { douyin: true }, proxy: 'http://1.2.3.4:7890' }), 'http://1.2.3.4:7890', '开关开且已配代理 → 返回该代理');
   eq(effectiveProxyForPlatform('bili', { platformUseProxy: { douyin: true }, proxy: 'http://1.2.3.4:7890' }), '', '其它平台开关未开 → 直连（空）');
 
+  // 代理地址归一化：缺协议自动补 http://（否则 new URL / git -c http.proxy 都可能异常）
+  eq(proxyFetch.normalizeProxy('127.0.0.1:7890'), 'http://127.0.0.1:7890', '代理缺协议自动补 http://');
+  eq(proxyFetch.normalizeProxy('socks5h://1.2.3.4:1080'), 'socks5h://1.2.3.4:1080', '带协议的代理原样保留');
+  eq(proxyFetch.normalizeProxy('   '), '', '空代理归一化为空');
+  eq(effectiveProxyForPlatform('douyin', { platformUseProxy: { douyin: true }, proxy: '127.0.0.1:7890' }), 'http://127.0.0.1:7890', '生效代理缺协议自动补全');
+
   // runWithProxy：空代理直接执行；有代理时注入 AsyncLocalStorage 上下文
   const r1 = await runWithProxy('', async () => proxyStore.getStore()?.proxy || '');
   eq(r1, '', 'runWithProxy 空代理：上下文无代理，直接执行');
@@ -1308,6 +1314,9 @@ async function testProxy() {
   ok(/getProxy/.test(upd) && /_proxy\(\)/.test(upd), 'UpdateManager 注入 getProxy 读取全局代理');
   ok(/await this\._fetch\(/.test(upd) && /httpGetViaProxy|httpGetBufferViaProxy/.test(upd), 'GitHub API / 快照下载经代理客户端（无代理时回退 fetch）');
   ok(/HTTPS_PROXY/.test(upd) && /HTTP_PROXY/.test(upd), 'git fetch 经 HTTPS_PROXY/HTTP_PROXY 走代理');
+  ok(/_gitProxyArgs/.test(upd) && /http\.proxy=\$\{proxy\}/.test(upd) && /https\.proxy=\$\{proxy\}/.test(upd), 'git fetch 显式 -c http.proxy/https.proxy（比环境变量更稳，兼容 socks）');
+  ok(/ALL_PROXY/.test(upd) && /NO_PROXY/.test(upd), 'git 环境注入 ALL_PROXY 并清空 NO_PROXY（防 socks 不生效/被绕过）');
+  ok(/return \[\.\.\.this\._gitProxyArgs\(\)/.test(upd), '拉取参数实际带上代理 -c');
 
   // CONNECT 隧道必须手写握手：用 http.request({socket}) 时 Node 不会写 CONNECT（开了代理反而连不通）
   const pf = fs.readFileSync(path.join(APP_DIR, 'server', 'proxy-fetch.js'), 'utf8');
