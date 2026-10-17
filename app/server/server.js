@@ -11,6 +11,7 @@ import { cleanupLegacyFiles } from './legacy-cleanup.js';
 import { Logger } from './logger.js';
 import { Auth } from './auth.js';
 import { Storage, playModeOf } from './storage.js';
+import { sortFileRows } from './file-order.js';
 import { Notifier } from './notify.js';
 import { Scheduler } from './scheduler.js';
 import { PlayManager } from './play.js';
@@ -465,6 +466,10 @@ async function main() {
       }
       return true;
     });
+
+    // 稳定排序后再分页：最新录制在前；同场次聚合、分段按序号在前、派生文件其后。
+    // 消除「重启/刷新/翻页顺序乱跳」（store.sessions 运行期 unshift、重启后读库顺序不一致）。
+    sortFileRows(filtered);
 
     const total = filtered.length;
     const pages = Math.max(1, Math.ceil(total / pageSize));

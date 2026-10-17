@@ -20,6 +20,7 @@ import { PlayManager } from '../server/play.js';
 import * as resolvers from '../server/resolvers/index.js';
 import * as proxyFetch from '../server/proxy-fetch.js';
 import { isPullBlocked, reconnectDelay } from '../server/recorder.js';
+import { sortFileRows } from '../server/file-order.js';
 import { byteLength, parseRange, safeJoin, formatBytes, formatDuration, HttpError, uid, VERSION, errText } from '../server/util.js';
 import { seekRatio } from '../web/ui.js';
 import * as fakeMedia from './fake-media.mjs';
@@ -669,6 +670,50 @@ function testFileScanGuards() {
   ok(/storage\.scanThrottled\(/.test(srv), 'GET /api/files 主动触发节流扫描（页面打开即对账）');
   ok(/changed\s*=\s*added\s*\|\|\s*updated\s*\|\|\s*missing\s*\|\|\s*cleaned/.test(storage), '无变化时不落库/不广播（避免周期扫描刷屏与无谓写库）');
 }
+
+/* 文件库排序守卫：用户反馈「文件排序很混乱」。
+   根因：/api/files 铺平后不排序直接分页；store.sessions 运行期 unshift（新→旧）、重启读库
+   却是旧→新/任意，导致刷新/重启/翻页顺序乱跳。file-order.js 给出确定性顺序：
+   最新在前 → 同场次聚合 → 分段按序号在前 → 派生文件其后 → 文件名兜底。 */
+function testFileOrder() {
+  suite('文件库排序（确定性、最新在前、同场次聚合）');
+  const row = (sid, startedAt, kind, segIndex, name, tag) => ({ s: { id: sid, startedAt }, f: { kind, segmentIndex: segIndex, name }, tag });
+
+  // ① 最新录制在前（跨场次）
+  const cross = [
+    row('s_old', '2026-10-01T10:00:00Z', 'segment', 0, 'old.ts'),
+    row('s_new', '2026-10-15T10:00:00Z', 'segment', 0, 'new.ts'),
+    row('s_mid', '2026-10-10T10:00:00Z', 'segment', 0, 'mid.ts'),
+  ];
+  eq(sortFileRows(cross.slice()).map((r) => r.s.id).join(','), 's_new,s_mid,s_old', '跨场次按录制开始时间倒序（最新在前）');
+
+  // ② 同一场次聚合 + 分段按序号升序 + 派生文件排在分段之后
+  const mixed = [
+    row('s1', '2026-10-15T10:00:00Z', 'segment', 2, 'a_003.ts'),
+    row('s1', '2026-10-15T10:00:00Z', 'mp4', 0, 'a.mp4', 'MP4'),
+    row('s1', '2026-10-15T10:00:00Z', 'segment', 0, 'a_001.ts'),
+    row('s1', '2026-10-15T10:00:00Z', 'segment', 1, 'a_002.ts'),
+    row('s1', '2026-10-15T10:00:00Z', 'merged', 0, 'a_merged.ts', '合并'),
+  ];
+  eq(sortFileRows(mixed.slice()).map((r) => r.f.name).join(','), 'a_001.ts,a_002.ts,a_003.ts,a.mp4,a_merged.ts', '同场次：分段升序在前，派生(mp4)居中，合并最后');
+
+  // ③ 确定性：任意初始顺序 → 相同结果
+  const base = [
+    row('s1', '2026-10-15T10:00:00Z', 'segment', 1, 'a_002.ts'),
+    row('s2', '2026-10-16T10:00:00Z', 'segment', 0, 'b.ts'),
+    row('s1', '2026-10-15T10:00:00Z', 'segment', 0, 'a_001.ts'),
+  ];
+  const p1 = sortFileRows(base.slice()).map((r) => r.f.name).join(',');
+  const p2 = sortFileRows(base.slice().reverse()).map((r) => r.f.name).join(',');
+  const p3 = sortFileRows([base[1], base[2], base[0]]).map((r) => r.f.name).join(',');
+  eq(p1, p2, '正序输入与倒序输入得到相同顺序（确定性）');
+  eq(p1, p3, '打乱输入得到相同顺序（确定性）');
+  eq(p1, 'b.ts,a_001.ts,a_002.ts', '最新场次在前，同场次分段升序');
+
+  // ④ 缺 startedAt 的（未登记/推断失败）排到最后
+  const noTs = [row('s_x', null, 'segment', 0, 'x.ts'), row('s_y', '2026-10-16T10:00:00Z', 'segment', 0, 'y.ts')];
+  eq(sortFileRows(noTs.slice())[0].f.name, 'y.ts', '缺时间的排在有时间的之后');
+}
 // ============ 5. 并发排队（D16） ============
 // ============ 4b. 并发重复启动保护 ============
 async function testPullBlockedBackoff() {
@@ -1228,7 +1273,7 @@ async function testProxy() {
   console.log(`LiveGrab 测试开始（临时目录 ${tmpRoot}）`);
   await rmrf(tmpRoot);
   await fsp.mkdir(tmpRoot, { recursive: true });
-  const suites = [testUtil, testNaming, testStore, testResolvers, testAuth, testRecordChain, testRemuxFollowGlobal, testPullBlockedBackoff, testConcurrentStart, testRepeatSessionNaming, testTodayStats, testQueue, testHttp, testViewGuards, testUpdateGuards, testProxy, testSegmentEndReason, testSegmentGuards, testFfmpegGuards, testFileScanGuards];
+  const suites = [testUtil, testNaming, testStore, testResolvers, testAuth, testRecordChain, testRemuxFollowGlobal, testPullBlockedBackoff, testConcurrentStart, testRepeatSessionNaming, testTodayStats, testQueue, testHttp, testViewGuards, testUpdateGuards, testProxy, testSegmentEndReason, testSegmentGuards, testFfmpegGuards, testFileScanGuards, testFileOrder];
   for (const s of suites) {
     try { await s(); } catch (e) {
       failed++;

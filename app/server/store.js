@@ -451,7 +451,9 @@ export class Store {
         external.push(f);
       }
     }
-    state.sessions = db.prepare('SELECT * FROM sessions').all()
+    // 稳定载入顺序：按录制开始时间倒序（最新在前），与运行期 addSession 的 unshift 语义一致；
+    // 避免「重启前后 store.sessions 顺序反转」导致文件库等依赖该顺序的地方出现乱序。
+    state.sessions = db.prepare('SELECT * FROM sessions ORDER BY started_at DESC, id DESC').all()
       .map((r) => rowToSession(r, bySession.get(r.id) || []));
     state.external = external;
 
