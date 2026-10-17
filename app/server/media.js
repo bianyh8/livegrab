@@ -22,7 +22,14 @@ export function buildRecordArgs({
   audioOnly = false, proxy = '', userAgent = '', isHttp = true,
 }) {
   const args = ['-hide_banner', '-loglevel', 'info', '-nostats'];
-  if (isHttp) args.push('-reconnect', '1', '-reconnect_streamed', '1', '-reconnect_delay_max', '5');
+  /* 直播流加固（对齐成熟项目 StreamCap 的 ffmpeg 参数集，逐项说明见下） */
+  args.push(
+    '-rw_timeout', '15000000',   // 15s 读超时：连接卡死不发数据时 ffmpeg 会退出走重连，绝不无限假挂
+    '-analyzeduration', '20000000',
+    '-probesize', '10000000',
+    '-fflags', '+discardcorrupt+igndts', // 丢弃损坏包 + 忽略不连续 DTS：时间戳混乱时保分段时长准确
+  );
+  if (isHttp) args.push('-reconnect', '1', '-reconnect_streamed', '1', '-reconnect_at_eof', '-reconnect_delay_max', '5');
   if (proxy) args.push('-http_proxy', proxy);
   if (userAgent) args.push('-user_agent', userAgent);
   args.push(...headerArgs(headers));
@@ -44,7 +51,18 @@ export function buildRecordArgs({
     '-segment_format', SEG_FORMAT[container] || 'mpegts',
     '-reset_timestamps', '1',
     '-segment_start_number', String(Math.max(1, Number(startNumber) || 1)),
+    /* 输出侧时间戳与缓冲加固：负 DTS / 33 位 PTS 回绕（长直播）都会打乱轮转判断；
+       flush_packets 保证每个分段及时落盘；sn/dn 丢掉字幕与数据流（否则 -c copy 偶发失败）。 */
+    '-correct_ts_overflow', '1',
+    '-avoid_negative_ts', '1',
+    '-flush_packets', '1',
+    '-max_muxing_queue_size', '1024',
+    '-sn', '-dn',
   );
+  if ((SEG_FORMAT[container] || 'mpegts') === 'mpegts') {
+    // 每个分段重发 PAT/PMT 头，播放器/工具单独打开任一分段都能立即解码
+    args.push('-mpegts_flags', '+resend_headers', '-muxdelay', '0', '-muxpreload', '0');
+  }
   if (segmentListPath) args.push('-segment_list', segmentListPath, '-segment_list_type', 'csv');
   args.push('-y', outputPattern);
   return args;

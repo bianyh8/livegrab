@@ -57,7 +57,7 @@ export async function resolveRoom({ roomId, settings, logger, probe = false }) {
     anchorName,
     title: d.title || '',
     avatar,
-    liveStatus: Number(d.live_status) === 1 ? 'live' : 'offline',
+    liveStatus: Number(d.live_status) === 1 ? 'live' : (d.live_status == null ? 'unknown' : 'offline'),
     online: d.online ?? null,
     qualityOptions: [
       { id: 'origin', label: '原画', note: '最高可用' },

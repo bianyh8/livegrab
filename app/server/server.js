@@ -338,7 +338,7 @@ async function main() {
   route('GET', '/api/tasks/:id', async (req) => {
     const t = store.getTask(req.params.id);
     if (!t) throw new HttpError('NOT_FOUND', '任务不存在', 404);
-    return scheduler.serializeTask(t);
+    return scheduler.serializeTask(t, true); // 详情弹窗要分段明细（含结束原因）
   });
   route('PATCH', '/api/tasks/:id', async (req) => {
     const body = await readBody(req);

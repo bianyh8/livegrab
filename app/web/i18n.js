@@ -698,6 +698,8 @@ const DEFAULT_DICT = {
   "tasks.searchPh": "搜索主播 / 房间号 / 标题…",
   "tasks.segByTimeCard": "按时间分段",
   "tasks.segDuration": "时长",
+  "tasks.segEarlyEnd": "提前结束",
+  "tasks.segEarlyTip": "本段未按设定时长自然结束：提前收尾的原因见徽标（断流重连 / 主播下播 / 手动停止）。",
   "tasks.segHeader": "分段（{0}）",
   "tasks.segIndex": "序号",
   "tasks.segMinutesLabel": "每段时长（秒）",

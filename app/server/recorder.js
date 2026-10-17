@@ -213,7 +213,10 @@ export class Recorder extends EventEmitter {
       this.closed.add(s.index);
       this._cumBase += st.size;
       const durationSec = await this.media.probeDuration(s.path, { ffprobePath: this.settings.ffprobePath });
-      this.emit('segment-close', { index: s.index, path: s.path, name: s.name, bytes: st.size, endedAt: nowIso(), durationSec: durationSec || 0 });
+      // 结束原因：ffmpeg 进程还活着 = 按 segment_time 自然轮转（timeout）；
+      // 进程已退出（断流重连前/收尾中）= 被提前收尾（stopped），段长短由断流决定而非设定时长
+      const reason = this.child ? 'timeout' : 'stopped';
+      this.emit('segment-close', { index: s.index, path: s.path, name: s.name, bytes: st.size, endedAt: nowIso(), durationSec: durationSec || 0, reason });
     }
     const cur = segs[segs.length - 1];
     if (!this.currentSegment || this.currentSegment.path !== cur.path) this._segStartAt = Date.now();
@@ -412,7 +415,7 @@ export class Recorder extends EventEmitter {
       const st = await fsp.stat(s.path).catch(() => null);
       if (!st || !st.size) continue;
       const durationSec = await this.media.probeDuration(s.path, { ffprobePath: this.settings.ffprobePath });
-      const item = { index: s.index, path: s.path, name: s.name, bytes: st.size, endedAt: nowIso(), durationSec: durationSec || 0 };
+      const item = { index: s.index, path: s.path, name: s.name, bytes: st.size, endedAt: nowIso(), durationSec: durationSec || 0, reason: reason || 'stopped' };
       if (!this.closed.has(s.index)) { this.closed.add(s.index); this.emit('segment-close', item); }
       list.push(item);
     }

@@ -83,7 +83,7 @@ const SESSION_COLS = [
 const FILE_COLS = [
   'path', 'kind', 'name', 'ext', 'bytes', 'status', 'duration_sec', 'width', 'height',
   'thumbnail_path', 'scrape_path', 'task_id', 'session_id', 'source_file_id', 'rel_path',
-  'segment_index', 'created_at', 'completed_at', 'updated_at', 'deleted',
+  'segment_index', 'end_reason', 'created_at', 'completed_at', 'updated_at', 'deleted',
 ];
 const SETTINGS_COLS = [
   'max_concurrency', 'default_quality', 'quality_fallback', 'default_segment_mode', 'default_segment_minutes',
@@ -232,7 +232,7 @@ function fileToRow(session, f, kindOverride = null) {
     task_id: strOrNull(session ? session.taskId : f.taskId),
     session_id: strOrNull(session ? session.id : (f.sessionId || null)),
     source_file_id: strOrNull(f.sourceFileId), rel_path: strOrNull(f.relPath),
-    segment_index: num(f.segmentIndex),
+    segment_index: num(f.segmentIndex), end_reason: strOrNull(f.endReason),
     created_at: strOrNull(f.createdAt), completed_at: strOrNull(f.completedAt),
     updated_at: nowIso(), deleted: 0,
   };
@@ -244,6 +244,7 @@ function rowToFile(r) {
     name: r.name, path: r.path, relPath: r.rel_path, ext: r.ext,
     bytes: r.bytes || 0, durationSec: r.duration_sec || 0, width: r.width || 0, height: r.height || 0,
     status: r.status || 'ok', segmentIndex: r.segment_index || 0,
+    endReason: r.end_reason || null,
     sourceFileId: r.source_file_id || null,
     thumbnailPath: r.thumbnail_path || null, scrapePath: r.scrape_path || null,
     createdAt: r.created_at || null, completedAt: r.completed_at || null,

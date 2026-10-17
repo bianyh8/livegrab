@@ -195,7 +195,7 @@ const ADD = {
   'tasks.csvDuration': '已录时长', 'tasks.csvSize': '文件大小', 'tasks.csvCreated': '创建时间',
   'tasks.exportedOk': '已导出任务清单 CSV', 'tasks.detailTitle': '任务详情', 'tasks.kSource': '源地址', 'tasks.kPoll': '轮询', 'tasks.kReconnect': '重连次数', 'tasks.created': '创建 {0}', 'tasks.segHeader': '分段（{0}）', 'tasks.segIndex': '序号', 'tasks.segName': '文件名',
   'tasks.segDuration': '时长', 'tasks.segSize': '体积',
-  'tasks.noSegs': '暂无分段记录（未开始录制或分段未入库）。', 'tasks.pauseSegment': '暂停本段',
+  'tasks.noSegs': '暂无分段记录（未开始录制或分段未入库）。', 'tasks.segEarlyEnd': '提前结束', 'tasks.segEarlyTip': '本段未按设定时长自然结束：提前收尾的原因见徽标（断流重连 / 主播下播 / 手动停止）。', 'tasks.pauseSegment': '暂停本段',
   'tasks.pauseSegmentDone': '已暂停：本段已结束并入库', 'tasks.stop': '停止', 'tasks.retry': '重试',
   'tasks.qOrigin': '原画', 'tasks.qOriginRes': '1080P60 · 最高画质',
   'tasks.qOriginKbps': '≈ 8000 kbps', 'tasks.qBluray': '蓝光', 'tasks.qBlurayRes': '1080P30',

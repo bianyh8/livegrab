@@ -301,7 +301,7 @@ export async function resolveRoom({ roomId, url = '', settings, logger, probe = 
       anchorName: '',
       title: '',
       avatar: '',
-      liveStatus: status === 2 ? 'live' : 'offline',
+      liveStatus: status === 2 ? 'live' : (status == null ? 'unknown' : 'offline'),
       online: room.stats?.total_user ?? null,
       qualityOptions: [
         { id: 'origin', label: '原画', note: '最高可用' },
@@ -321,7 +321,7 @@ export async function resolveRoom({ roomId, url = '', settings, logger, probe = 
     anchorName: stripEmoji(room.owner?.nickname || ''),
     title: room.title || '',
     avatar: (room.owner?.avatar_thumb?.url_list || [])[0] || '',
-    liveStatus: status === 2 ? 'live' : 'offline',
+    liveStatus: status === 2 ? 'live' : (status == null ? 'unknown' : 'offline'),
     online: room.stats?.total_user ?? null,
     qualityOptions: [
       { id: 'origin', label: '原画', note: '最高可用' },

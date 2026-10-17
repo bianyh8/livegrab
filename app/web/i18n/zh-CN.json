@@ -790,5 +790,7 @@
   "settings.upRestartingSub": "正在加载新版本，预计几秒后自动恢复。页面会自动刷新，请稍候…",
   "settings.upRestarted": "服务已重启，新版本已生效",
   "settings.upApplyConfirmSelf": "将从 GitHub 拉取最新代码并安装依赖，完成后自动重启服务加载新版本（本地与容器部署均支持）。更新期间请勿关闭页面。",
-  "settings.upApplyConfirmManual": "当前部署未检测到代码仓库（git），无法在线更新。点击后将生成手动更新指引：本地请在源码目录执行 git pull 并安装依赖；容器请检查网络与 LIVEGRAB_GITHUB_TOKEN，或重建镜像。更新期间请勿关闭页面。"
+  "settings.upApplyConfirmManual": "当前部署未检测到代码仓库（git），无法在线更新。点击后将生成手动更新指引：本地请在源码目录执行 git pull 并安装依赖；容器请检查网络与 LIVEGRAB_GITHUB_TOKEN，或重建镜像。更新期间请勿关闭页面。",
+  "tasks.segEarlyEnd": "提前结束",
+  "tasks.segEarlyTip": "本段未按设定时长自然结束：提前收尾的原因见徽标（断流重连 / 主播下播 / 手动停止）。"
 }

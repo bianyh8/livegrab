@@ -535,12 +535,15 @@ export class Scheduler {
     }
     const rel = path.relative(this.store.settings.recordRoot, seg.path).split(path.sep).join('/');
     const exists = session.segments.find((f) => f.segmentIndex === seg.index);
+    // 结束原因：timeout=按设定时长自然轮转；stopped/reconnect/offline/user=被提前收尾
+    // （断流重连、主播下播、手动停止）。段长短与设定不符时，这里就是"为什么"的答案。
+    const endReason = seg.reason || 'timeout';
     const item = {
       id: exists?.id || uid('f'), sessionId: session.id, kind: 'segment',
       name: seg.name, path: seg.path, relPath: rel, ext: path.extname(seg.name).replace('.', ''),
       bytes, durationSec: seg.durationSec || 0, width: 0, height: 0,
       createdAt: seg.startedAt || session.startedAt, completedAt: seg.endedAt || nowIso(),
-      status: 'ok', segmentIndex: seg.index,
+      status: 'ok', segmentIndex: seg.index, endReason,
     };
     if (exists) Object.assign(exists, item);
     else session.segments.push(item);
@@ -551,7 +554,16 @@ export class Scheduler {
     task.totalDurationSec = session.durationSec;
     task.segmentIndex = session.segments.length;
     task.currentFile = null;
-    this.logger.info(`分段 #${seg.index} 收尾：${seg.name}（${formatBytes(seg.bytes)} · ${formatDuration(seg.durationSec)}）`, { taskId: task.id, taskName: task.anchorName });
+    // 分段收尾日志：自然轮转一句话带过；提前收尾必须写明原因与时长缺口，
+    // 否则"设了 30 分钟却出了 10 分钟的段"在日志里完全看不出来（真实排查痛点）。
+    const segPlan = this.effective(task);
+    const planSec = segPlan.segmentMode === 'time' ? (Number(segPlan.segmentMinutes) || 0) : 0;
+    if (endReason === 'timeout') {
+      this.logger.info(`分段 #${seg.index} 收尾：${seg.name}（${formatBytes(seg.bytes)} · ${formatDuration(seg.durationSec)}）`, { taskId: task.id, taskName: task.anchorName });
+    } else {
+      const gap = planSec && seg.durationSec ? `，距设定 ${formatDuration(planSec)} 差 ${formatDuration(Math.max(0, planSec - seg.durationSec))}` : '';
+      this.logger.warn(`分段 #${seg.index} 提前收尾（${endReason}）：${seg.name}（${formatBytes(seg.bytes)} · ${formatDuration(seg.durationSec)}${gap}）`, { taskId: task.id, taskName: task.anchorName });
+    }
     // 边录边转封装：每个分段一录完就按配置立即转 MP4（整场结束后 autoRemux 会跳过已转的分段）。
     // 仅在不自动合并时生效（合并需要源 .ts，先合并再统一转封装）。
     // remuxToMp4 取实时生效值（effective）：任务弹窗无任务级开关，恒跟随全局；改全局设置当段生效。
@@ -1023,8 +1035,16 @@ export class Scheduler {
           }
           // 正在录制时检测到主播下播：正常收尾当前分段（reason=offline），不报"录制异常结束"；
           // autoRecord 保持开启，下次开播自动续录。已是 stopping 说明正在收尾，不重复触发。
-          if (task.status === 'recording') {
+          // 注意：只有明确 offline 才停。探测结果 unknown（接口抖动/字段缺失）时**绝不能停录**——
+          // 那会把一场好端端的直播拦腰砍成几段短文件（真实症状：设了 30 分钟却录出
+          // 10-20 分钟的段，且全程没有任何错误信息）。
+          if (info.liveStatus === 'offline' && task.status === 'recording') {
             await this.stopTask(task.id, { reason: 'offline' });
+            continue;
+          }
+          if (info.liveStatus === 'unknown' && task.status === 'recording') {
+            this.logger.warn(`直播状态探测结果不明确（unknown），本场继续录制、按设定时长分段：${pollLabel}`, { taskId: task.id, taskName: task.anchorName });
+            await this.store.saveTask(task);
             continue;
           }
           if (task.status !== 'waiting') {
@@ -1044,7 +1064,7 @@ export class Scheduler {
   }
 
   // ---------- 对外视图 ----------
-  serializeTask(task) {
+  serializeTask(task, withSegments = false) {
     const rec = this.recorders.get(task.id) || this.detached.get(task.id);
     const stats = rec ? rec.getStats() : null;
     const session = this.sessions.get(task.id) || (task.sessionId ? this.store.getSession(task.sessionId) : null);
@@ -1054,6 +1074,12 @@ export class Scheduler {
       avatar: task.avatarFile || null, // 前端读 item.avatar，需与 avatarFile 对齐
       overrides: task.overrides || {},
       qualityLabel: task.qualityLabel || qualityLabel(task.qualityActual || task.quality),
+      // 分段明细只在详情弹窗（GET /api/tasks/:id）带出：列表序列化每 5s 全量跑，不带省开销。
+      // endReason 让「设了 30 分钟却出了 10 分钟的段」在界面上就有答案（断流重连/下播/手动停止）。
+      segments: withSegments && session ? session.segments.map((f) => ({
+        id: f.id, name: f.name, bytes: f.bytes || 0, durationSec: f.durationSec || 0,
+        status: f.status, segmentIndex: f.segmentIndex || 0, endReason: f.endReason || null,
+      })) : undefined,
       live: {
         bytes: stats?.bytes ?? session?.bytes ?? task.totalBytes ?? 0,
         elapsedSec: stats?.elapsedSec ?? 0,

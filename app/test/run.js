@@ -567,6 +567,92 @@ async function testRemuxFollowGlobal() {
   }
 }
 
+// ============ 4c. 分段结束原因（用户报「设了 30 分钟却录出 10-20 分钟的段」） ============
+// 实测 ffmpeg -segment_time 在正常/大起点 PTS/PTS 回跳/FLV/管道无 duration 五类输入下
+// 都精确轮转；短段只可能来自「ffmpeg 进程退出 → 当前段被提前收尾」（断流重连/下播/误停）。
+// 本测试钉死：结束原因必须落进文件记录（UI 徽标）+ 持久化往返 + 详情序列化带出。
+async function testSegmentEndReason() {
+  suite('分段结束原因（提前收尾可观测，探测 unknown 不误停）');
+  const e = await makeEngine('segreason');
+  e.scheduler.stopPolling(); // 本测试只验证登记与序列化，不需要轮询把任务拉起来录
+  try {
+    e.store.settings.remuxToMp4 = false; // 只验登记逻辑，不触发转封装
+    const task = await e.scheduler.createTask({ url: 'https://example.com/sr1.m3u8', platform: 'direct', anchorName: '分段原因测试' });
+    task.segmentMinutes = 1800;
+    await e.store.saveTask(task);
+    const session = { id: 'sess_reason', taskId: task.id, segments: [], extras: [], startedAt: new Date().toISOString(), bytes: 0, durationSec: 0 };
+    const segFile = (i) => path.join(e.recordRoot, `2026-10-17_分段原因_00${i}.ts`);
+    for (const i of [1, 2, 3]) await fsp.writeFile(segFile(i), Buffer.alloc(4096));
+    await e.scheduler._onSegmentClose(task, session, { index: 1, name: path.basename(segFile(1)), path: segFile(1), bytes: 4096, durationSec: 600, reason: 'reconnect' });
+    eq(session.segments.length, 1, '分段已登记');
+    eq(session.segments[0].endReason, 'reconnect', '断流重连前收尾 → endReason=reconnect（详情弹窗显示「提前结束·断流重连」）');
+    await e.scheduler._onSegmentClose(task, session, { index: 2, name: path.basename(segFile(2)), path: segFile(2), bytes: 4096, durationSec: 1800, reason: 'timeout' });
+    eq(session.segments[1].endReason, 'timeout', '按设定时长自然轮转 → endReason=timeout（不显示徽标）');
+    await e.scheduler._onSegmentClose(task, session, { index: 3, name: path.basename(segFile(3)), path: segFile(3), bytes: 4096, durationSec: 1800 });
+    eq(session.segments[2].endReason, 'timeout', '缺省 reason 视为自然轮转（兼容旧调用方）');
+    // 持久化往返：endReason 必须落库（详情弹窗从 files 表重建 segments）
+    task.sessionId = session.id;
+    await e.store.saveTask(task);
+    e.store.state.sessions.push(session);
+    await e.store.saveSession(session);
+    const reopened = await openStore(e.configDir);
+    const rs = reopened.getSession(session.id);
+    eq(rs && rs.segments.find((f) => f.segmentIndex === 1).endReason, 'reconnect', '重开库：endReason 往返存活（files.end_reason 列）');
+    eq(rs && rs.segments.find((f) => f.segmentIndex === 2).endReason, 'timeout', '重开库：自然轮转标记同样存活');
+    // 详情序列化带分段明细；列表序列化不带（每 5s 全量跑，省开销）
+    e.scheduler.store = e.store; // scheduler 仍持旧 store 引用前先对齐（openStore 只用于验证落库）
+    e.store.state.sessions.push(session);
+    const detail = e.scheduler.serializeTask(e.store.getTask(task.id), true);
+    eq(detail.segments.length, 3, '详情序列化带出 3 段明细');
+    eq(detail.segments[0].endReason, 'reconnect', '详情分段带结束原因');
+    eq(e.scheduler.serializeTask(e.store.getTask(task.id)).segments, undefined, '列表序列化不带分段明细');
+  } finally {
+    for (const t of e.store.tasks) t.autoRecord = false;
+    e.scheduler.stopPolling();
+    for (const id of [...e.scheduler.recorders.keys()]) await e.scheduler.stopTask(id).catch(() => {});
+  }
+}
+
+/* 分段链路守卫（静态扫描）：用户报「设了 30 分钟却录出 10-20 分钟的段，且无错误信息」。
+   实测 ffmpeg -segment_time 在五类输入特性下都精确轮转，短段只可能来自
+   「ffmpeg 进程退出 → 当前段被提前收尾」；而探测结果不明确（unknown）时停录
+   会把一场直播拦腰砍成几段且全程无错误信息——这两条都用断言钉死。 */
+function testSegmentGuards() {
+  suite('分段链路守卫');
+  const sched = fs.readFileSync(path.join(APP_DIR, 'server', 'scheduler.js'), 'utf8');
+  const rec = fs.readFileSync(path.join(APP_DIR, 'server', 'recorder.js'), 'utf8');
+  const store = fs.readFileSync(path.join(APP_DIR, 'server', 'store.js'), 'utf8');
+  const db = fs.readFileSync(path.join(APP_DIR, 'server', 'db.js'), 'utf8');
+  const srv = fs.readFileSync(path.join(APP_DIR, 'server', 'server.js'), 'utf8');
+  ok(/info\.liveStatus === 'offline' && task\.status === 'recording'/.test(sched), '轮询只有明确 offline 才停正在录制的任务（unknown/字段缺失不得误停）');
+  ok(/liveStatus === 'unknown' && task\.status === 'recording'/.test(sched), '探测 unknown 时保持录制、只记日志（不把直播拦腰砍成短段）');
+  ok(/this\.child \? 'timeout' : 'stopped'/.test(rec), 'segment-close 带结束原因（进程活着=自然轮转 / 退出=提前收尾）');
+  ok(/const endReason = seg\.reason/.test(sched) && /endReason,/.test(sched), '_onSegmentClose 把结束原因落进文件记录');
+  ok(/end_reason: strOrNull\(f\.endReason\)/.test(store) && /endReason: r\.end_reason/.test(store), 'store end_reason 读写映射齐全（三态持久化）');
+  ok(/ADD COLUMN end_reason/.test(db), 'db 有 end_reason 幂等补列迁移');
+  ok(/serializeTask\(task, withSegments/.test(sched) && /serializeTask\(t, true\)/.test(srv), '详情接口带出分段明细（含结束原因），列表不带');
+  for (const [file, pat] of [['douyin', /status == null \? 'unknown'/], ['bilibili', /d\.live_status == null \? 'unknown'/], ['cn', /room\.show_status == null \? 'unknown'/]]) {
+    const src = fs.readFileSync(path.join(APP_DIR, 'server', 'resolvers', `${file}.js`), 'utf8');
+    ok(pat.test(src), `${file} 探测字段缺失返回 unknown（不得当成未开播）`);
+  }
+}
+
+/* ffmpeg 直播加固参数守卫：对齐成熟项目 StreamCap 的参数集（2026-10-17 逐项对比）。
+   缺这些参数的真实症状：连接卡死时 ffmpeg 无限假挂（UI 显示录制中但不落盘）、
+   损坏包/不连续 DTS 打乱轮转判断、TS 分段缺 PAT/PMT 头个别播放器打不开。 */
+function testFfmpegGuards() {
+  suite('ffmpeg 直播加固参数（对齐 StreamCap）');
+  const media = fs.readFileSync(path.join(APP_DIR, 'server', 'media.js'), 'utf8');
+  ok(/-rw_timeout', '15000000'/.test(media), 'rw_timeout 15s：连接卡死不死等（退出走重连，不假挂）');
+  ok(/\+discardcorrupt\+igndts/.test(media), 'fflags 丢弃损坏包 + 忽略不连续 DTS（保轮转判断准确）');
+  ok(/-reconnect_at_eof/.test(media), 'ffmpeg 内置 reconnect_at_eof');
+  ok(/-correct_ts_overflow', '1'/.test(media) && /-avoid_negative_ts', '1'/.test(media), '输出时间戳修正（33 位回绕 / 负 DTS）');
+  ok(/-flush_packets', '1'/.test(media), 'flush_packets 每段及时落盘');
+  ok(/-max_muxing_queue_size', '1024'/.test(media), 'muxing 队列上限（高码率不丢包）');
+  ok(/'-sn', '-dn'/.test(media), '丢弃字幕/数据流（-c copy 不被数据流绊倒）');
+  ok(/\+resend_headers/.test(media) && /-muxdelay', '0'/.test(media), 'TS 每段重发 PAT/PMT 头 + 零 mux 延迟');
+  ok(!/thread_queue_size/.test(media), '不带 thread_queue_size（新旧 ffmpeg 输入/输出语义分裂，宁缺勿错）');
+}
 // ============ 5. 并发排队（D16） ============
 // ============ 4b. 并发重复启动保护 ============
 async function testPullBlockedBackoff() {
@@ -1094,7 +1180,7 @@ function testUpdateGuards() {
   console.log(`LiveGrab 测试开始（临时目录 ${tmpRoot}）`);
   await rmrf(tmpRoot);
   await fsp.mkdir(tmpRoot, { recursive: true });
-  const suites = [testUtil, testNaming, testStore, testResolvers, testAuth, testRecordChain, testRemuxFollowGlobal, testPullBlockedBackoff, testConcurrentStart, testRepeatSessionNaming, testTodayStats, testQueue, testHttp, testViewGuards, testUpdateGuards];
+  const suites = [testUtil, testNaming, testStore, testResolvers, testAuth, testRecordChain, testRemuxFollowGlobal, testPullBlockedBackoff, testConcurrentStart, testRepeatSessionNaming, testTodayStats, testQueue, testHttp, testViewGuards, testUpdateGuards, testSegmentEndReason, testSegmentGuards, testFfmpegGuards];
   for (const s of suites) {
     try { await s(); } catch (e) {
       failed++;

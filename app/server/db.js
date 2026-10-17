@@ -214,6 +214,7 @@ CREATE TABLE IF NOT EXISTS files (
   source_file_id TEXT,
   rel_path       TEXT,
   segment_index  INTEGER DEFAULT 0,
+  end_reason     TEXT,                        -- 分段结束原因：timeout 按设定时长轮转 | reconnect 断流重连前收尾 | offline 主播下播 | user 手动停止
   created_at     TEXT,
   completed_at   TEXT,
   updated_at     TEXT,
@@ -370,6 +371,8 @@ export function openDb(dbPath, onLog = null) {
   try {
     const taskCols = db.prepare("SELECT name FROM pragma_table_info('tasks')").all().map((c) => c.name);
     if (!taskCols.includes('session_hold')) db.exec('ALTER TABLE tasks ADD COLUMN session_hold INTEGER');
+    const fileCols = db.prepare("SELECT name FROM pragma_table_info('files')").all().map((c) => c.name);
+    if (!fileCols.includes('end_reason')) db.exec('ALTER TABLE files ADD COLUMN end_reason TEXT');
   } catch { /* 幂等：这次没成功下次打开再补 */ }
   applyPragmas(db);
   if (isRebuild) {

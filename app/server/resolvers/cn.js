@@ -71,7 +71,9 @@ export const douyu = {
       anchorName: room.nickname || room.owner_name || '',
       title: room.room_name || '',
       avatar: dyAvatar || room.owner_avatar || '',
-      liveStatus: Number(room.show_status) === 1 ? 'live' : 'offline',
+    // 接口被吞成 null（超时/风控）或 show_status 字段缺失时是 unknown 而非 offline：
+    // 探测不明确绝不能当"未开播"，否则轮询会把正在录制的任务拦腰停掉（无错误信息的短分段）
+    liveStatus: Number(room.show_status) === 1 ? 'live' : (room.show_status == null ? 'unknown' : 'offline'),
       online: room.online ?? null,
       qualityOptions: [{ id: 'origin', label: '原画', note: '' }, { id: 'bluray', label: '蓝光', note: '' }, { id: 'hd', label: '高清', note: '' }, { id: 'audio', label: '仅音频', note: '' }],
     };

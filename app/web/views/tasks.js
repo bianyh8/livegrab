@@ -866,6 +866,9 @@ function namingHint(d) {
   return t('tasks.namingExample') + esc((p.dirTemplate || '{平台}/{主播}/{日期}') + '-' + (p.fnTemplate || '{日期}_{主播}_{序号}'));
 }
 
+/* 分段结束原因 → 徽标文案（timeout=按设定时长自然轮转，不显示） */
+const SEG_END_TEXT = { reconnect: '断流重连', stopped: '提前收尾', offline: '主播下播', user: '手动停止' };
+
 function segTableHtml(task) {
   if (!task) return '';
   const segs = task.segments || [];
@@ -877,7 +880,7 @@ function segTableHtml(task) {
       <td class="mono" style="font-size:12px;word-break:break-all" data-label="${t('tasks.segName')}">${esc(s.name || s.path || '—')}</td>
       <td data-label="${t('tasks.segDuration')}">${esc(formatDuration(s.durationSec || 0))}</td>
       <td data-label="${t('tasks.segSize')}">${esc(formatBytes(s.bytes || 0))}</td>
-      <td data-label="${t('tasks.csvStatus')}">${s.status === 'recording' ? '<span class="chip wait"><i class="dot"></i>' + t('common.recording') + '</span>' : esc(s.status || 'done')}</td>
+      <td data-label="${t('tasks.csvStatus')}">${s.status === 'recording' ? '<span class="chip wait"><i class="dot"></i>' + t('common.recording') + '</span>' : esc(s.status || 'done')}${s.endReason && s.endReason !== 'timeout' ? `<span class="chip warn" style="margin-left:6px" title="${esc(t('tasks.segEarlyTip'))}">${esc(SEG_END_TEXT[s.endReason] || t('tasks.segEarlyEnd'))}</span>` : ''}</td>
     </tr>`).join('')}</tbody></table>`;
 }
 
