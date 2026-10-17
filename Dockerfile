@@ -10,16 +10,17 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/*
 
 # 只复制依赖清单，装完即可拿到含 better-sqlite3 原生 .node 的 node_modules
+# 注意：package-lock.json 已移出版本控制（见 commit ddae99a，避免自更新被锁文件卡死），
+# 故使用 npm install 而非 npm ci（后者必须存在锁文件）。单依赖 better-sqlite3，解析确定。
 COPY app/package.json ./package.json
-COPY app/package-lock.json ./package-lock.json
-RUN npm ci --omit=dev && npm cache clean --force
+RUN npm install --omit=dev && npm cache clean --force
 
 # ---------- 运行阶段 ----------
 FROM node:22-bookworm-slim
 
 LABEL org.opencontainers.image.title="LiveGrab 直播录制台" \
       org.opencontainers.image.description="抖音/B站/快手/虎牙/斗鱼/小红书/微博 直播分段录制，带 Web 管理页面" \
-      org.opencontainers.image.version="0.1.26"
+      org.opencontainers.image.version="0.1.27"
 
 ENV NODE_ENV=production \
     PORT=8080 \
