@@ -647,7 +647,9 @@ function testFfmpegGuards() {
   const media = fs.readFileSync(path.join(APP_DIR, 'server', 'media.js'), 'utf8');
   ok(/-rw_timeout', '15000000'/.test(media), 'rw_timeout 15s：连接卡死不死等（退出走重连，不假挂）');
   ok(/\+discardcorrupt\+igndts/.test(media), 'fflags 丢弃损坏包 + 忽略不连续 DTS（保轮转判断准确）');
-  ok(/-reconnect_at_eof/.test(media), 'ffmpeg 内置 reconnect_at_eof');
+  ok(/args\.push\('-reconnect', '1', '-reconnect_streamed', '1'/.test(media), 'reconnect 旗标显式带值 1（ffmpeg8 布尔选项必须带值，否则 Invalid argument）');
+  ok(!/'-reconnect_streamed', '-reconnect_at_eof'/.test(media), '无值布尔旗标已移除（ffmpeg8 会把下一项当值）');
+  ok(!/-reconnect_at_eof/.test(media), '不启用 reconnect_at_eof（流结束让 ffmpeg 退出，交给 recorder 判下播，避免进程内死循环）');
   ok(/-correct_ts_overflow', '1'/.test(media) && /-avoid_negative_ts', '1'/.test(media), '输出时间戳修正（33 位回绕 / 负 DTS）');
   ok(/-flush_packets', '1'/.test(media), 'flush_packets 每段及时落盘');
   ok(/-max_muxing_queue_size', '1024'/.test(media), 'muxing 队列上限（高码率不丢包）');
