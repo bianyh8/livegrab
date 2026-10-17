@@ -43,6 +43,9 @@ export const DEFAULT_SETTINGS = {
     douyin: true, bilibili: true, kuaishou: true, huya: true, douyu: true,
     xiaohongshu: true, weibo: true, direct: true, acfun: false,
   },
+  // 按平台「是否使用代理」开关：仅当该平台开启 且 全局 proxy 已配置时，该平台的解析/录制才走代理。
+  // 缺省全部关闭（走直连），与「全局 proxy 为空则全直连」语义一致。
+  platformUseProxy: {},
   notify: { webhook: '', onStart: true, onEnd: true, onError: true, onDisk: true, onCookie: false, dedupeSec: 60, retry: true },
   security: { sessionDays: 30, failLimit: 5, failLockMin: 10, trustLan: false },
   cookies: {},
@@ -141,6 +144,8 @@ const SQL = {
   platform_caps_insert: 'INSERT OR REPLACE INTO platform_caps (platform, value) VALUES (?, ?)',
   platform_enabled_delete_all: 'DELETE FROM platform_enabled',
   platform_enabled_insert: 'INSERT OR REPLACE INTO platform_enabled (platform, value) VALUES (?, ?)',
+  platform_proxy_delete_all: 'DELETE FROM platform_proxy',
+  platform_proxy_insert: 'INSERT OR REPLACE INTO platform_proxy (platform, value) VALUES (?, ?)',
   notify_upsert: upsertSingleSql('notify', NOTIFY_COLS),
   security_upsert: upsertSingleSql('security', SECURITY_COLS),
   cookies_delete_all: 'DELETE FROM cookies',
@@ -374,8 +379,10 @@ export class Store {
     // 平台字典以库为准：先清默认值再合并，避免库里已删的键在重启后「复活」
     state.settings.platformCaps = {};
     state.settings.platformEnabled = {};
+    state.settings.platformUseProxy = {};
     for (const r of db.prepare('SELECT platform, value FROM platform_caps').all()) state.settings.platformCaps[r.platform] = r.value;
     for (const r of db.prepare('SELECT platform, value FROM platform_enabled').all()) state.settings.platformEnabled[r.platform] = !!r.value;
+    for (const r of db.prepare('SELECT platform, value FROM platform_proxy').all()) state.settings.platformUseProxy[r.platform] = !!r.value;
     const nrow = db.prepare('SELECT * FROM notify WHERE id = 1').get();
     if (nrow) {
       Object.assign(state.settings.notify, {
@@ -668,6 +675,9 @@ export class Store {
     this._stmt('platform_enabled_delete_all').run();
     const enIns = this._stmt('platform_enabled_insert');
     for (const [p, v] of Object.entries(s.platformEnabled || {})) enIns.run(p, v ? 1 : 0);
+    this._stmt('platform_proxy_delete_all').run();
+    const pxIns = this._stmt('platform_proxy_insert');
+    for (const [p, v] of Object.entries(s.platformUseProxy || {})) pxIns.run(p, v ? 1 : 0);
     const n = s.notify || {};
     this._stmt('notify_upsert').run({
       webhook: strOrNull(n.webhook || ''), on_start: boolish(n.onStart), on_end: boolish(n.onEnd),

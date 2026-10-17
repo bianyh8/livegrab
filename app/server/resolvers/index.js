@@ -1,5 +1,6 @@
 // 平台识别与统一入口
 import { HttpError } from '../util.js';
+import { effectiveProxyForPlatform, runWithProxy } from '../proxy-fetch.js';
 import * as bilibili from './bilibili.js';
 import * as douyin from './douyin.js';
 import * as cn from './cn.js';
@@ -121,16 +122,19 @@ export async function resolveRoom(input, ctx = {}) {
   const p = getPlatform(platformId);
   if (!p?.handler) throw new HttpError('NOT_IMPLEMENTED', `${p?.name || platformId} 暂未接入，可在"直链"里粘贴流地址`, 400);
   const roomId = roomIdFrom(platformId, url);
-  const info = await p.handler.resolveRoom({ roomId, url, settings: ctx.settings, logger: ctx.logger });
-  return {
-    platform: p.id, platformName: p.name, tier: p.tier, roomId: info.roomId || roomId,
-    shortId: info.shortId || '',
-    url, anchorName: info.anchorName || '', title: info.title || '', avatar: info.avatar || '',
-    liveStatus: info.liveStatus || 'unknown', online: info.online ?? null,
-    qualityOptions: info.qualityOptions || p.qualities,
-    // 解析器给出的具体原因优先（例如"未开播：接口 10011"），否则回落到平台通用说明
-    note: info.note || p.note, platformNote: p.note,
-  };
+  // 按平台代理开关：开启且全局代理已配置 → 本次解析接口全部经代理；否则直连。
+  return runWithProxy(effectiveProxyForPlatform(platformId, ctx.settings), async () => {
+    const info = await p.handler.resolveRoom({ roomId, url, settings: ctx.settings, logger: ctx.logger });
+    return {
+      platform: p.id, platformName: p.name, tier: p.tier, roomId: info.roomId || roomId,
+      shortId: info.shortId || '',
+      url, anchorName: info.anchorName || '', title: info.title || '', avatar: info.avatar || '',
+      liveStatus: info.liveStatus || 'unknown', online: info.online ?? null,
+      qualityOptions: info.qualityOptions || p.qualities,
+      // 解析器给出的具体原因优先（例如"未开播：接口 10011"），否则回落到平台通用说明
+      note: info.note || p.note, platformNote: p.note,
+    };
+  });
 }
 
 /**
@@ -146,12 +150,14 @@ export async function probeLive(input, ctx = {}) {
   const p = getPlatform(platformId);
   if (!p?.handler) return { platform: p?.id || platformId, liveStatus: 'unknown', online: null };
   const roomId = roomIdFrom(platformId, url);
-  // probe:true 通知解析器跳过主播信息补全请求（抖音短号回查、B站主播信息接口等），只返回直播状态
-  const info = await p.handler.resolveRoom({ roomId, url, settings: ctx.settings, logger: ctx.logger, probe: true });
-  return {
-    platform: p.id, platformName: p.name, roomId: info.roomId || roomId,
-    liveStatus: info.liveStatus || 'unknown', online: info.online ?? null,
-  };
+  // 同样按平台代理开关走代理；probe:true 通知解析器跳过主播信息补全请求，只返回直播状态
+  return runWithProxy(effectiveProxyForPlatform(platformId, ctx.settings), async () => {
+    const info = await p.handler.resolveRoom({ roomId, url, settings: ctx.settings, logger: ctx.logger, probe: true });
+    return {
+      platform: p.id, platformName: p.name, roomId: info.roomId || roomId,
+      liveStatus: info.liveStatus || 'unknown', online: info.online ?? null,
+    };
+  });
 }
 
 /** 按 task.quality → settings.qualityFallback 依次尝试，返回第一个可用流 */
@@ -159,24 +165,27 @@ export async function resolveStream(task, ctx = {}) {
   const p = getPlatform(task.platform);
   if (!p?.handler) throw new HttpError('NOT_IMPLEMENTED', `${p?.name || task.platform} 暂未接入`, 400);
   const settings = ctx.settings || {};
-  const order = [task.quality, ...(settings.qualityFallback || [])]
-    .filter((v, i, a) => v && a.indexOf(v) === i);
-  const tried = [];
-  for (const quality of order) {
-    try {
-      const r = await p.handler.resolveStream({
-        roomId: String(task.roomId || ''), quality, task, settings, logger: ctx.logger,
-      });
-      if (r?.url) {
-        return { ...r, quality, qualityLabel: Q[quality]?.label || quality, platformName: p.name, tried };
+  const proxy = effectiveProxyForPlatform(task.platform, settings);
+  return runWithProxy(proxy, async () => {
+    const order = [task.quality, ...(settings.qualityFallback || [])]
+      .filter((v, i, a) => v && a.indexOf(v) === i);
+    const tried = [];
+    for (const quality of order) {
+      try {
+        const r = await p.handler.resolveStream({
+          roomId: String(task.roomId || ''), quality, task, settings, logger: ctx.logger,
+        });
+        if (r?.url) {
+          return { ...r, quality, qualityLabel: Q[quality]?.label || quality, platformName: p.name, tried };
+        }
+        tried.push(`${quality}: 无可用地址`);
+      } catch (e) {
+        tried.push(`${quality}: ${e.message}`);
+        if (e.code === 'AUTH' || e.code === 'BLOCKED' || e.code === 'ROOM_NOT_FOUND') throw e;
       }
-      tried.push(`${quality}: 无可用地址`);
-    } catch (e) {
-      tried.push(`${quality}: ${e.message}`);
-      if (e.code === 'AUTH' || e.code === 'BLOCKED' || e.code === 'ROOM_NOT_FOUND') throw e;
     }
-  }
-  const err = new HttpError('NO_STREAM', `所有清晰度均不可用（${tried.join('；')}）`, 502);
-  err.tried = tried;
-  throw err;
+    const err = new HttpError('NO_STREAM', `所有清晰度均不可用（${tried.join('；')}）`, 502);
+    err.tried = tried;
+    throw err;
+  });
 }

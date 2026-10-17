@@ -190,6 +190,7 @@ async function bootstrap() {
     appDir: path.join(APP_DIR),
     logger,
     getRepoConfig: () => (store.settings.customize || {}),
+    getProxy: () => (store.settings.proxy || ''),
   });
   // 更新完成后自重启：优雅停止录制器/持久化/关服务，再 re-exec 自身加载新版本。
   // 本地运行直接生效；架构 B 容器（/config/src 自带 .git）同样走此钩子——

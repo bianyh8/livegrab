@@ -25,7 +25,7 @@ export async function render(root, ctx, kit) {
         <div class="card-b" style="padding:0">
           ${platforms.length ? `<table>
             <thead><tr>
-              <th>${t('settings.pfColPlatform')}</th><th>${t('settings.pfColCookie')}</th><th>${t('settings.pfColQuality')}</th><th style="width:110px">${t('settings.pfColCap')}</th><th>${t('settings.pfColStability')}</th><th style="width:76px">${t('settings.pfColEnabled')}</th><th style="text-align:right">${t('tasks.colOps')}</th>
+              <th>${t('settings.pfColPlatform')}</th><th>${t('settings.pfColCookie')}</th><th>${t('settings.pfColQuality')}</th><th style="width:110px">${t('settings.pfColCap')}</th><th>${t('settings.pfColStability')}</th><th style="width:76px">${t('settings.pfColProxy')}</th><th style="width:76px">${t('settings.pfColEnabled')}</th><th style="text-align:right">${t('tasks.colOps')}</th>
             </tr></thead>
             <tbody>${platforms.map((p) => row(p, kit)).join('')}</tbody>
           </table>` : `<div class="empty">${t('settings.pfLoadEmpty')}</div>`}
@@ -76,12 +76,21 @@ export async function render(root, ctx, kit) {
   kit.bind(root.querySelector('#pfStopDelay'), 'stopDelaySec', 'number');
 
   bindSwitches(root, (sw) => {
-    const id = sw.dataset.pen;
-    if (!id) return;
-    const map = Object.assign({}, kit.state.settings.platformEnabled || {});
-    map[id] = sw.classList.contains('on');
-    kit.set('platformEnabled', map);
-    toast(t('settings.pfToggleToast', platformName(platforms, id), map[id] ? t('settings.pfColEnabled') : t('settings.pfDisabled')));
+    const penId = sw.dataset.pen;
+    if (penId) {
+      const map = Object.assign({}, kit.state.settings.platformEnabled || {});
+      map[penId] = sw.classList.contains('on');
+      kit.set('platformEnabled', map);
+      toast(t('settings.pfToggleToast', platformName(platforms, penId), map[penId] ? t('settings.pfColEnabled') : t('settings.pfDisabled')));
+      return;
+    }
+    const pxyId = sw.dataset.pxy;
+    if (pxyId) {
+      const map = Object.assign({}, kit.state.settings.platformUseProxy || {});
+      map[pxyId] = sw.classList.contains('on');
+      kit.set('platformUseProxy', map);
+      toast(t('settings.pfProxyToast', platformName(platforms, pxyId), map[pxyId] ? t('settings.pfColProxyOn') : t('settings.pfColProxyOff')));
+    }
   });
 
   root.querySelectorAll('[data-cookie]').forEach((btn) => {
@@ -157,6 +166,7 @@ function row(p, kit) {
   const has = cookie.has != null ? cookie.has : !!p.cookieSet;
   const valid = cookie.valid;
   const enabled = (kit.state.settings.platformEnabled || {})[p.id] !== false;
+  const useProxy = (kit.state.settings.platformUseProxy || {})[p.id] === true;
   const cap = (kit.state.settings.platformCaps || {})[p.id] != null
     ? (kit.state.settings.platformCaps || {})[p.id]
     : (p.cap != null ? p.cap : 2);
@@ -167,6 +177,7 @@ function row(p, kit) {
     <td data-label="${t('settings.pfColQuality')}" title="${esc(qualitiesFull(p.qualities))}">${qualitiesCell(p.qualities)}</td>
     <td data-label="${t('settings.pfColCap')}"><input class="input" style="width:80px" data-pcap="${esc(p.id)}" value="${esc(String(cap))}" /></td>
     <td data-label="${t('settings.pfColStability')}">${stabilityChip(p)}</td>
+    <td data-label="${t('settings.pfColProxy')}" title="${esc(t('settings.pfColProxyHint'))}">${switchEl(useProxy, `data-pxy="${esc(p.id)}"`)}</td>
     <td data-label="${t('settings.pfColEnabled')}">${switchEl(enabled, `data-pen="${esc(p.id)}"`)}</td>
     <td><div class="acts">${actions(p, has)}</div></td>
   </tr>`;

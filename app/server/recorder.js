@@ -5,6 +5,7 @@ import path from 'node:path';
 import fsp from 'node:fs/promises';
 import * as media from './media.js';
 import { buildOutputPattern, buildContext, pickProfile, renderName, reserveName, qualityLabel, seqText } from './naming.js';
+import { effectiveProxyForPlatform } from './proxy-fetch.js';
 import { nowIso, ensureDir, safeJoin, sleep, errText } from './util.js';
 
 const BACKOFF = [2000, 4000, 8000, 16000, 30000];
@@ -169,7 +170,8 @@ export class Recorder extends EventEmitter {
       startNumber,
       headers: this.headers,
       audioOnly: this.audioOnly,
-      proxy: this.settings.proxy,
+      // 按平台代理开关：该平台开启且全局 proxy 已配置 → ffmpeg 经 -http_proxy 走代理拉流；否则直连。
+      proxy: effectiveProxyForPlatform(this.task.platform, this.settings),
       userAgent: this.settings.userAgent,
       isHttp: /^https?:/i.test(this.streamUrl || ''),
     });

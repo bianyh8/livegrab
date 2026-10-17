@@ -18,6 +18,7 @@ import { Scheduler } from '../server/scheduler.js';
 import { Auth, parseCookies } from '../server/auth.js';
 import { PlayManager } from '../server/play.js';
 import * as resolvers from '../server/resolvers/index.js';
+import * as proxyFetch from '../server/proxy-fetch.js';
 import { isPullBlocked, reconnectDelay } from '../server/recorder.js';
 import { byteLength, parseRange, safeJoin, formatBytes, formatDuration, HttpError, uid, VERSION, errText } from '../server/util.js';
 import { seekRatio } from '../web/ui.js';
@@ -1175,12 +1176,44 @@ function testUpdateGuards() {
   ok(/GIT_TERMINAL_PROMPT=0/.test(ep), '容器克隆禁用交互式凭据提示（否则私库无 token 时启动卡死）');
 }
 
+// ============ 11. 代理（按平台 / 系统更新） ============
+async function testProxy() {
+  suite('代理（按平台 / 系统更新）');
+  const { effectiveProxyForPlatform, runWithProxy, proxyStore } = proxyFetch;
+
+  // 生效代理 = 平台开关开 且 全局代理已配置；否则空（直连）
+  eq(effectiveProxyForPlatform('douyin', { platformUseProxy: {}, proxy: 'http://1.2.3.4:7890' }), '', '开关未开 → 直连（空）');
+  eq(effectiveProxyForPlatform('douyin', { platformUseProxy: { douyin: true }, proxy: '' }), '', '开关开但无全局代理 → 直连（空）');
+  eq(effectiveProxyForPlatform('douyin', { platformUseProxy: { douyin: true }, proxy: 'http://1.2.3.4:7890' }), 'http://1.2.3.4:7890', '开关开且已配代理 → 返回该代理');
+  eq(effectiveProxyForPlatform('bili', { platformUseProxy: { douyin: true }, proxy: 'http://1.2.3.4:7890' }), '', '其它平台开关未开 → 直连（空）');
+
+  // runWithProxy：空代理直接执行；有代理时注入 AsyncLocalStorage 上下文
+  const r1 = await runWithProxy('', async () => proxyStore.getStore()?.proxy || '');
+  eq(r1, '', 'runWithProxy 空代理：上下文无代理，直接执行');
+  const r2 = await runWithProxy('http://9.9.9.9:1080', async () => proxyStore.getStore()?.proxy || '');
+  eq(r2, 'http://9.9.9.9:1080', 'runWithProxy 有代理：注入到 AsyncLocalStorage 上下文（解析器内 httpGet 自动读取）');
+
+  // 持久化：platformUseProxy 经 db 落盘与重载
+  const dir = p('proxy-config');
+  const store = await openStore(dir);
+  await store.updateSettings({ platformUseProxy: { douyin: true, bilibili: false } });
+  const reloaded = await openStore(dir);
+  ok(reloaded.settings.platformUseProxy?.douyin === true && reloaded.settings.platformUseProxy?.bilibili === false,
+    'platformUseProxy 落盘并可重载', JSON.stringify(reloaded.settings.platformUseProxy || {}));
+
+  // 系统更新守卫：update.js 优先使用代理
+  const upd = fs.readFileSync(path.join(APP_DIR, 'server', 'update.js'), 'utf8');
+  ok(/getProxy/.test(upd) && /_proxy\(\)/.test(upd), 'UpdateManager 注入 getProxy 读取全局代理');
+  ok(/await this\._fetch\(/.test(upd) && /httpGetViaProxy|httpGetBufferViaProxy/.test(upd), 'GitHub API / 快照下载经代理客户端（无代理时回退 fetch）');
+  ok(/HTTPS_PROXY/.test(upd) && /HTTP_PROXY/.test(upd), 'git fetch 经 HTTPS_PROXY/HTTP_PROXY 走代理');
+}
+
 // ============ 主流程 ============
 (async () => {
   console.log(`LiveGrab 测试开始（临时目录 ${tmpRoot}）`);
   await rmrf(tmpRoot);
   await fsp.mkdir(tmpRoot, { recursive: true });
-  const suites = [testUtil, testNaming, testStore, testResolvers, testAuth, testRecordChain, testRemuxFollowGlobal, testPullBlockedBackoff, testConcurrentStart, testRepeatSessionNaming, testTodayStats, testQueue, testHttp, testViewGuards, testUpdateGuards, testSegmentEndReason, testSegmentGuards, testFfmpegGuards];
+  const suites = [testUtil, testNaming, testStore, testResolvers, testAuth, testRecordChain, testRemuxFollowGlobal, testPullBlockedBackoff, testConcurrentStart, testRepeatSessionNaming, testTodayStats, testQueue, testHttp, testViewGuards, testUpdateGuards, testProxy, testSegmentEndReason, testSegmentGuards, testFfmpegGuards];
   for (const s of suites) {
     try { await s(); } catch (e) {
       failed++;

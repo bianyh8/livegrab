@@ -15,6 +15,7 @@ import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import zlib from 'node:zlib';
+import { httpGetViaProxy } from './proxy-fetch.js';
 
 const UA = 'LiveGrab-update-manager';
 const DEFAULT_REPO = process.env.LIVEGRAB_REPO || 'bianyh8/livegrab';
@@ -229,6 +230,9 @@ export class UpdateManager {
     // 动态配置来源：server.js 注入 store.settings.customize 读取函数；
     // 用户未在 UI 配置时回退到环境变量 / 默认值。
     this.getRepoConfig = (typeof getRepoConfig === 'function') ? getRepoConfig : null;
+    // 系统更新代理来源：server.js 注入读取 store.settings.proxy 的函数。
+    // 需求：系统更新若设置了代理地址，则优先使用代理，否则走正常网络连接。
+    this.getProxy = (typeof getProxy === 'function') ? getProxy : null;
     // 兜底 token：显式传入 > 环境变量 LIVEGRAB_GITHUB_TOKEN > 本地 ~/.git-credentials
     this.envToken = token || process.env.LIVEGRAB_GITHUB_TOKEN || readGitCredentialsToken() || '';
     this.state = {
@@ -290,6 +294,41 @@ export class UpdateManager {
 
   _api() { return `https://api.github.com/repos/${this._repo()}`; }
 
+  /** 系统更新代理地址：由 server.js 注入（读取 store.settings.proxy）。空表示不使用代理。 */
+  _proxy() {
+    const v = (this.getProxy && this.getProxy()) || '';
+    return v ? String(v).trim() : '';
+  }
+
+  /** 统一的 HTTP GET：设置了代理则经代理（零依赖 CONNECT 隧道），否则走原生 fetch。
+   *  返回 Response 兼容对象（ok/status/json/text/arrayBuffer），调用方无需关心底层是否走代理。
+   *  binary=true 用于下载 tar.gz 归档（按字节取，不能按文本解码）。 */
+  async _fetch(url, { headers = {}, timeoutMs = 15000, retries = 2, label = '', binary = false } = {}) {
+    const proxy = this._proxy();
+    if (!proxy) {
+      return fetch(url, { headers, signal: AbortSignal.timeout(timeoutMs) });
+    }
+    if (binary) {
+      const r = await httpGetBufferViaProxy(url, { headers, timeoutMs, retries, logger: this.logger, label, proxy });
+      if (!r.ok) throw new Error(`归档下载失败 HTTP ${r.status}`);
+      const buf = r.buffer;
+      return {
+        ok: true, status: r.status, statusText: 'OK', headers: r.headers,
+        json: async () => JSON.parse(buf.toString('utf8')),
+        text: async () => buf.toString('utf8'),
+        arrayBuffer: async () => buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength),
+      };
+    }
+    const r = await httpGetViaProxy(url, { headers, timeoutMs, retries, logger: this.logger, label, proxy });
+    const text = r.text;
+    return {
+      ok: r.ok, status: r.status, statusText: r.statusText || '', headers: r.headers,
+      json: async () => JSON.parse(text),
+      text: async () => text,
+      arrayBuffer: async () => Uint8Array.from(Buffer.from(text, 'utf8')).buffer,
+    };
+  }
+
   _apiHeaders() {
     const h = { 'User-Agent': UA, 'Accept': 'application/vnd.github+json' };
     const t = this._token();
@@ -350,15 +389,25 @@ export class UpdateManager {
 
   /** git 子进程环境：禁用一切交互式凭据提示。
       否则无凭据（私有仓库未配 token）时 git 会挂在「Username for ...」等待输入，
-      表现为「一直卡着不报错」，直到 120s 超时才失败。 */
+      表现为「一直卡着不报错」，直到 120s 超时才失败。
+      若设置了系统更新代理，则把代理注入 git 环境（HTTPS_PROXY/HTTP_PROXY），
+      让 git 的 HTTP 传输经代理走（需求：系统更新优先使用代理）。 */
   _gitEnv() {
-    return {
+    const env = {
       ...process.env,
       GIT_TERMINAL_PROMPT: '0',
       GIT_ASKPASS: 'echo',
       GCM_INTERACTIVE: 'never',
       GIT_SSH_COMMAND: 'ssh -o BatchMode=yes -o StrictHostKeyChecking=no',
     };
+    const proxy = this._proxy();
+    if (proxy) {
+      env.HTTPS_PROXY = proxy;
+      env.HTTP_PROXY = proxy;
+      env.https_proxy = proxy;
+      env.http_proxy = proxy;
+    }
+    return env;
   }
 
   /** 组装一次 fetch 的完整参数（传输层抗抖动参数 + 认证参数 + 兜底超时）。 */
@@ -443,14 +492,15 @@ export class UpdateManager {
     return `https://codeload.github.com/${repo}/tar.gz/refs/heads/${encodeURIComponent(this._branch())}`;
   }
 
-  /** 下载分支归档（tar.gz）。GitHub 私有仓库用 token 认证；非 GitHub 仓库返回 null。 */
+  /** 下载分支归档（tar.gz）。GitHub 私有仓库用 token 认证；非 GitHub 仓库返回 null。
+   *  设置了系统更新代理时经代理下载（binary 通道）。 */
   async _downloadSnapshot() {
     const url = this._snapshotUrl();
     if (!url) return null;
     const headers = { 'User-Agent': UA };
     const t = this._token();
     if (t) headers['Authorization'] = `Bearer ${t}`;
-    const r = await fetch(url, { headers, signal: AbortSignal.timeout(180000) });
+    const r = await this._fetch(url, { headers, timeoutMs: 180000, label: 'GitHub codeload', binary: true });
     if (!r.ok) throw new Error(`归档下载失败 HTTP ${r.status}`);
     const buf = Buffer.from(await r.arrayBuffer());
     if (!buf.length) throw new Error('归档内容为空');
@@ -667,9 +717,9 @@ export class UpdateManager {
     const api = this._api();
     const branch = this._branch();
     const [rel, tags, main] = await Promise.all([
-      fetch(`${api}/releases/latest`, { headers, signal: AbortSignal.timeout(15000) }).then((r) => (r.ok ? r.json() : null)).catch(() => null),
-      fetch(`${api}/tags?per_page=10`, { headers, signal: AbortSignal.timeout(15000) }).then((r) => (r.ok ? r.json() : null)).catch(() => null),
-      fetch(`${api}/commits/${branch}?per_page=1`, { headers, signal: AbortSignal.timeout(15000) }).then((r) => (r.ok ? r.json() : null)).catch(() => null),
+      this._fetch(`${api}/releases/latest`, { headers, timeoutMs: 15000, label: 'GitHub releases/latest' }).then((r) => (r.ok ? r.json() : null)).catch(() => null),
+      this._fetch(`${api}/tags?per_page=10`, { headers, timeoutMs: 15000, label: 'GitHub tags' }).then((r) => (r.ok ? r.json() : null)).catch(() => null),
+      this._fetch(`${api}/commits/${branch}?per_page=1`, { headers, timeoutMs: 15000, label: 'GitHub commits' }).then((r) => (r.ok ? r.json() : null)).catch(() => null),
     ]);
     return { rel, tags, main };
   }

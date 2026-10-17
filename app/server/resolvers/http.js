@@ -1,9 +1,15 @@
 // 公共 HTTP 助手：超时 + 重试 + 统一 UA
 import { HttpError, errText } from '../util.js';
+import { proxyStore, httpGetViaProxy } from '../proxy-fetch.js';
 
 export const DESKTOP_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
 
-export async function httpGet(url, { headers = {}, timeoutMs = 12000, retries = 2, logger = null, label = '' } = {}) {
+export async function httpGet(url, { headers = {}, timeoutMs = 12000, retries = 2, logger = null, label = '', proxy = '' } = {}) {
+  // 代理来源优先级：显式传入 opts.proxy > 当前 AsyncLocalStorage 上下文（runWithProxy 注入的按平台生效代理）> 直连
+  const effectiveProxy = proxy || proxyStore.getStore()?.proxy || '';
+  if (effectiveProxy) {
+    return httpGetViaProxy(url, { headers, timeoutMs, retries, logger, label, proxy: effectiveProxy });
+  }
   let lastErr = null;
   for (let i = 0; i <= retries; i++) {
     try {

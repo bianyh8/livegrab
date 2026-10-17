@@ -50,6 +50,7 @@ CREATE TABLE IF NOT EXISTS settings (
 );
 CREATE TABLE IF NOT EXISTS platform_caps    (platform TEXT PRIMARY KEY, value INTEGER);
 CREATE TABLE IF NOT EXISTS platform_enabled (platform TEXT PRIMARY KEY, value INTEGER);
+CREATE TABLE IF NOT EXISTS platform_proxy   (platform TEXT PRIMARY KEY, value INTEGER);
 CREATE TABLE IF NOT EXISTS notify (
   id         INTEGER PRIMARY KEY CHECK (id = 1),
   webhook    TEXT,
