@@ -1048,6 +1048,18 @@ function testViewGuards() {
   ok(/setTimeout\(\(\) => \{ state\.page = 1; tick\(ctx, false\); \}, 300\)/.test(tasksSrc), '任务查询防抖 = 局部重绘 tick(ctx,false) + 300ms（不再一输就查、不抢焦点）');
   ok(/ctx\.onRefresh\(\(\) => tick\(ctx, false\)\)/.test(tasksSrc), '任务视图 2s 轮询走局部重绘（不得抢走搜索框焦点）');
   ok(/function bindTable\s*\(/.test(tasksSrc) && /bindTable\(ctx\)/.test(tasksSrc), '局部重绘后重绑表格行内按钮（换数据不换操作）');
+
+  /* 播放器进度条（用户报「只能点击、不能拖动」）：必须 Pointer Events +
+     setPointerCapture，不得退回 onclick；拖动中只回绘预览、松手才写 currentTime；
+     横屏时舞台被 rotate(90deg)，seek 方向必须实时读舞台矩阵（不得硬编码 false）。 */
+  ok(/export function bindSeekTrack\s*\(/.test(uiSrc), '有 bindSeekTrack()：进度条点击+拖动共用一套 seek');
+  ok(uiSrc.includes("addEventListener('pointerdown'") && uiSrc.includes("addEventListener('pointermove'") && uiSrc.includes("addEventListener('pointerup'") && uiSrc.includes("addEventListener('pointercancel'"), '拖动用 Pointer Events 四件套（按下/移动/松手/取消）');
+  ok(uiSrc.includes('setPointerCapture'), '按下即捕获指针（手指划出进度条也能继续拖）');
+  ok(/bindSeekTrack\(mask\.querySelector\('#plTrack'\)/.test(uiSrc), '桌面播放器进度条走 bindSeekTrack');
+  ok(/bindSeekTrack\(track,/.test(uiSrc) && /getRotated: \(\) => isRotated90/.test(uiSrc), '手机播放器进度条走 bindSeekTrack，横屏方向动态读舞台矩阵');
+  ok(!/mask\.querySelector\('#plTrack'\)\.onclick/.test(uiSrc) && !/track\.onclick\s*=/.test(uiSrc), '两条进度条都不再只用 onclick（拖动必须接线）');
+  ok(/export function isRotated90\s*\(/.test(uiSrc) && /matrix\\\(/.test(uiSrc), 'isRotated90() 读 computed transform 矩阵实时判断旋转');
+  ok(/touch-action:none/.test(cssSrc) && /\.pv-track::before/.test(cssSrc) && /\.pv-mtrack::before/.test(cssSrc), '进度条 touch-action:none + 伪元素扩触控命中区（拖动才按得准）');
 }
 
 /* 更新链路守卫（静态扫描）：拉取必须在「弱网/代理会改写长连接」的现实下仍然可用，

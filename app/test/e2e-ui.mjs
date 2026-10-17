@@ -544,6 +544,107 @@ for (const { pg, needles, absent = [], minLen = 40 } of PAGES) {
   await send('Emulation.setTouchEmulationEnabled', { enabled: false });
 }
 
+/* 7) 播放器进度条「按住拖动」seek（用户反馈：只能点击、不能拖动）
+   回归背景：进度条历来只绑 onclick——只能点、不能拖。现改为 Pointer Events +
+   setPointerCapture：按下即定位（原点击行为保留）、拖动中只回绘预览不写
+   currentTime、松手才结算。data: 视频没有时长，先 stub duration/currentTime，
+   再按真实鼠标 pressed→moved→released 序列驱动。 */
+{
+  /* 竖屏视口：桌面横窗口下浏览器 orientation 就是 landscape，媒体查询会按设计
+     取消舞台旋转（设备本就横屏，无需模拟），那样测不到「强制横屏」的旋转路径。 */
+  await send('Emulation.setDeviceMetricsOverride', { width: 600, height: 900, deviceScaleFactor: 1, mobile: false });
+  const rectOf = async (sel) => JSON.parse((await send('Runtime.evaluate', { expression: `(()=>{const el=document.querySelector(${JSON.stringify(sel)});if(!el)return '{}';const b=el.getBoundingClientRect();return JSON.stringify({x:Math.round(b.left+b.width/2),y:Math.round(b.top+b.height/2)})})()`, returnByValue: true })).result?.result?.value || '{}');
+  const click = async (sel) => {
+    const r = await rectOf(sel);
+    for (const type of ['mousePressed', 'mouseReleased']) await send('Input.dispatchMouseEvent', { type, x: r.x, y: r.y, button: 'left', clickCount: 1 });
+    await sleep(400);
+  };
+  const openSeekPlayer = async (mode) => {
+    await send('Runtime.evaluate', { expression: `(() => {
+      const b = document.createElement('button');
+      b.id = 'e2eSeekPlayer';
+      b.style.cssText = 'position:fixed;left:6px;top:6px;width:64px;height:36px;z-index:9999';
+      b.textContent = 'open';
+      b.addEventListener('click', async () => {
+        const m = await import('/ui.js');
+        m.openMobilePlayer({ api: { downloadUrl: () => '' } }, { fileId: 'e2e-seek', name: '拖动回归' }, { mode: ${JSON.stringify(mode)}, playId: null }, ${JSON.stringify(mode)}, 'data:video/mp4;base64,AAAAIGZ0eXBpc29t');
+      });
+      document.body.appendChild(b);
+      return true;
+    })()` });
+    await click('#e2eSeekPlayer');
+    await send('Runtime.evaluate', { expression: `document.getElementById('e2eSeekPlayer')?.remove()` });
+    await sleep(300);
+    await send('Runtime.evaluate', { expression: `(() => {
+      const v = document.getElementById('plVideo');
+      if (!v) return false;
+      Object.defineProperty(v, 'duration', { configurable: true, get: () => 100 });
+      let ct = 0;
+      window.__seekLog = [];
+      Object.defineProperty(v, 'currentTime', {
+        configurable: true,
+        get: () => ct,
+        set: (x) => { ct = x; window.__seekLog.push(x); },
+      });
+      return true;
+    })()` });
+  };
+  const trackRect = async () => JSON.parse((await send('Runtime.evaluate', { expression: `(() => { const el = document.querySelector('#plMTrack'); if (!el) return '{}'; const b = el.getBoundingClientRect(); return JSON.stringify({ l: b.left, t: b.top, w: b.width, h: b.height, mx: b.left + b.width / 2, my: b.top + b.height / 2 }); })()`, returnByValue: true })).result?.result?.value || '{}');
+  const seekLog = async () => JSON.parse((await send('Runtime.evaluate', { expression: `JSON.stringify(window.__seekLog || [])`, returnByValue: true })).result?.result?.value || '[]');
+
+  await openSeekPlayer('direct');
+  /* 竖屏：按住 25% 处 → 拖到 60% → 松手。设计：按下/拖动只回绘预览，松手才写 currentTime */
+  const r0 = await trackRect();
+  check(r0.w > 0 && r0.h > 0, '7) 进度条已渲染', JSON.stringify(r0));
+  await send('Input.dispatchMouseEvent', { type: 'mousePressed', x: r0.l + r0.w * 0.25, y: r0.my, button: 'left', clickCount: 1 });
+  await sleep(150);
+  const afterDown = await seekLog();
+  const fillDown = (await send('Runtime.evaluate', { expression: `document.getElementById('plMFill').style.width`, returnByValue: true })).result?.result?.value;
+  check(afterDown.length === 0 && parseFloat(fillDown) > 22 && parseFloat(fillDown) < 28, '7) 按下只回绘预览（定位 25%），不写 currentTime', `log=${JSON.stringify(afterDown)} fill=${fillDown}`);
+  await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: r0.l + r0.w * 0.6, y: r0.my, button: 'left' });
+  await sleep(150);
+  const afterMove = await seekLog();
+  check(afterMove.length === 0, '7) 拖动过程中不写 currentTime（只回绘预览，避免反复寻址）', JSON.stringify(afterMove));
+  const fillW = (await send('Runtime.evaluate', { expression: `document.getElementById('plMFill').style.width`, returnByValue: true })).result?.result?.value;
+  check(parseFloat(fillW) > 55 && parseFloat(fillW) < 65, '7) 拖动预览已回绘填充条（60%）', String(fillW));
+  await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: r0.l + r0.w * 0.6, y: r0.my, button: 'left', clickCount: 1 });
+  await sleep(150);
+  const afterUp = await seekLog();
+  check(afterUp.length === 1 && Math.abs(afterUp[0] - 60) < 2, '7) 松手结算到 60%（拖动 seek 生效）', JSON.stringify(afterUp));
+
+  /* 横屏：舞台整体 rotate(90deg)，进度条水平轴在屏幕上呈竖直，必须沿 clientY 取比例 */
+  await click('#plOrient');
+  await sleep(400);
+  const land0 = (await send('Runtime.evaluate', { expression: `JSON.stringify({ land: document.getElementById('plBox').classList.contains('pv-land'), stageT: getComputedStyle(document.getElementById('plStage')).transform })`, returnByValue: true })).result?.result?.value;
+  line(`   横屏诊断: ${land0}`);
+  const r1 = await trackRect();
+  check(r1.h > r1.w, '7) 横屏后进度条呈竖直（包围盒宽高互换）', `w=${r1.w} h=${r1.h}`);
+  await send('Input.dispatchMouseEvent', { type: 'mousePressed', x: r1.mx, y: r1.t + r1.h * 0.25, button: 'left', clickCount: 1 });
+  await sleep(120);
+  await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: r1.mx, y: r1.t + r1.h * 0.75, button: 'left' });
+  await sleep(120);
+  await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: r1.mx, y: r1.t + r1.h * 0.75, button: 'left', clickCount: 1 });
+  await sleep(150);
+  const afterLand = await seekLog();
+  check(afterLand.length === 2 && Math.abs(afterLand[1] - 75) < 2, '7) 横屏拖动沿屏幕竖直方向取比例（松手结算到 75%）', JSON.stringify(afterLand));
+
+  await send('Runtime.evaluate', { awaitPromise: true, expression: `import('/ui.js').then((m) => m.closePlayer())` });
+  await sleep(200);
+
+  /* remux 边转边播：不可 seek，按下只提示 */
+  await openSeekPlayer('remux');
+  const r2 = await trackRect();
+  await send('Input.dispatchMouseEvent', { type: 'mousePressed', x: r2.l + r2.w * 0.5, y: r2.my, button: 'left', clickCount: 1 });
+  await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: r2.l + r2.w * 0.5, y: r2.my, button: 'left', clickCount: 1 });
+  await sleep(150);
+  const remuxLog = await seekLog();
+  check(remuxLog.length === 0, '7) remux 边转边播不可拖动/点击 seek', JSON.stringify(remuxLog));
+  const remuxToast = (await send('Runtime.evaluate', { expression: `document.getElementById('toastTx') ? document.getElementById('toastTx').textContent : ''`, returnByValue: true })).result?.result?.value;
+  check(!!remuxToast && remuxToast.length > 0, '7) remux 模式按下有提示（toast）', String(remuxToast));
+  await send('Runtime.evaluate', { awaitPromise: true, expression: `import('/ui.js').then((m) => m.closePlayer())` });
+  await send('Emulation.clearDeviceMetricsOverride');
+}
+
 ws.close();
 edge.kill();
 srv.kill('SIGTERM');

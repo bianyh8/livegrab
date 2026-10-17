@@ -543,12 +543,20 @@ export async function openPlayer(ctx, opts) {
     video.removeEventListener('loadedmetadata', applyRotate);
   });
 
-  mask.querySelector('#plTrack').onclick = (e) => {
-    if (mode === 'remux') { toast(t('ui.remuxNoSeek'), 'warn'); return; }
-    if (!isFinite(video.duration) || !video.duration) return;
-    const r = e.currentTarget.getBoundingClientRect();
-    video.currentTime = ((e.clientX - r.left) / r.width) * video.duration;
-  };
+  /* 进度条：点击定位 + 按住拖动（桌面播放器旋转的是 video 本身，进度条始终水平） */
+  bindSeekTrack(mask.querySelector('#plTrack'), {
+    video,
+    canSeek: () => mode !== 'remux',
+    onBlocked: () => toast(t('ui.remuxNoSeek'), 'warn'),
+    onStart: () => showCtl(),
+    onPreview: (ratio) => {
+      const fillEl = mask.querySelector('#plFill');
+      if (fillEl) fillEl.style.width = Math.min(100, ratio * 100) + '%';
+      const nowEl = mask.querySelector('#plNow');
+      if (nowEl) nowEl.textContent = formatDuration(ratio * video.duration);
+    },
+    onCommit: (ratio) => { video.currentTime = ratio * video.duration; },
+  });
   mask.querySelector('#plClose').onclick = closePlayer;
   mask.querySelector('#plClose2').onclick = closePlayer;
   mask.querySelector('#plCopy').onclick = () => copyText(location.origin + ctx.api.downloadUrl(opts.fileId), t('ui.directLinkCopied'));
@@ -586,6 +594,63 @@ export function seekRatio(rect, clientX, clientY, rotated = false) {
   else ratio = (clientX - rect.left) / rect.width;
   if (!isFinite(ratio)) return 0;
   return Math.max(0, Math.min(1, ratio));
+}
+
+/**
+ * 读取元素当前是否被 rotate(±90deg)（手机播放器强制横屏时整个舞台 #plStage
+ * 被旋转，进度条的水平轴在屏幕上呈竖直方向）。读 computed transform 矩阵实时
+ * 判断，不靠外部状态传参：设备真横屏时 CSS 媒体查询会取消舞台旋转，矩阵判断
+ * 自动随之回到「沿 clientX」，不会错。
+ */
+export function isRotated90(el) {
+  if (!el || typeof getComputedStyle !== 'function') return false;
+  const tr = getComputedStyle(el).transform;
+  if (!tr || tr === 'none') return false;
+  const m = /^matrix\(([^)]+)\)$/.exec(tr.trim());
+  if (!m) return false;
+  const parts = m[1].split(',').map((v) => parseFloat(v));
+  return Math.abs(parts[0]) < 0.01 && Math.abs(parts[1]) > 0.5;
+}
+
+/**
+ * 进度条「点击定位 + 按住拖动」seek（Pointer Events，触摸/鼠标/触控笔通用）。
+ *   pointerdown  → 立即定位到按下位置（兼容原点击行为），并 setPointerCapture
+ *                  捕获指针：手指划出进度条甚至划出播放器都继续收到事件；
+ *   pointermove  → 拖动中只回绘 UI（填充比例/时间文字），不写 currentTime，
+ *                  避免每像素都触发浏览器重新寻址与缓冲，松手才结算；
+ *   pointerup    → 写入 currentTime；pointercancel → 放弃本次拖动（手势被
+ *                  浏览器接管时不乱跳）。
+ * canSeek() 返回 false 时（remux 边转边播不可seek）按下仅提示，不进拖动。
+ * getRotated() 返回 true 时（舞台 rotate 90°）沿 clientY 取比例。
+ */
+export function bindSeekTrack(trackEl, opts) {
+  if (!trackEl) return;
+  const { video, canSeek, onBlocked, onStart, onPreview, onCommit, onEnd, getRotated } = opts;
+  let dragging = false;
+  const ratioOf = (e) => seekRatio(trackEl.getBoundingClientRect(), e.clientX, e.clientY, getRotated ? getRotated() : false);
+  trackEl.addEventListener('pointerdown', (e) => {
+    if (e.button != null && e.button !== 0) return; /* 只响应主键/触摸 */
+    if (canSeek && !canSeek()) { if (onBlocked) onBlocked(); return; }
+    if (!isFinite(video.duration) || !video.duration) return;
+    dragging = true;
+    try { trackEl.setPointerCapture(e.pointerId); } catch { /* 异常 pointerId：退回普通事件冒泡 */ }
+    if (onStart) onStart();
+    onPreview(ratioOf(e));
+  });
+  trackEl.addEventListener('pointermove', (e) => {
+    if (!dragging) return;
+    e.preventDefault();
+    onPreview(ratioOf(e));
+  });
+  const settle = (e, commit) => {
+    if (!dragging) return;
+    dragging = false;
+    try { trackEl.releasePointerCapture(e.pointerId); } catch { /* ignore */ }
+    if (commit) onCommit(ratioOf(e));
+    if (onEnd) onEnd();
+  };
+  trackEl.addEventListener('pointerup', (e) => settle(e, true));
+  trackEl.addEventListener('pointercancel', (e) => settle(e, false));
 }
 
 /* ================= 手机播放器：点播放直达竖屏全屏（无中间页），可切横竖屏、可关闭 =================
@@ -642,8 +707,10 @@ export function openMobilePlayer(ctx, opts, info, mode, url) {
   const rates = [1, 1.5, 2, 0.5];
   let rateIdx = 0;
 
-  /* 进度同步 */
+  /* 进度同步（拖动进行中由拖动预览接管，避免 ontimeupdate 把填充拉回播放位置） */
+  let seeking = false;
   const sync = () => {
+    if (seeking) return;
     nowEl.textContent = formatDuration(video.currentTime || 0);
     if (isFinite(video.duration) && video.duration > 0) {
       totalEl.textContent = formatDuration(video.duration);
@@ -655,13 +722,23 @@ export function openMobilePlayer(ctx, opts, info, mode, url) {
   video.ontimeupdate = sync;
   video.onloadedmetadata = sync;
 
-  /* 进度条拖动（直放可拖动；remux 边转边播不可拖） */
+  /* 进度条：点击定位 + 按住拖动（直放可拖动；remux 边转边播不可拖）。
+     横屏时整个舞台被 rotate(90deg)，进度条水平轴在屏幕上是竖直方向，
+     getRotated 实时读舞台矩阵决定沿 clientY 还是 clientX 取比例。 */
   const track = mask.querySelector('#plMTrack');
-  track.onclick = (e) => {
-    if (mode === 'remux') { toast(t('ui.remuxNoSeek'), 'warn'); return; }
-    if (!isFinite(video.duration) || !video.duration) return;
-    video.currentTime = seekRatio(track.getBoundingClientRect(), e.clientX, e.clientY, false) * video.duration;
-  };
+  bindSeekTrack(track, {
+    video,
+    getRotated: () => isRotated90(mask.querySelector('#plStage')),
+    canSeek: () => mode !== 'remux',
+    onBlocked: () => toast(t('ui.remuxNoSeek'), 'warn'),
+    onStart: () => { seeking = true; },
+    onPreview: (ratio) => {
+      fill.style.width = Math.min(100, ratio * 100) + '%';
+      nowEl.textContent = formatDuration(ratio * video.duration);
+    },
+    onCommit: (ratio) => { video.currentTime = ratio * video.duration; },
+    onEnd: () => { seeking = false; },
+  });
 
   /* 倍速 */
   rateBtn.onclick = () => {
