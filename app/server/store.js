@@ -729,6 +729,12 @@ export class Store {
 
   // ---------- 设置 / 命名 / Cookie ----------
   async updateSettings(patch) {
+    // 脱敏占位符绝不能覆盖真实更新 token：settingsView 返回的是 '••••••••'，
+    // 设置页整包保存时会带回该占位；这里兜底剥离（路由层也删了 customize，双保险）。
+    if (patch && patch.customize && patch.customize.updateToken === '••••••••') {
+      patch = { ...patch, customize: { ...patch.customize } };
+      delete patch.customize.updateToken;
+    }
     const snap = this.state.settings; // deepMerge 整体替换 → 引用快照即可
     try {
       this.state.settings = deepMerge(this.state.settings, patch || {});

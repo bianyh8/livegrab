@@ -191,7 +191,7 @@ function platNameOf(id) {
 }
 
 function filenameRow({ f, s, tag }) {
-  const playing = f.status === 'recording';
+  const playing = !!(s && s.status === 'recording');
   const missing = f.status === 'missing';
   const icoCls = platformInfo(s.platform).cls;
   const extLabel = tag || (f.ext ? f.ext.toUpperCase() : 'TS');
@@ -298,7 +298,7 @@ function bind(ctx) {
       if (act === 'play') {
         openPlayer(ctx, filePlayer(found.f, found.s, found.tag));
       } else if (act === 'delete') {
-        if (found.f.status === 'recording') { toast(t('files.recordingCannotDelete'), 'warn'); return; }
+        if (found.s && found.s.status === 'recording') { toast(t('files.recordingCannotDelete'), 'warn'); return; }
         const toTrash = await trashEnabled();
         const tr = toTrash ? t('files.moveToTrash') : t('files.permanentDelete');
         confirmDialog({

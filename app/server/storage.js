@@ -349,10 +349,10 @@ export class Storage {
       const hit = this.store.findFile(fid);
       if (!hit) continue;
       const { file, session } = hit;
-      if (session) {
-        if (session.status === 'recording' && (session.segments || []).some((x) => x.id === fid && x.status === 'recording')) {
-          throw new HttpError('FILE_RECORDING', '正在录制的分段不可删除，请先停止该任务', 409);
-        }
+      if (session && session.status === 'recording') {
+        // 与整场删除（sessionIds 分支）对齐：录制中的场次任何文件都先停止再删，
+        // 避免边录边删导致合并/转封装/统计错乱（文件行本身不再有 status='recording'）。
+        throw new HttpError('FILE_RECORDING', '该文件所属场次正在录制，请先停止录制再删除', 409);
       }
       if (file && file.path) dirs.add(path.dirname(file.path));
       const items = await moveOne(file);
@@ -377,7 +377,7 @@ export class Storage {
         session.extras = (session.extras || []).filter((x) => x.id !== fid && !samePath(x));
         if (session.merged && (session.merged.id === fid || samePath(session.merged))) session.merged = null;
         if (session.mp4 && (session.mp4.id === fid || samePath(session.mp4))) session.mp4 = null;
-        await this.store.saveSession(session);
+        await this._recalcSession(session);
       } else {
         this.store.state.external = this.store.state.external.filter((x) => x.id !== fid && x.path !== file.path);
       }
@@ -402,7 +402,8 @@ export class Storage {
     const all = this.store.trash;
     const total = all.length;
     const bytes = all.reduce((a, b) => a + b.bytes, 0);
-    const retentionDays = Number(this.store.settings && this.store.settings.retentionDays) || 0;
+    // 回收站保留天数取「回收站保留」设置（trashRetentionDays），不是录像保留天数（retentionDays）。
+    const retentionDays = Number(this.store.settings && this.store.settings.trashRetentionDays) || 0;
     const rawPs = Number(opts.pageSize) || 0;
     if (rawPs > 0) {
       const pageSize = Math.min(1000, Math.max(1, rawPs));
@@ -437,6 +438,7 @@ export class Storage {
         if (s && rec) {
           if (rec.kind === 'merged') s.merged = rec; else if (rec.kind === 'mp4' || rec.kind === 'm4a') s.mp4 = rec;
           else s.segments = [...(s.segments || []), rec].sort((a, b) => (a.segmentIndex || 0) - (b.segmentIndex || 0));
+          await this._recalcSession(s); // 还原后场次体积/时长与任务总量同步重算
         }
       } else if (entry.kind === 'file') {
         const rec = entry.items?.[0]?.record;
@@ -685,14 +687,29 @@ export class Storage {
     return n;
   }
 
+  /** 重算场次占用 bytes/durationSec（多文件按路径去重），并同步关联任务的 totalBytes/totalDurationSec。
+   *  删除单文件、从回收站还原、转封装删源后都必须调用——否则文件库（实时算）与任务页（读存量字段）会不一致。 */
+  async _recalcSession(session) {
+    if (!session) return;
+    session.bytes = this._sessionFileBytes(session);
+    session.durationSec = this._sessionDurationSec(session);
+    await this.store.saveSession(session);
+    if (session.taskId) {
+      const task = this.store.tasks.find((t) => t.id === session.taskId);
+      if (task) {
+        task.totalBytes = session.bytes;
+        task.totalDurationSec = session.durationSec;
+        await this.store.saveTask(task);
+      }
+    }
+  }
+
   /** 转封装成功后，按设置删除源 .ts：移出磁盘并从分段记录里移除（成品 mp4 保留） */
   async _dropSourceSegment(seg, session) {
     await fsp.rm(seg.path, { force: true }).catch(() => {});
     this.logger.info(`转封装后已删除源文件：${seg.name}`, { taskId: session.taskId, taskName: session.streamer });
     session.segments = (session.segments || []).filter((x) => x.id !== seg.id);
-    session.bytes = this._sessionFileBytes(session); // 口径含 extras/merged/mp4，删源后不再归零
-    session.durationSec = this._sessionDurationSec(session);
-    await this.store.saveSession(session);
+    await this._recalcSession(session); // 口径含 extras/merged/mp4，删源后不再归零，并同步任务总量
   }
 
   // ---------- 刮削：录制收尾时一次生成海报 + Jellyfin .nfo，之后接口/Jellyfin 只读取 ----------

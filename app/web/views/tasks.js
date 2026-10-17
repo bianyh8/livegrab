@@ -876,7 +876,7 @@ function segTableHtml(task) {
   return `<table>
     <thead><tr><th style="width:70px">${t('tasks.segIndex')}</th><th>${t('tasks.segName')}</th><th>${t('tasks.segDuration')}</th><th>${t('tasks.segSize')}</th><th>${t('tasks.csvStatus')}</th></tr></thead>
     <tbody>${segs.map((s) => `<tr>
-      <td class="mono" data-label="${t('tasks.segIndex')}">${String(s.index || 0).padStart(3, '0')}</td>
+      <td class="mono" data-label="${t('tasks.segIndex')}">${String(s.segmentIndex || 0).padStart(3, '0')}</td>
       <td class="mono" style="font-size:12px;word-break:break-all" data-label="${t('tasks.segName')}">${esc(s.name || s.path || '—')}</td>
       <td data-label="${t('tasks.segDuration')}">${esc(formatDuration(s.durationSec || 0))}</td>
       <td data-label="${t('tasks.segSize')}">${esc(formatBytes(s.bytes || 0))}</td>

@@ -22,7 +22,7 @@ import { resolveRoom, platformList, PLATFORMS } from './resolvers/index.js';
 import { previewNaming, VARIABLES, DEFAULT_OPTIONS, qualityLabel, NAMING_OPTION_CHOICES } from './naming.js';
 import {
   ok, fail, HttpError, readBody, mimeByExt, parseRange, extOf, VERSION,
-  ensureDir, formatBytes, tzName, uid, safeJoin, errText,
+  ensureDir, formatBytes, tzName, uid, safeJoin, errText, dateKey,
 } from './util.js';
 
 // 播放日志节流：同一文件 10s 内只记一次，避免视频拖动/Range 请求刷屏日志
@@ -93,7 +93,7 @@ function sessionView(s) {
 /** 左侧树：按平台/日期/任务两种分组层级（view 决定顶层键） */
 function treeFor(sessions, view = 'platform') {
   const platformName = (s) => s.platformName || s.platform || '未知平台';
-  const dateOf = (s) => (s.startedAt || '').slice(0, 10) || '未知日期';
+  const dateOf = (s) => (s.startedAt ? dateKey(new Date(s.startedAt)) : '') || '未知日期';
   const topOf = (s) => (view === 'date' ? dateOf(s) : view === 'task' ? (s.streamer || s.taskId || '未知任务') : platformName(s));
   const subOf = (s) => (view === 'date' ? platformName(s) : view === 'task' ? null : dateOf(s));
   const map = new Map();
@@ -386,6 +386,10 @@ async function main() {
   route('PUT', '/api/settings', async (req) => {
     const body = await readBody(req);
     delete body.cookies; // Cookie 只能通过专用接口写入
+    // 更新源配置（含 updateToken）只能通过 /api/update/config 写入：
+    // 设置页拿到的 customize.updateToken 是脱敏占位 '••••••••'，若随整包设置保存落库，
+    // 会把真实 token 覆盖成占位符，导致「检查更新/立即更新」鉴权失败（用户无感知）。
+    delete body.customize;
     const merged = await store.updateSettings(body);
     if (body.logLevel) logger.setLevel(body.logLevel);
     if (body.logRetentionDays) { logger.setRetention(body.logRetentionDays); await logger.purge(); }
@@ -453,7 +457,9 @@ async function main() {
     };
     const filtered = rows.filter(({ f, s, tag }) => {
       if (fil.platform && s.platform !== fil.platform) return false;
-      const day = String(s.startedAt || '').slice(0, 10);
+      // 日期筛选与「今日统计」同口径：startedAt 是 UTC ISO，直接 slice(0,10) 会按 UTC 日期切片，
+      // 东八区 00:00–08:00 的录制会被算到前一天。这里统一用本地时区 dateKey。
+      const day = s.startedAt ? dateKey(new Date(s.startedAt)) : '';
       if (fil.dateFrom && day < fil.dateFrom) return false;
       if (fil.dateTo && day > fil.dateTo) return false;
       if (fil.ext) {

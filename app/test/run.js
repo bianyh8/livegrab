@@ -756,6 +756,32 @@ function testRecorderLiveProxy() {
   ok(pi >= 0 && withPx[pi + 1] === 'http://127.0.0.1:7890', '开启代理时 ffmpeg 参数含 -http_proxy <代理地址>（录制拉流走代理）');
   ok(buildRecordArgs({ ...base, proxy: '' }).indexOf('-http_proxy') < 0, '未开代理时不含 -http_proxy（直连）');
 }
+
+/* 全局一致性审计守卫：把「前后端契约 / 多处口径不一致」的真实缺陷钉死，防止回退。 */
+async function testAuditConsistency() {
+  suite('全局一致性审计（前后端契约/口径）');
+  const srv = fs.readFileSync(path.join(APP_DIR, 'server', 'server.js'), 'utf8');
+  const st = fs.readFileSync(path.join(APP_DIR, 'server', 'storage.js'), 'utf8');
+  const sch = fs.readFileSync(path.join(APP_DIR, 'server', 'scheduler.js'), 'utf8');
+  const storeSrc = fs.readFileSync(path.join(APP_DIR, 'server', 'store.js'), 'utf8');
+  const filesView = fs.readFileSync(path.join(APP_DIR, 'web', 'views', 'files.js'), 'utf8');
+  const tasksView = fs.readFileSync(path.join(APP_DIR, 'web', 'views', 'tasks.js'), 'utf8');
+
+  ok(/delete body\.customize/.test(srv), 'PUT /api/settings 不落库 customize（脱敏占位不会覆盖真实 token）');
+  ok(/delete patch\.customize\.updateToken/.test(storeSrc), 'store 兜底：占位符 token 不被写入');
+  ok(/_recalcSession/.test(st), 'storage._recalcSession：删文件/还原/删源后统一重算体积与时长');
+  ok(/trashRetentionDays/.test(st), '回收站保留天数取 trashRetentionDays（不误用录像 retentionDays）');
+  ok(/dateKey\(new Date\(s\.startedAt\)\)/.test(srv), '文件日期筛选与「今日统计」同口径（本地时区 dateKey）');
+  ok(/anchorNameLocked !== undefined && patch\.nameLocked === undefined/.test(sch), '编辑任务把 anchorNameLocked 归一为 nameLocked');
+  ok(/s\.status === 'recording'/.test(filesView) && !/f\.status === 'recording'/.test(filesView), '文件库录制态取会话状态（文件行无 recording 状态）');
+  ok(/s\.segmentIndex \|\| 0\)\.padStart\(3, '0'\)/.test(tasksView), '任务分段序号读 segmentIndex（不再恒 000）');
+
+  // 行为：脱敏占位保存不会覆盖真实 token
+  const store = await openStore(p('audit-token'));
+  await store.updateSettings({ customize: { updateToken: 'REAL_TOKEN' } });
+  await store.updateSettings({ customize: { updateToken: '••••••••' } });
+  eq(store.settings.customize.updateToken, 'REAL_TOKEN', '行为：占位符 token 保存后真实 token 仍在');
+}
 // ============ 5. 并发排队（D16） ============
 // ============ 4b. 并发重复启动保护 ============
 async function testPullBlockedBackoff() {
@@ -1328,7 +1354,7 @@ async function testProxy() {
   console.log(`LiveGrab 测试开始（临时目录 ${tmpRoot}）`);
   await rmrf(tmpRoot);
   await fsp.mkdir(tmpRoot, { recursive: true });
-  const suites = [testUtil, testNaming, testStore, testResolvers, testAuth, testRecordChain, testRemuxFollowGlobal, testPullBlockedBackoff, testConcurrentStart, testRepeatSessionNaming, testTodayStats, testQueue, testHttp, testViewGuards, testUpdateGuards, testProxy, testSegmentEndReason, testSegmentGuards, testFfmpegGuards, testFileScanGuards, testFileOrder, testRecorderLiveProxy];
+  const suites = [testUtil, testNaming, testStore, testResolvers, testAuth, testRecordChain, testRemuxFollowGlobal, testPullBlockedBackoff, testConcurrentStart, testRepeatSessionNaming, testTodayStats, testQueue, testHttp, testViewGuards, testUpdateGuards, testProxy, testSegmentEndReason, testSegmentGuards, testFfmpegGuards, testFileScanGuards, testFileOrder, testRecorderLiveProxy, testAuditConsistency];
   for (const s of suites) {
     try { await s(); } catch (e) {
       failed++;

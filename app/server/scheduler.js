@@ -346,6 +346,9 @@ export class Scheduler {
     }
     if (overridesDirty) task.overrides = overrides;
 
+    // 新建接口用的是别名 anchorNameLocked；编辑接口白名单只有 nameLocked。
+    // 这里把别名归一，避免「编辑改名不加锁 → 重解析被平台名覆盖」。
+    if (patch.anchorNameLocked !== undefined && patch.nameLocked === undefined) patch.nameLocked = !!patch.anchorNameLocked;
     // 前端新建/编辑统一用 url 字段表示直播地址
     if (patch.url !== undefined) { patch.sourceUrl = patch.url; delete patch.url; }
     const allowed = [
