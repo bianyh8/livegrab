@@ -672,6 +672,14 @@ function testFileScanGuards() {
   ok(/storage\.startScanTimer\(\)/.test(srv), '服务启动时启用后台定时扫描');
   ok(/storage\.scanThrottled\(/.test(srv), 'GET /api/files 主动触发节流扫描（页面打开即对账）');
   ok(/changed\s*=\s*added\s*\|\|\s*updated\s*\|\|\s*missing\s*\|\|\s*cleaned/.test(storage), '无变化时不落库/不广播（避免周期扫描刷屏与无谓写库）');
+
+  // 关键修复：录制中的当前分段「未封口」，扫描绝不能把它登记成独立会话（否则文件库出现不能播、无首帧的录制中 ts）
+  const sched = fs.readFileSync(path.join(APP_DIR, 'server', 'scheduler.js'), 'utf8');
+  const media = fs.readFileSync(path.join(APP_DIR, 'server', 'media.js'), 'utf8');
+  ok(/activePathsFn/.test(storage) && /active\.has\(p\)/.test(storage) && /setActivePathsProvider/.test(storage), '扫描跳过「正在写入的活动分段」（不误登记成不可播放文件）');
+  ok(/activeRecordingPaths\(\)/.test(sched) && /setActivePathsProvider\(/.test(sched), 'scheduler 向 storage 提供活动分段路径');
+  ok(/_dedupePathAcrossSessions/.test(sched), '分段关闭时清理同路径的扫描误登记会话（防重复/残留）');
+  ok(/isJpeg/.test(media) && /0xff/.test(media) && /0xd8/.test(media), 'grabFrame 容忍非零退出：能出 JPEG 首帧即成功（录制中/截断文件也能出首帧）');
 }
 
 /* 文件库排序守卫：用户反馈「文件排序很混乱」。

@@ -59,6 +59,7 @@ export class Storage {
     this._scanTimer = null;      // 后台定时扫描（外部移动/删除文件对账）
     this._scanInflight = null;   // 扫描在飞去重：并发调用复用同一 Promise，绝不并行遍历磁盘
     this._lastScanAt = 0;        // 上次扫描起始时间戳（节流基准）
+    this.activePathsFn = null;   // 提供「正在写入的活动分段」路径集合（扫描时跳过，避免误登记）
     this._remuxInflight = new Map(); // 转封装按输出路径互斥（live remux 与 autoRemux 并发写同一文件防护）
   }
 
@@ -118,9 +119,15 @@ export class Storage {
     let added = 0;
     let updated = 0;
     let missing = 0;
+    let ghosts = 0;
     const seen = new Set();
+    // 「正在写入」的活动分段：录制的当前分段尚未封口（segment 还没 close），不是完整文件。
+    // 若把它当未登记文件登记成独立会话，就会出现「文件库里有个录制中的 ts，点开不能播、首帧也没有」，
+    // 且等分段真正关闭时同路径会再登记一次 → 重复记录。这里直接跳过，并标记 seen 免得被判缺失。
+    const active = this.activePathsFn ? new Set(this.activePathsFn() || []) : new Set();
     for (const p of found) {
       seen.add(p);
+      if (active.has(p)) continue;
       const recs = indexed.get(p);
       const st = await fsp.stat(p).catch(() => null);
       if (!st) continue;
@@ -171,6 +178,19 @@ export class Storage {
         if (!seen.has(p) && rec.status !== 'missing') { rec.status = 'missing'; missing++; }
       }
     }
+    // 清理历史幽灵会话：早期扫描曾把「正在写入的当前分段」登记成独立会话（taskId 为空、仅含该文件）。
+    // 该文件此刻由活动录制占用 → 删掉这个空壳会话，避免文件库残留「不能播、无首帧」的录制中条目。
+    if (active.size) {
+      for (const s of [...this.store.state.sessions]) {
+        if (s.taskId) continue;
+        const files = [...(s.segments || []), ...(s.extras || [])];
+        if (files.length === 1 && !s.merged && !s.mp4 && files[0].path && active.has(files[0].path)) {
+          await this.store.removeSession(s.id).catch(() => {});
+          ghosts++;
+          this.logger.info(`清理扫描误登记的活动分段幽灵会话：${s.id}`);
+        }
+      }
+    }
     // 清理"幽灵未登记条目"：① 文件已从磁盘消失；② 该路径已归属某个场次
     // （转封装/合并产物可能先被一次扫描当成"未登记"，随后又被登记为场次产物，旧条目若不清理会永久挂在文件库）
     const sessionPaths = new Set();
@@ -182,10 +202,10 @@ export class Storage {
     const beforeExternal = this.store.state.external.length;
     this.store.state.external = this.store.state.external.filter((f) => seen.has(f.path) && !sessionPaths.has(f.path));
     const cleaned = beforeExternal - this.store.state.external.length;
-    const changed = added || updated || missing || cleaned;
+    const changed = added || updated || missing || cleaned || ghosts;
     if (changed) {
       await this.store.persist();
-      this.logger.info(`扫描完成：新增场次 ${added}，更新 ${updated}，缺失 ${missing}${cleaned ? `，清理幽灵条目 ${cleaned}` : ''}`);
+      this.logger.info(`扫描完成：新增场次 ${added}，更新 ${updated}，缺失 ${missing}${cleaned ? `，清理幽灵条目 ${cleaned}` : ''}${ghosts ? `，清理幽灵会话 ${ghosts}` : ''}`);
       this.onEvent({ type: 'files' });
     } else {
       this.logger.debug(`扫描完成：无变化（共 ${found.length} 个媒体文件）`);
@@ -895,6 +915,10 @@ export class Storage {
       .finally(() => { this._scanInflight = null; });
     return this._scanInflight;
   }
+
+  /** 注册「正在写入的活动分段」提供者：scan 会跳过这些路径，
+   *  避免把未封口的当前分段误登记成独立会话（否则文件库出现不能播、无首帧的"录制中 ts"）。 */
+  setActivePathsProvider(fn) { this.activePathsFn = typeof fn === 'function' ? fn : null; }
 
   /** 后台定时扫描：文件被外部移动/删除后，无需手动点「扫描」，文件库自动与磁盘对账 */
   startScanTimer(intervalMs = Number(process.env.SCAN_INTERVAL_MS) || 15000) {

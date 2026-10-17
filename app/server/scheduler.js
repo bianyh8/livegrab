@@ -40,6 +40,21 @@ export class Scheduler {
     this._ticking = false;   // tick 运行中互斥：防止探测慢导致的重叠轮询
     this._pendingStarts = new Map(); // 开播延时待启动定时器（taskId → {timer, rec}），延时改为非阻塞
     this._probe = probeLive; // 开播探测入口（测试可注入假实现，避免打真实平台接口）
+    // 让磁盘扫描跳过「正在写入的活动分段」，避免把未封口的当前分段误登记成独立会话
+    // （否则文件库会出现一个录制中的 ts：点开不能播、首帧也没有）。
+    if (this.storage && typeof this.storage.setActivePathsProvider === 'function') {
+      this.storage.setActivePathsProvider(() => this.activeRecordingPaths());
+    }
+  }
+
+  /** 正在写入的分段路径（活动 + 暂停中 recorder 的 currentSegment）：供磁盘扫描跳过 */
+  activeRecordingPaths() {
+    const out = new Set();
+    for (const r of [...this.recorders.values(), ...this.detached.values()]) {
+      const p = r && r.currentSegment && r.currentSegment.path;
+      if (p) out.add(p);
+    }
+    return [...out];
   }
 
   async init() {
@@ -548,6 +563,9 @@ export class Scheduler {
     if (exists) Object.assign(exists, item);
     else session.segments.push(item);
     session.segments.sort((a, b) => a.segmentIndex - b.segmentIndex);
+    // 清理历史误登记：定时扫描可能曾把「当时正在写入的分段」登记成独立会话；分段关闭后该路径已归属
+    // 本会话，这里把其它会话里的同路径文件移除（会话空了就删掉），避免文件库重复/残留不可播放条目。
+    await this._dedupePathAcrossSessions(item.path, session.id);
     session.bytes = this.storage._sessionFileBytes(session); // 口径含 extras/merged/mp4（边录边转+keepSource=false 时不欠计）
     session.durationSec = this.storage._sessionDurationSec(session);
     task.totalBytes = session.bytes;
@@ -573,6 +591,33 @@ export class Scheduler {
     await this.store.saveSession(session);
     await this.store.saveTask(task);
     this.onEvent({ type: 'task', task });
+  }
+
+  /** 同路径去重：分段关闭后，若磁盘扫描曾把该未封口文件误登记成独立会话，
+   *  把其它（非活动）会话里的同路径文件移除；会话空了就删掉，避免文件库重复/残留不可播放条目。 */
+  async _dedupePathAcrossSessions(filePath, keepSessionId) {
+    if (!filePath) return;
+    const activeIds = new Set([...this.sessions.values()].map((s) => s.id));
+    for (const other of [...this.store.sessions]) {
+      if (other.id === keepSessionId || activeIds.has(other.id)) continue;
+      let touched = false;
+      for (const key of ['segments', 'extras']) {
+        const arr = other[key];
+        if (!Array.isArray(arr)) continue;
+        const next = arr.filter((f) => f && f.path !== filePath);
+        if (next.length !== arr.length) { other[key] = next; touched = true; }
+      }
+      if (other.merged && other.merged.path === filePath) { other.merged = null; touched = true; }
+      if (other.mp4 && other.mp4.path === filePath) { other.mp4 = null; touched = true; }
+      if (!touched) continue;
+      const left = (other.segments?.length || 0) + (other.extras?.length || 0) + (other.merged ? 1 : 0) + (other.mp4 ? 1 : 0);
+      if (!left) {
+        await this.store.removeSession(other.id).catch(() => {});
+        this.logger.info(`清理扫描误登记的同路径空会话：${other.id}`);
+      } else {
+        await this.store.saveSession(other).catch(() => {});
+      }
+    }
   }
 
   /** 分段录完立刻转封装 mp4（跟随 remuxToMp4 / keepSource 配置）；失败不阻塞，源文件保留 */
