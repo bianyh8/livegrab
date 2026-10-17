@@ -3,6 +3,12 @@ config/
 data/
 *.log
 
+# ---- 包锁文件：不入库 ----
+# 自更新会在每次成功后跑 `npm install`，会重写 package-lock.json，导致工作区变脏、
+# 下一次 `git merge --ff-only` 因「本地改动会被覆盖」而失败。该锁文件不入库后，
+# npm install 的改写对 git 不可见（-uno 不列未跟踪文件），自更新链路不再被它卡住。
+app/package-lock.json
+
 # ---- 内部工程文档（重构方案 / 评审报告，仅本地留存，不入库）----
 doc/
 
