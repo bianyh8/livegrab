@@ -1,5 +1,5 @@
 // Docker 打包自检（本机不需要安装 Docker）
-// 1) 静态校验 Dockerfile / docker-compose.yml / .dockerignore 与代码是否自洽；
+// 1) 静态校验 Dockerfile / docker-compose.yaml / .dockerignore 与代码是否自洽；
 // 2) 用"容器形态"的环境变量（PORT=8080 / RECORD_ROOT / CONFIG_DIR / TZ）真起一次服务做冒烟；
 // 3) 校验依赖：唯一第三方依赖 better-sqlite3，其余只允许 node: 内置模块与相对路径 import。
 // 用法：node app/test/check-docker.mjs
@@ -30,7 +30,7 @@ const walkFiles = (dir, out = []) => {
 console.log('==== Docker 打包自检（不需要安装 Docker）====\n');
 
 /* ---------- 1) 打包文件是否齐备 ---------- */
-const P = { dockerfile: path.join(ROOT, 'Dockerfile'), compose: path.join(ROOT, 'docker-compose.yml'), ignore: path.join(ROOT, '.dockerignore'), readme: path.join(ROOT, 'README.md') };
+const P = { dockerfile: path.join(ROOT, 'Dockerfile'), compose: path.join(ROOT, 'docker-compose.yaml'), ignore: path.join(ROOT, '.dockerignore'), readme: path.join(ROOT, 'README.md') };
 for (const [k, p] of Object.entries(P)) check(fs.existsSync(p), `打包文件存在：${path.basename(p)}`, k);
 const dockerfile = readIf(P.dockerfile) || '';
 const compose = readIf(P.compose) || '';

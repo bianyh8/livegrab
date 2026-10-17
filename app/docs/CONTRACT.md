@@ -36,7 +36,7 @@ app/
     run.js              # 自带 assert，无框架：node app/test/run.js
     fake-ffmpeg.mjs     # 假 ffmpeg，用于无 ffmpeg 环境下的录制链路测试
 docs/ (本文件)
-Dockerfile  docker-compose.yml  README.md
+Dockerfile  docker-compose.yaml  README.md
 ```
 
 ## 2. 数据模型（store.js 持有）

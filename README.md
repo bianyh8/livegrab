@@ -68,7 +68,7 @@ compose 相对 `livegrab/` 目录挂载：
 | `./config` → `/config` | 账号哈希、Cookie、任务、场次索引、日志、SQLite 库（livegrab.db） | 长期保留 |
 | `./config/src` | 容器实际运行的代码（git  clone，架构 B） | 由容器管理，勿手改；删除后重启容器会重新克隆 |
 
-### 环境变量（`docker-compose.yml` 可调）
+### 环境变量（`docker-compose.yaml` 可调）
 
 | 变量 | 默认 | 说明 |
 |---|---|---|
@@ -183,7 +183,7 @@ app/
   test/          # 测试
   docs/          # 接口契约等文档
 ui/              # UI 设计原型与说明（不进 Docker 镜像）
-Dockerfile / docker-compose.yml / .dockerignore
+Dockerfile / docker-compose.yaml / .dockerignore
 deploy/          # entrypoint.sh（容器入口：clone/回退/启动）
 start-local.cmd  # 本地一键启动
 ```
