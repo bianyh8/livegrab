@@ -56,6 +56,9 @@ export class Storage {
     this.jobs = new Map();
     this.onEvent = () => {};
     this._cleanupTimer = null;
+    this._scanTimer = null;      // 后台定时扫描（外部移动/删除文件对账）
+    this._scanInflight = null;   // 扫描在飞去重：并发调用复用同一 Promise，绝不并行遍历磁盘
+    this._lastScanAt = 0;        // 上次扫描起始时间戳（节流基准）
     this._remuxInflight = new Map(); // 转封装按输出路径互斥（live remux 与 autoRemux 并发写同一文件防护）
   }
 
@@ -83,6 +86,7 @@ export class Storage {
 
   // ---------- 扫描与一致性（D19） ----------
   async scan() {
+    this._lastScanAt = Date.now();
     const root = this.root;
     await ensureDir(root);
     const found = [];
@@ -178,9 +182,14 @@ export class Storage {
     const beforeExternal = this.store.state.external.length;
     this.store.state.external = this.store.state.external.filter((f) => seen.has(f.path) && !sessionPaths.has(f.path));
     const cleaned = beforeExternal - this.store.state.external.length;
-    await this.store.persist();
-    this.logger.info(`扫描完成：新增场次 ${added}，更新 ${updated}，缺失 ${missing}${cleaned ? `，清理幽灵条目 ${cleaned}` : ''}`);
-    this.onEvent({ type: 'files' });
+    const changed = added || updated || missing || cleaned;
+    if (changed) {
+      await this.store.persist();
+      this.logger.info(`扫描完成：新增场次 ${added}，更新 ${updated}，缺失 ${missing}${cleaned ? `，清理幽灵条目 ${cleaned}` : ''}`);
+      this.onEvent({ type: 'files' });
+    } else {
+      this.logger.debug(`扫描完成：无变化（共 ${found.length} 个媒体文件）`);
+    }
     return { added, updated, missing, unregistered: this.store.state.external.length, cleaned, total: found.length };
   }
 
@@ -873,5 +882,26 @@ export class Storage {
   startCleanupTimer(intervalMs = 10 * 60 * 1000) {
     if (this._cleanupTimer) clearInterval(this._cleanupTimer);
     this._cleanupTimer = setInterval(() => { this.cleanup().catch(() => {}); }, intervalMs);
+  }
+
+  /** 节流扫描：距上次扫描不足 minIntervalMs 直接跳过；扫描在飞时复用同一 Promise，绝不并发。
+   *  供「后台定时器」与「文件库接口」共用——页面打开时按较小间隔（5s）扫，空闲时后台按较大间隔（15s）扫，
+   *  既让外部移动/删除尽快同步到文件管理页，又避免频繁递归遍历磁盘拖慢接口。 */
+  scanThrottled(minIntervalMs = 5000) {
+    if (this._scanInflight) return this._scanInflight;
+    if (this._lastScanAt && Date.now() - this._lastScanAt < minIntervalMs) return Promise.resolve(null);
+    this._scanInflight = this.scan()
+      .catch((e) => { this.logger.warn(`定时扫描失败：${errText(e)}`); return null; })
+      .finally(() => { this._scanInflight = null; });
+    return this._scanInflight;
+  }
+
+  /** 后台定时扫描：文件被外部移动/删除后，无需手动点「扫描」，文件库自动与磁盘对账 */
+  startScanTimer(intervalMs = Number(process.env.SCAN_INTERVAL_MS) || 15000) {
+    if (this._scanTimer) clearInterval(this._scanTimer);
+    const ms = Math.max(3000, Number(intervalMs) || 15000);
+    this._scanTimer = setInterval(() => { this.scanThrottled(ms).catch(() => {}); }, ms);
+    if (typeof this._scanTimer.unref === 'function') this._scanTimer.unref();
+    this.logger.info(`已启用文件定时扫描：每 ${Math.round(ms / 1000)} 秒对账一次（外部移动/删除自动同步到文件库）`);
   }
 }

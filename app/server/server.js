@@ -184,6 +184,7 @@ async function bootstrap() {
   await ensureDir(play.store.settings.recordRoot);
   const scan = await storage.scan().catch((e) => { logger.warn(`首次扫描失败：${errText(e)}`); return null; });
   storage.startCleanupTimer();
+  storage.startScanTimer();
   await scheduler.init();
   const version = VERSION;
   const update = new UpdateManager({
@@ -419,6 +420,9 @@ async function main() {
 
   // ---- 文件库 ----
   route('GET', '/api/files', async (req) => {
+    // 文件库主动对账：外部把文件移动/删除后，无需手动点「扫描」——这里以 5s 节流触发一次后台扫描，
+    // 前端每 2s 轮询本接口，下一次即可拿到最新磁盘状态（缺失标记 / 新增登记 / 幽灵清理）。
+    void storage.scanThrottled(5000);
     const q = req.query;
     // all=1：返回符合筛选的全量（不分页），供前端跨页全选 / 批量删除统计 / 导出使用
     const wantAll = q.all === '1' || q.all === 'true';

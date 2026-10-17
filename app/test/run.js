@@ -654,6 +654,21 @@ function testFfmpegGuards() {
   ok(/\+resend_headers/.test(media) && /-muxdelay', '0'/.test(media), 'TS 每段重发 PAT/PMT 头 + 零 mux 延迟');
   ok(!/thread_queue_size/.test(media), '不带 thread_queue_size（新旧 ffmpeg 输入/输出语义分裂，宁缺勿错）');
 }
+
+/* 文件定时扫描守卫：文件被外部移动/删除后，文件管理页需自动与磁盘对账（用户反馈「移动/删除后页面不同步」）。
+   后端必须提供「节流扫描 + 后台定时」两条对账通道，且文件库接口主动触发一次；
+   否则页面只能靠手动点「扫描」按钮才刷新，期间一直显示已失效的旧条目。 */
+function testFileScanGuards() {
+  suite('文件定时扫描（外部移动/删除自动同步）');
+  const storage = fs.readFileSync(path.join(APP_DIR, 'server', 'storage.js'), 'utf8');
+  const srv = fs.readFileSync(path.join(APP_DIR, 'server', 'server.js'), 'utf8');
+  ok(/scanThrottled\s*\(/.test(storage), 'storage 提供 scanThrottled 节流扫描');
+  ok(/startScanTimer\s*\(/.test(storage), 'storage 提供 startScanTimer 后台定时扫描');
+  ok(/this\._scanInflight/.test(storage) && /this\._lastScanAt/.test(storage), '扫描带 in-flight 去重 + 时间戳节流（绝不并发遍历磁盘）');
+  ok(/storage\.startScanTimer\(\)/.test(srv), '服务启动时启用后台定时扫描');
+  ok(/storage\.scanThrottled\(/.test(srv), 'GET /api/files 主动触发节流扫描（页面打开即对账）');
+  ok(/changed\s*=\s*added\s*\|\|\s*updated\s*\|\|\s*missing\s*\|\|\s*cleaned/.test(storage), '无变化时不落库/不广播（避免周期扫描刷屏与无谓写库）');
+}
 // ============ 5. 并发排队（D16） ============
 // ============ 4b. 并发重复启动保护 ============
 async function testPullBlockedBackoff() {
@@ -1213,7 +1228,7 @@ async function testProxy() {
   console.log(`LiveGrab 测试开始（临时目录 ${tmpRoot}）`);
   await rmrf(tmpRoot);
   await fsp.mkdir(tmpRoot, { recursive: true });
-  const suites = [testUtil, testNaming, testStore, testResolvers, testAuth, testRecordChain, testRemuxFollowGlobal, testPullBlockedBackoff, testConcurrentStart, testRepeatSessionNaming, testTodayStats, testQueue, testHttp, testViewGuards, testUpdateGuards, testProxy, testSegmentEndReason, testSegmentGuards, testFfmpegGuards];
+  const suites = [testUtil, testNaming, testStore, testResolvers, testAuth, testRecordChain, testRemuxFollowGlobal, testPullBlockedBackoff, testConcurrentStart, testRepeatSessionNaming, testTodayStats, testQueue, testHttp, testViewGuards, testUpdateGuards, testProxy, testSegmentEndReason, testSegmentGuards, testFfmpegGuards, testFileScanGuards];
   for (const s of suites) {
     try { await s(); } catch (e) {
       failed++;
