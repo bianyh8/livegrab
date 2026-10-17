@@ -343,7 +343,18 @@ export class Recorder extends EventEmitter {
           { ...this.task, qualityFallback: this.settings.qualityFallback },
           { settings: this.settings, logger: this.logger },
         );
-        if (stream?.url) { this.streamUrl = stream.url; this.headers = stream.headers || this.headers; }
+        if (stream?.url) {
+          const clean = this.media.sanitizeStreamUrl(stream.url);
+          // 重连重新解析出的地址必须可落地到 ffmpeg：净化后仍为合法 http(s) 才采用，否则复用上一次
+          // 已知可用地址。抖音重连偶发拿到带换行/空白或 HLS↔FLV 切换的脏地址，直接喂给 ffmpeg 会报
+          // 5: Invalid argument 且永不落盘——这是本次崩溃根因；复用首跑成功过的地址即可破局。
+          if (/^https?:\/\//i.test(clean)) {
+            this.streamUrl = clean;
+            this.headers = this.media.sanitizeHeaders(stream.headers || this.headers);
+          } else {
+            this.logger.warn(`重连解析出的流地址不可用（${JSON.stringify(stream.url)}），复用上一次可用地址继续重连`, this._meta());
+          }
+        }
       }
       this.logger.info(`重连成功，继续拉流（第 ${this.reconnectAttempt}/${max} 次 · 流地址 ${this.streamUrl || '(未知 URL)'}）`, this._meta());
       const segs = await this.scanSegments();
