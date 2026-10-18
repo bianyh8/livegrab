@@ -627,17 +627,22 @@ export class Storage {
     }
   }
 
-  /** 录制收尾后的自动转封装（D5）；转 mp4 后按系统设置 keepSource 决定是否删除源 .ts */
+  /** 录制收尾后的自动转封装 / 合并（D5）：
+   *  - mergeOnStop=true：无论是否转 MP4，先把整场分段合并为一个文件（让「停止时合并整场」真正生效）；
+   *  - autoMerge=true 且 remuxToMp4=true：转 MP4 前先整场合并（避免一堆散文件）。
+   *  合并分支放在 remux 早返回之前，确保「只合并不转封装」也能触发。 */
   async autoRemux(session) {
-    if (!this.store.settings.remuxToMp4) return [];
     // 边录边转封装已把部分分段转完：跳过有对应 mp4 的分段，避免重复转、重复登记
     const segs = (session.segments || []).filter((f) => f.ext === 'ts' && f.status !== 'missing'
       && !(session.extras || []).some((m) => m.sourceFileId === f.id));
-    if (!segs.length) return [];
-    if (this.store.settings.autoMerge && segs.length > 1) {
-      await this.mergeSession(session.id).catch((e) => this.logger.warn(`自动合并失败：${errText(e)}`));
+    // 停止时合并整场：mergeOnStop 打开，或（autoMerge 打开且要转 MP4）时，先合并再（按需）转
+    if (segs.length > 1 && (this.store.settings.mergeOnStop
+      || (this.store.settings.autoMerge && this.store.settings.remuxToMp4))) {
+      await this.mergeSession(session.id).catch((e) => this.logger.warn(`停止时合并失败：${errText(e)}`));
       return [];
     }
+    if (!this.store.settings.remuxToMp4) return [];
+    if (!segs.length) return [];
     const keep = this.store.settings.keepSource !== false; // 系统设置：转 mp4 后是否保留源 .ts
     const out = [];
     for (const f of segs) {

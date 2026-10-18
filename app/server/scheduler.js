@@ -586,9 +586,11 @@ export class Scheduler {
       this.logger.warn(`分段 #${seg.index} 提前收尾（${endReason}）：${seg.name}（${formatBytes(seg.bytes)} · ${formatDuration(seg.durationSec)}${gap}）`, { taskId: task.id, taskName: task.anchorName });
     }
     // 边录边转封装：每个分段一录完就按配置立即转 MP4（整场结束后 autoRemux 会跳过已转的分段）。
-    // 仅在不自动合并时生效（合并需要源 .ts，先合并再统一转封装）。
+    // 仅在「不自动合并」且「停止时不合并整场」时生效（合并需要源 .ts，先合并再统一转封装）。
     // remuxToMp4 取实时生效值（effective）：任务弹窗无任务级开关，恒跟随全局；改全局设置当段生效。
-    const canRemuxNow = this.effective(task).remuxToMp4 !== false && !this.store.settings.autoMerge && ['ts', 'flv', 'mkv'].includes(item.ext);
+    const canRemuxNow = this.effective(task).remuxToMp4 !== false
+      && !this.store.settings.autoMerge && !this.store.settings.mergeOnStop
+      && ['ts', 'flv', 'mkv'].includes(item.ext);
     if (canRemuxNow) this._segmentRemuxNow(task, session, item, seg).catch(() => {});
     // 分段收尾直接行级写穿透（不依赖 1500ms 防抖），崩溃/强杀窗口内分段登记立即落库
     await this.store.saveSession(session);
@@ -1141,6 +1143,11 @@ export class Scheduler {
         id: session.id, status: session.status, bytes: session.bytes,
         durationSec: session.durationSec, segments: session.segments.length,
       } : null,
+      // 整场媒体文件总数（分段 + 转封装/合并副本 + 独立音频），用于删除确认真实文件数（不再恒为 1）
+      segmentCount: session ? (
+        (session.segments?.length || 0) + (session.extras?.length || 0)
+        + (session.merged ? 1 : 0) + (session.mp4 ? 1 : 0)
+      ) : 0,
     };
   }
 

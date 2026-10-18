@@ -357,8 +357,8 @@ app/test/    run.js fake-ffmpeg.mjs fake-media.mjs e2e-ui.mjs e2e-ffmpeg.mjs e2e
 
 - 录制：`ffmpeg -f segment`，`-reset_timestamps 1`、`-segment_start_number` 续接；优雅停止写 stdin `q`，等收尾入库；大小轮转由轮询 `statSync` 触发（`-segment_time` 只是估算上限）。
 - 目录与命名：`/data/{平台显示名}/{主播}/{日期}/{日期}_{主播}_{清晰度}_{序号}.ts`（如 `直链/真实录制A/2026-10-09/2026-10-09_真实录制A_001.ts`），序号从 `001` 开始，暂停恢复后续接不覆盖。
-- 后处理（D5）：停止后按 `remuxToMp4` 自动把**每个分段**转封装成同名 `.mp4`（`-c copy`），产物挂在 `session.extras`（`kind:'mp4'`），同时把首个/单段的成品同时写入 `session.mp4`；`autoMerge` 打开时改为自动合并。合并整场（`POST /api/files/merge`，至少 2 段）产出 `_整场.ts`（`session.merged`），随后按 `remuxToMp4` 再转出 `_整场.mp4`（也进 `session.extras`）。
-- 边录边转（v0.1.24 起修正语义）：分段一录完就按**全局** `remuxToMp4`（任务弹窗无任务级开关，恒跟随全局、实时生效）立即转封装；仅全局 `autoMerge` 关闭时生效（合并需保留源 `.ts`，整场结束后先合并再统一转）。转封装失败不阻塞录制，源文件保留，日志 `分段 #N 立即转封装失败`。整场收尾 `autoRemux` 仍按全局设置兜底（跳过已转段），`keepSource=false` 时转完即删源。
+- 后处理（D5）：停止后按 `remuxToMp4` 自动把**每个分段**转封装成同名 `.mp4`（`-c copy`），产物挂在 `session.extras`（`kind:'mp4'`），同时把首个/单段的成品同时写入 `session.mp4`；`autoMerge` 打开时改为自动合并。合并整场（`POST /api/files/merge`，至少 2 段）产出 `_整场.ts`（`session.merged`），随后按 `remuxToMp4` 再转出 `_整场.mp4`（也进 `session.extras`）。`mergeOnStop`（设置页「停止时合并整场」）打开时，无论是否转 MP4，收尾都先把整场分段合并为一个文件——该开关此前只存未用，v0.1.38 起真正生效。
+- 边录边转（v0.1.24 起修正语义）：分段一录完就按**全局** `remuxToMp4`（任务弹窗无任务级开关，恒跟随全局、实时生效）立即转封装；仅全局 `autoMerge` **且** `mergeOnStop` 均关闭时生效（合并需保留源 `.ts`，整场结束后先合并再统一转）。转封装失败不阻塞录制，源文件保留，日志 `分段 #N 立即转封装失败`。整场收尾 `autoRemux` 仍按全局设置兜底（跳过已转段），`keepSource=false` 时转完即删源。
 - `GET /api/files` 的每个场次都返回 `extras`，前端文件库据此显示「已生成 MP4 ×N」并在展开区列出 MP4 副本（可播放/下载/删除）——转封装与合并产物**不能只存在索引里而在界面上看不见**。
 - `GET /api/status` 的 `recording[]` 用完整任务形状（含 `live:{bytes,elapsedSec,segmentIndex,currentFile,dir}`），前端总览的实时进度直接读它；`tasks[]` 仍是精简形状。
 - 回放：MP4/M4A 直放（Range + `Accept-Ranges`），TS/FLV/MKV 走 `-c copy` → fMP4 渐进流（`-movflags frag_keyframe+empty_moov+default_base_moof -f mp4 pipe:1`），失败降级 `-c:v copy -c:a aac`；`playConcurrency` 默认 2，超出 429 `PLAY_BUSY`（测试已覆盖）。

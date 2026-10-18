@@ -1423,12 +1423,65 @@ async function testProxy() {
   ok(/CONNECT \$\{targetHost\}:\$\{targetPort\}/.test(pf), 'CONNECT 隧道用手写握手（不依赖 http.request 的 socket 选项）');
 }
 
+// ============ 13. mergeOnStop 生效 + 删除确认文件数 ============
+async function testMergeOnStopAndDeleteCount() {
+  suite('mergeOnStop 真正生效 + 删除确认文件数真实');
+
+  const logger = new Logger({ level: 'SILENT' });
+
+  // 1) 任务序列化提供 segmentCount（删除确认用真实文件数，不再恒为 1）
+  const store = await openStore(p('segcount'));
+  const sch = new Scheduler({ store, logger, notifier: new Notifier({ store, logger }), storage: {} });
+  const task = { id: 't1', platform: 'douyin', roomId: 'r1', anchorName: '主播A', title: '', status: 'completed' };
+  const session = {
+    id: 's1', taskId: 't1', platform: 'douyin', streamer: '主播A',
+    segments: [{ id: 'a', ext: 'ts' }, { id: 'b', ext: 'ts' }, { id: 'c', ext: 'ts' }],
+    extras: [{ id: 'e1', ext: 'mp4' }], merged: null, mp4: null, bytes: 10, durationSec: 5,
+  };
+  sch.sessions.set('t1', session);
+  const v = sch.serializeTask(task);
+  eq(v.segmentCount, 4, 'segmentCount = 分段(3) + 派生(1) = 4（不再恒 1）');
+
+  const taskNoSession = { id: 't2', platform: 'douyin', roomId: 'r2', anchorName: '主播B', title: '', status: 'completed' };
+  eq(sch.serializeTask(taskNoSession).segmentCount, 0, '无 session 的任务 segmentCount = 0');
+
+  // 2) autoRemux：mergeOnStop=true 且 remuxToMp4=false → 仅合并、不逐段转
+  const store2 = await openStore(p('merge-on-stop'));
+  await store2.updateSettings({ mergeOnStop: true, remuxToMp4: false });
+  let merged = false, remuxed = false;
+  const storage2 = new Storage({ store: store2, logger });
+  storage2.mergeSession = async () => { merged = true; return { id: 'm' }; };
+  storage2.remux = async () => { remuxed = true; return { id: 'x' }; };
+  await storage2.autoRemux({ id: 's2', platform: 'douyin', streamer: 'A', segments: [{ id: 'a', ext: 'ts' }, { id: 'b', ext: 'ts' }], extras: [], merged: null, mp4: null });
+  ok(merged === true && remuxed === false, 'mergeOnStop=true & remuxToMp4=false → 收尾合并触发、不逐段转');
+
+  // 3) 两者皆关 → 不合并不转（避免误触达 ffmpeg）
+  const store3 = await openStore(p('merge-off'));
+  await store3.updateSettings({ mergeOnStop: false, remuxToMp4: false });
+  let merged2 = false, remuxed2 = false;
+  const storage3 = new Storage({ store: store3, logger });
+  storage3.mergeSession = async () => { merged2 = true; };
+  storage3.remux = async () => { remuxed2 = true; };
+  await storage3.autoRemux({ id: 's3', platform: 'douyin', streamer: 'A', segments: [{ id: 'a', ext: 'ts' }, { id: 'b', ext: 'ts' }], extras: [], merged: null, mp4: null });
+  ok(merged2 === false && remuxed2 === false, 'mergeOnStop=false & remuxToMp4=false → 不触发任何后处理');
+
+  // 4) autoMerge（保留语义）仍与 remuxToMp4 联动：autoMerge=true & remuxToMp4=true → 合并
+  const store4 = await openStore(p('auto-merge'));
+  await store4.updateSettings({ autoMerge: true, remuxToMp4: true, mergeOnStop: false });
+  let merged3 = false;
+  const storage4 = new Storage({ store: store4, logger });
+  storage4.mergeSession = async () => { merged3 = true; return { id: 'm' }; };
+  storage4.remux = async () => { return { id: 'x' }; };
+  await storage4.autoRemux({ id: 's4', platform: 'douyin', streamer: 'A', segments: [{ id: 'a', ext: 'ts' }, { id: 'b', ext: 'ts' }], extras: [], merged: null, mp4: null });
+  ok(merged3 === true, 'autoMerge=true & remuxToMp4=true → 仍触发合并（既有语义保留）');
+}
+
 // ============ 主流程 ============
 (async () => {
   console.log(`LiveGrab 测试开始（临时目录 ${tmpRoot}）`);
   await rmrf(tmpRoot);
   await fsp.mkdir(tmpRoot, { recursive: true });
-  const suites = [testUtil, testNaming, testStore, testResolvers, testAuth, testRecordChain, testRemuxFollowGlobal, testPullBlockedBackoff, testConcurrentStart, testRepeatSessionNaming, testTodayStats, testQueue, testHttp, testViewGuards, testUpdateGuards, testProxy, testSegmentEndReason, testSegmentGuards, testFfmpegGuards, testFileScanGuards, testFileOrder, testRecorderLiveProxy, testAuditConsistency, testAuditRemainder, testDeadCodeRemainder];
+  const suites = [testUtil, testNaming, testStore, testResolvers, testAuth, testRecordChain, testRemuxFollowGlobal, testPullBlockedBackoff, testConcurrentStart, testRepeatSessionNaming, testTodayStats, testQueue, testHttp, testViewGuards, testUpdateGuards, testProxy, testSegmentEndReason, testSegmentGuards, testFfmpegGuards, testFileScanGuards, testFileOrder, testRecorderLiveProxy, testAuditConsistency, testAuditRemainder, testDeadCodeRemainder, testMergeOnStopAndDeleteCount];
   for (const s of suites) {
     try { await s(); } catch (e) {
       failed++;

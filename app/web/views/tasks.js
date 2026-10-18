@@ -556,7 +556,7 @@ async function batch(ctx, action) {
     const all = await fetchAllTasks();
     const picked = all.filter((t) => ids.includes(t.id));
     const withFiles = picked.filter((t) => t.sessionId).length;
-    const files = picked.reduce((n, t) => n + ((t.segments && t.segments.length) || (t.live && t.live.segmentIndex) || 1), 0);
+    const files = picked.reduce((n, t) => n + (t.segmentCount || 0), 0);
     const bytes = picked.reduce((n, t) => n + (Number(t.totalBytes) || Number(t.live && t.live.bytes) || 0), 0);
     confirmDialog({
       title: t('tasks.batchDeleteTitle'),
@@ -595,7 +595,8 @@ async function batch(ctx, action) {
 
 function removeTask(task, ctx) {
   if (!task) return;
-  const files = (task.segments && task.segments.length) || 1;
+  // 任务列表序列化带 segmentCount（整场媒体文件总数）；不再用 task.segments（列表不含明细 → 恒为 1）
+  const files = task.segmentCount || 0;
   const bytes = Number(task.totalBytes) || Number(task.live && task.live.bytes) || 0;
   confirmDialog({
     title: t('tasks.deleteTitle'),
