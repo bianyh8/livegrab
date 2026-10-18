@@ -29,15 +29,6 @@ export function formatBytes(n) {
   return (tb < 10 ? tb.toFixed(2) : tb.toFixed(1)) + ' TB';
 }
 
-/** 「12 小时 38 分」/「38 分 12 秒」 */
-export function formatDurationCn(sec) {
-  const s = Math.max(0, Math.floor(Number(sec) || 0));
-  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), ss = s % 60;
-  if (h > 0) return `${h} ${t('common.hour')} ${m} ${t('common.minute')}`;
-  if (m > 0) return `${m} ${t('common.minute')} ${ss} ${t('common.seconds')}`;
-  return `${ss} ${t('common.seconds')}`;
-}
-
 /** 01:23:45 / 23:45 */
 export function formatDuration(sec) {
   const s = Math.max(0, Math.floor(Number(sec) || 0));
@@ -53,20 +44,6 @@ export function formatDateTime(ts) {
   const d = toDate(ts);
   if (!d) return '—';
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
-}
-
-/** 2025-06-01 */
-export function formatDate(ts) {
-  const d = toDate(ts);
-  if (!d) return '—';
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-}
-
-/** 20:13 */
-export function formatTime(ts) {
-  const d = toDate(ts);
-  if (!d) return '—';
-  return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
 /** 2025-06-01 21:04:12.318 —— 日志行用的日期+毫秒级时间戳 */
@@ -138,48 +115,6 @@ export function platIcon(id, nameOverride) {
   return `<span class="plat ${esc(p.cls)}" style="cursor:help" title="${esc(name)}"><i>${esc(p.letter)}</i></span>`;
 }
 
-/* ================= 状态语义 ================= */
-
-const STATUS_META = {
-  idle: { text: t('common.idle'), chip: 'off' },
-  waiting: { text: t('common.waiting'), chip: 'wait' },
-  queued: { text: t('common.queued'), chip: 'wait' },
-  recording: { text: t('common.recording'), chip: 'on' },
-  stopping: { text: t('common.stopping'), chip: 'wait' },
-  merging: { text: t('common.merging'), chip: 'wait' },
-  completed: { text: t('common.completed'), chip: 'on' },
-  stopped: { text: t('common.stopped'), chip: 'off' },
-  error: { text: t('common.error'), chip: 'err' },
-};
-
-export function statusMeta(status) {
-  return STATUS_META[status] || { text: status || t('common.unknown'), chip: '' };
-}
-
-/** 任务状态单元格：脉冲点 / chip + 子行 */
-export function statusCell(task) {
-  const m = statusMeta(task.status);
-  const sub = [];
-  if (task.status === 'recording') {
-    sub.push(`${formatDuration(task.live ? task.live.elapsedSec : 0)} · ${formatBytes(task.live ? task.live.bytes : 0)}`);
-  } else if (task.status === 'queued') {
-    sub.push(esc(task.queueReason || t('common.waitSlot')));
-  } else if (task.status === 'error') {
-    const max = task.retryMax || 5;
-    sub.push(`${esc(task.lastError || task.statusMessage || t('common.unknownError'))}${t('ui.autoRetry', `${task.retryCount || 0}/${max}`)}`);
-  } else if (task.status === 'waiting') {
-    sub.push(t('common.pollSec', task.pollIntervalSec || 60));
-  } else if (task.status === 'completed' || task.status === 'stopped') {
-    if (task.endedAt) sub.push(t('ui.finishedAt', formatTime(task.endedAt), formatBytes(task.totalBytes || 0)));
-  } else if (task.statusMessage) {
-    sub.push(esc(task.statusMessage));
-  }
-  const head = task.status === 'recording'
-    ? `<span class="pulse"><b></b>${m.text}</span>`
-    : `<span class="chip ${esc(m.chip)}"><i class="dot"></i>${esc(m.text)}</span>`;
-  return head + (sub.length ? `<div class="sub">${sub.join('')}</div>` : '');
-}
-
 export function qualityLabelOf(task) {
   return task.qualityLabel || task.qualityActual || task.quality || '—';
 }
@@ -222,6 +157,53 @@ export function switchEl(on, attrs = '') {
 /** 空列表占位 */
 export function emptyBox(text) {
   return `<div class="empty">${esc(text)}</div>`;
+}
+
+/** 通用分页器（任务 / 文件库 / 回收站共用；此前三个视图各抄了一份完全相同的实现）。
+ *  id 用于视图侧绑定 data-pg 按钮。 */
+export function pagerHTML(id, page, pages, total) {
+  return `<div class="pager" id="${id}">
+    <button class="btn sm ghost" data-pg="first"${page <= 1 ? ' disabled' : ''}>«</button>
+    <button class="btn sm ghost" data-pg="prev"${page <= 1 ? ' disabled' : ''}>‹ ${t('common.pagerPrev')}</button>
+    <span class="pager-info">${t('common.pagerInfo', page, pages, total)}</span>
+    <button class="btn sm ghost" data-pg="next"${page >= pages ? ' disabled' : ''}>${t('common.pagerNext')} ›</button>
+    <button class="btn sm ghost" data-pg="last"${page >= pages ? ' disabled' : ''}>»</button>
+  </div>`;
+}
+
+/** pagerHTML 的事件绑定：首/上/下/末页改 st.page 后回调 paintFn 重绘（任务页/文件库/回收站共用） */
+export function bindPager(root, pagerId, st, paintFn) {
+  const el = root.querySelector('#' + pagerId);
+  if (!el) return;
+  el.querySelectorAll('[data-pg]').forEach((b) => {
+    b.onclick = () => {
+      const map = { first: 1, prev: st.page - 1, next: st.page + 1, last: st.pages };
+      st.page = Math.max(1, Math.min(st.pages, map[b.dataset.pg]));
+      paintFn();
+    };
+  });
+}
+
+/* ================= 焦点保持（局部重绘后不丢光标/不打断中文输入法） ================= */
+
+export function captureFocus(root) {
+  const a = (typeof document !== 'undefined') && document.activeElement;
+  if (!a || !a.id || !root.contains(a)) return null;
+  return {
+    id: a.id,
+    start: typeof a.selectionStart === 'number' ? a.selectionStart : null,
+    end: typeof a.selectionEnd === 'number' ? a.selectionEnd : null,
+  };
+}
+
+export function restoreFocus(root, f) {
+  if (!f) return;
+  const el = root.querySelector('#' + f.id);
+  if (!el || typeof el.focus !== 'function') return;
+  try {
+    el.focus();
+    if (f.start != null && typeof el.setSelectionRange === 'function') el.setSelectionRange(f.start, f.end == null ? f.start : f.end);
+  } catch { /* ignore */ }
 }
 
 /* ================= toast ================= */

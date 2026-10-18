@@ -5,8 +5,9 @@
 import { api } from '../api.js';
 import { t } from '../i18n.js';
 import {
-  esc, formatBytes, formatDuration, formatDateTime, platBadge, platIcon, segmentStrategyText,
-  qualityLabelOf, emptyBox, toast, confirmDialog, openDialog, downloadText, switchEl, bindSwitches,
+  esc, formatBytes, formatDuration, formatDateTime, platIcon, segmentStrategyText,
+  qualityLabelOf, emptyBox, toast, confirmDialog, openDialog, downloadText, switchEl, bindSwitches, pagerHTML, bindPager,
+  captureFocus, restoreFocus,
 } from '../ui.js';
 
 const state = {
@@ -34,26 +35,6 @@ let boundCtx = null;
 
 /* 分页：默认每页 10 条（任务/文件/回收站统一） */
 const PAGE_SIZE = 10;
-function pagerHTML(id, page, pages, total) {
-  return `<div class="pager" id="${id}">
-    <button class="btn sm ghost" data-pg="first"${page <= 1 ? ' disabled' : ''}>«</button>
-    <button class="btn sm ghost" data-pg="prev"${page <= 1 ? ' disabled' : ''}>‹ ${t('common.pagerPrev')}</button>
-    <span class="pager-info">${t('common.pagerInfo', page, pages, total)}</span>
-    <button class="btn sm ghost" data-pg="next"${page >= pages ? ' disabled' : ''}>${t('common.pagerNext')} ›</button>
-    <button class="btn sm ghost" data-pg="last"${page >= pages ? ' disabled' : ''}>»</button>
-  </div>`;
-}
-function bindPager(root, pagerId, st, paintFn) {
-  const el = root.querySelector('#' + pagerId);
-  if (!el) return;
-  el.querySelectorAll('[data-pg]').forEach((b) => {
-    b.onclick = () => {
-      const map = { first: 1, prev: st.page - 1, next: st.page + 1, last: st.pages };
-      st.page = Math.max(1, Math.min(st.pages, map[b.dataset.pg]));
-      paintFn();
-    };
-  });
-}
 
 export async function render(root, ctx) {
   boundRoot = root;
@@ -144,26 +125,6 @@ function platName(id) {
 }
 
 /* ---------- 渲染 ---------- */
-
-/* 记录 root 内当前聚焦元素的 id 与光标位置（重绘后恢复，避免输入被打断）。 */
-function captureFocus(root) {
-  const a = (typeof document !== 'undefined') && document.activeElement;
-  if (!a || !a.id || !root.contains(a)) return null;
-  return {
-    id: a.id,
-    start: typeof a.selectionStart === 'number' ? a.selectionStart : null,
-    end: typeof a.selectionEnd === 'number' ? a.selectionEnd : null,
-  };
-}
-function restoreFocus(root, f) {
-  if (!f) return;
-  const el = root.querySelector('#' + f.id);
-  if (!el || typeof el.focus !== 'function') return;
-  try {
-    el.focus();
-    if (f.start != null && typeof el.setSelectionRange === 'function') el.setSelectionRange(f.start, f.end == null ? f.start : f.end);
-  } catch { /* ignore */ }
-}
 
 /* 结果区指纹：paint 与 paintResults 共用同一套判据，数据/筛选/勾选/翻页无变化时跳过重绘。 */
 function listHash() {

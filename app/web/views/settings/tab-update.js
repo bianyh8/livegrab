@@ -3,7 +3,7 @@
    设计：版本对比卡（当前/最新）+ 操作区；进度卡仅更新进行中显示；左说明右日志分栏。 */
 
 import { api } from '../../api.js';
-import { esc, toast, confirmDialog, formatDateTime } from '../../ui.js';
+import { esc, toast, confirmDialog, formatDateTime, formatDuration } from '../../ui.js';
 import { t } from '../../i18n.js';
 
 const ICON_REFRESH = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M20 12a8 8 0 1 1-2.3-5.6"/><path d="M20 4v5h-5"/></svg>';
@@ -127,7 +127,7 @@ function paint(root, st) {
         ${st.task ? `<div style="font-size:12.5px;color:var(--txt-2)">${t('settings.upTaskLabel')}<span class="mono" style="color:var(--bili-2)">${esc(st.task)}</span></div>` : ''}
         <div class="up-bar"><i style="width:${clampNum(st.progress)}%"></i></div>
         <div class="row" style="justify-content:space-between;font-size:12px;color:var(--txt-3);margin-top:2px">
-          <span>${t('settings.upElapsed')} <b style="color:var(--txt-2)">${esc(fmtDur(st.elapsedSec || 0))}</b></span>
+          <span>${t('settings.upElapsed')} <b style="color:var(--txt-2)">${esc(formatDuration(st.elapsedSec || 0))}</b></span>
           <span>${t('settings.upEstimate')} <b style="color:var(--txt-2)">${esc(estimateLabel(st.phase))}</b></span>
         </div>
         ${isRestart ? `<div class="up-restart-note"><i class="up-spin"></i><span>${t('settings.upRestartingBanner')}</span></div>` : ''}
@@ -373,13 +373,6 @@ function paintRestarting(root) {
 function clampNum(n) {
   n = Number(n) || 0;
   return Math.min(100, Math.max(0, n));
-}
-
-function fmtDur(sec) {
-  sec = Math.max(0, Math.round(sec));
-  const m = Math.floor(sec / 60);
-  const s = sec % 60;
-  return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
 }
 
 function fmtLogTime(ts) {

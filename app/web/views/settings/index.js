@@ -23,10 +23,8 @@ const state = {
   settings: null,
   env: null,
   platforms: [],
-  user: null,
   dirty: false,
   saveTimer: null,
-  pendingPatch: {},
 };
 
 let boundRoot = null;

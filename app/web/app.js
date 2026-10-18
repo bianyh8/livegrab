@@ -4,7 +4,7 @@
 
 import { api, ApiError, setUnauthorizedHandler } from './api.js';
 import {
-  toast, confirmDialog, formatBytes, formatDuration, formatDurationCn, formatDateTime,
+  toast, confirmDialog, formatBytes, formatDuration, formatDateTime,
 } from './ui.js';
 import { loadI18n, t } from './i18n.js';
 
@@ -47,7 +47,6 @@ const ctx = {
   confirm: confirmDialog,
   formatBytes,
   formatDuration,
-  formatDurationCn,
   formatDateTime,
   /* 视图注册自己的局部刷新函数（2s 轮询调用，返回 false 表示不再需要刷新）。
      实际渲染时会被 makeViewCtx 换成绑定到本次视图 token 的版本，
@@ -173,6 +172,7 @@ async function enterApp(user) {
   }
   setText('userMeta', t('app.userMeta', new Date().toTimeString().slice(0, 5)));
   setText('tbUserMeta', t('app.userMeta', new Date().toTimeString().slice(0, 5)));
+  startSse(); // 登录后补连 SSE：boot() 里的那一次在未登录时会被跳过（幂等，重复调用无副作用）
   startLoop();
   await handleRoute(true);
 }
@@ -412,7 +412,7 @@ async function refreshOnce() {
 async function tick() {
   if (!runtime.authed) return;
   runtime.tick = (runtime.tick + 1) % 9;
-  if (runtime.tick === 2) pullStatus(); // 约每 6s 拉一次全量 status，刷新顶栏下载带宽等
+  if (runtime.tick === 2) pullStatus(); // 每 9 次轮询（≈18s）兜底拉一次全量 status；实时变化由 SSE 推送
   await refreshOnce();
 }
 

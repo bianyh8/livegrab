@@ -1,6 +1,5 @@
 // 单任务录制进程管理：分段、按大小轮转、断流重连、优雅停止（契约 §4.3 / §5）
 import { EventEmitter } from 'node:events';
-import fs from 'node:fs';
 import path from 'node:path';
 import fsp from 'node:fs/promises';
 import * as media from './media.js';
@@ -28,7 +27,7 @@ export function reconnectDelay({ blocked = false, attempt = 1 } = {}) {
 }
 
 export class Recorder extends EventEmitter {
-  constructor({ task, settings, getSettings, naming, logger, resolveStream, mediaMod = media, probeOffline = null, metaDir = null }) {
+  constructor({ task, settings, getSettings, naming, logger, resolveStream, mediaMod = media, probeOffline = null }) {
     super();
     this.task = task;
     // settings 实时读取：store.updateSettings 用 deepMerge 产出「新对象」替换 store.settings，
@@ -40,7 +39,6 @@ export class Recorder extends EventEmitter {
     this.resolveStream = resolveStream;
     this.media = mediaMod;
     this.probeOffline = probeOffline; // 可选：async () => boolean，判断主播是否已下播（下播时正常收尾而不是断流重连报错）
-    this.metaDir = metaDir;           // 元数据目录（config/meta/<taskId>）：seg 列表等运行时文件放这里，不进录制目录
     this.child = null;
     this.stopping = false;
     this.paused = false;
@@ -157,13 +155,7 @@ export class Recorder extends EventEmitter {
   async _spawn(startNumber) {
     const t = this.task;
     this.lastStderrError = null; // 每次拉取前清空：避免上一次的错误行误判本次的失败类型
-    // 上一次 ffmpeg 运行留下的 seg 列表文件：重连/轮转会再生成新的，旧的用完即删（数据目录不再残留 csv）
-    await this._cleanSegList();
-    if (this.metaDir) await ensureDir(this.metaDir);
-    this.segListPath = path.join(this.metaDir || this.dir, `.segs_${t.id}_${startNumber}.csv`);
-    const outputPattern = this.singleFile
-      ? path.join(this.dir, this.outputName)
-      : path.join(this.dir, this.outputName);
+    const outputPattern = path.join(this.dir, this.outputName);
     const args = this.media.buildRecordArgs({
       streamUrl: this.streamUrl,
       outputPattern,
@@ -171,7 +163,6 @@ export class Recorder extends EventEmitter {
       segmentMode: t.segmentMode || 'time',
       segmentMinutes: t.segmentMinutes,
       segmentSizeMB: t.segmentSizeMB,
-      segmentListPath: this.singleFile ? null : this.segListPath,
       startNumber,
       headers: this.headers,
       audioOnly: this.audioOnly,
@@ -210,11 +201,12 @@ export class Recorder extends EventEmitter {
     if (!this.dir) return;
     const segs = await this.scanSegments();
     if (!segs.length) return;
-    const closed = segs.slice(0, -1);
+    // 只处理「本轮新闭合」的分段：已登记分段的 stat/probe 不必每 1.5s 重做一次，
+    // 否则分段越多、tick 里的磁盘调用越多（长场次几百段时每秒数百次 stat）。
+    const fresh = segs.slice(0, -1).filter((s) => !this.closed.has(s.index));
     // 已被轮转过去、却是 0 字节的分段：ffmpeg 建了文件没写数据，属于垃圾，清掉（否则永久留在磁盘上）
-    await this._dropEmptySegments(closed);
-    for (const s of closed) {
-      if (this.closed.has(s.index)) continue;
+    await this._dropEmptySegments(fresh);
+    for (const s of fresh) {
       const st = await fsp.stat(s.path).catch(() => null);
       if (!st || !st.size) continue;
       this.closed.add(s.index);
@@ -415,17 +407,8 @@ export class Recorder extends EventEmitter {
     return { ok: true, startNumber: next };
   }
 
-  /** 删除本场 ffmpeg 的 seg 列表文件（临时产物，不留在任何目录） */
-  async _cleanSegList() {
-    if (!this.segListPath) return;
-    const p = this.segListPath;
-    this.segListPath = null;
-    await fsp.rm(p, { force: true }).catch(() => {});
-  }
-
   async _finalize(reason) {
     this._stopWatcher();
-    await this._cleanSegList(); // 收尾时清掉 seg 列表临时文件
     const segs = await this.scanSegments();
     await this._dropEmptySegments(segs); // 进程已退出：任何 0 字节分段都是垃圾
     const list = [];

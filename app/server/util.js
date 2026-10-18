@@ -69,7 +69,6 @@ export const uid = (p = 'x') =>
 export const nowIso = () => new Date().toISOString();
 export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 export const pad = (n, w = 2) => String(n).padStart(w, '0');
-export const clamp = (n, min, max) => Math.min(max, Math.max(min, Number(n) || 0));
 
 export function formatBytes(n) {
   n = Number(n) || 0;
@@ -94,14 +93,6 @@ export async function ensureDir(dir) {
   return dir;
 }
 
-export async function pathExists(p) {
-  try { await fsp.access(p); return true; } catch { return false; }
-}
-
-export async function statSafe(p) {
-  try { return await fsp.stat(p); } catch { return null; }
-}
-
 export async function readJson(file, fallback = null) {
   try {
     const raw = await fsp.readFile(file, 'utf8');
@@ -116,13 +107,6 @@ export async function writeJsonAtomic(file, data) {
   await fsp.rename(tmp, file);
 }
 
-export async function writeFileAtomic(file, text) {
-  await ensureDir(path.dirname(file));
-  const tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
-  await fsp.writeFile(tmp, text, 'utf8');
-  await fsp.rename(tmp, file);
-}
-
 export function safeJoin(root, rel) {
   const base = path.resolve(root);
   const p = path.resolve(base, String(rel ?? ''));
@@ -130,24 +114,6 @@ export function safeJoin(root, rel) {
     throw new HttpError('BAD_PATH', '路径越界', 400);
   }
   return p;
-}
-
-export function dirSize(dir) {
-  let total = 0;
-  let files = 0;
-  const walk = (d) => {
-    let ents = [];
-    try { ents = fs.readdirSync(d, { withFileTypes: true }); } catch { return; }
-    for (const e of ents) {
-      const p = path.join(d, e.name);
-      if (e.isDirectory()) walk(p);
-      else if (e.isFile()) {
-        try { total += fs.statSync(p).size; files++; } catch { /* ignore */ }
-      }
-    }
-  };
-  walk(dir);
-  return { bytes: total, files };
 }
 
 // ---------- 时间（跟随容器 TZ 环境变量） ----------
@@ -262,12 +228,6 @@ export function fail(res, error) {
   const code = error instanceof HttpError ? error.code : 'INTERNAL';
   const message = error?.message || '内部错误';
   sendJson(res, status, { ok: false, error: { code, message } });
-}
-
-export function escapeHtml(s) {
-  return String(s ?? '').replace(/[&<>"']/g, (c) => ({
-    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
-  }[c]));
 }
 
 export function extOf(name) {

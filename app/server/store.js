@@ -351,7 +351,31 @@ export class Store {
     };
     this.db = null;
     this._stmts = {};
+    this._idx = null; // 按 id 的只读索引（files/tasks/sessions），任何写操作后置空重建
   }
+
+  // ---------- 只读索引 ----------
+  /** 按 id 建索引：findFile/sessionOfFile/getTask/getSession 从 O(全库扫描) 降到 O(1)。
+   *  这些方法在视频 Range 请求、缩略图、回放等热路径上每请求都会调用，全库线性扫描会随文件数线性变慢。 */
+  _index() {
+    if (this._idx) return this._idx;
+    const files = new Map();
+    for (const s of this.state.sessions) {
+      for (const f of sessionFiles(s)) if (!files.has(f.id)) files.set(f.id, { file: f, session: s });
+    }
+    for (const f of this.state.external) {
+      if (f && f.id && !files.has(f.id)) files.set(f.id, { file: f, session: null });
+    }
+    this._idx = {
+      files,
+      tasks: new Map(this.state.tasks.map((t) => [t.id, t])),
+      sessions: new Map(this.state.sessions.map((s) => [s.id, s])),
+    };
+    return this._idx;
+  }
+
+  /** 内存模型发生任何增删改后调用：下次读取时重建索引 */
+  _invalidateIndex() { this._idx = null; }
 
   get settings() { return this.state.settings; }
   get naming() { return this.state.naming; }
@@ -539,6 +563,7 @@ export class Store {
   /** 把内存全量落库（对账式：先清表再写入，单事务） */
   async persist() {
     if (!this.db) return;
+    this._invalidateIndex(); // 全量对账前内存可能被就地改过（如扫描更新 status/bytes），索引必须重建
     try {
       this._tx(() => {
         this._writeSettings();
@@ -789,12 +814,13 @@ export class Store {
   }
 
   // ---------- tasks ----------
-  getTask(id) { return this.state.tasks.find((t) => t.id === id) || null; }
+  getTask(id) { return this._index().tasks.get(id) || null; }
 
   /** 自定义排序：按传入的 id 顺序重排任务数组（保持引用），未列出的任务按原序追加 */
   reorderTasks(ids) {
     const snap = this.state.tasks; // ordered 是新建数组 → 引用快照即可
     try {
+      this._invalidateIndex();
       const list = this.state.tasks;
       const byId = new Map(list.map((t) => [t.id, t]));
       const seen = new Set();
@@ -817,6 +843,7 @@ export class Store {
   async addTask(task) {
     const snap = this.state.tasks.slice(); // unshift 就地改数组 → 浅拷贝数组即可
     try {
+      this._invalidateIndex();
       this.state.tasks.unshift(task);
       if (this.db) this._writeTask(task);
       return task;
@@ -826,6 +853,7 @@ export class Store {
   async saveTask(task) {
     const snap = this.state.tasks.slice();
     try {
+      this._invalidateIndex();
       task.updatedAt = nowIso();
       const i = this.state.tasks.findIndex((t) => t.id === task.id);
       if (i >= 0) this.state.tasks[i] = task; else this.state.tasks.unshift(task);
@@ -837,6 +865,7 @@ export class Store {
   async removeTask(id) {
     const snap = this.state.tasks.slice();
     try {
+      this._invalidateIndex();
       const i = this.state.tasks.findIndex((t) => t.id === id);
       if (i < 0) return false;
       this.state.tasks.splice(i, 1);
@@ -846,11 +875,12 @@ export class Store {
   }
 
   // ---------- sessions / files ----------
-  getSession(id) { return this.state.sessions.find((s) => s.id === id) || null; }
+  getSession(id) { return this._index().sessions.get(id) || null; }
 
   async addSession(session) {
     const snap = this.state.sessions.slice();
     try {
+      this._invalidateIndex();
       this.state.sessions.unshift(session);
       if (this.db) this._writeSession(session);
       return session;
@@ -860,6 +890,7 @@ export class Store {
   async saveSession(session) {
     const snap = this.state.sessions.slice();
     try {
+      this._invalidateIndex();
       const i = this.state.sessions.findIndex((s) => s.id === session.id);
       if (i >= 0) this.state.sessions[i] = session; else this.state.sessions.unshift(session);
       if (this.db) this._writeSession(session);
@@ -870,6 +901,7 @@ export class Store {
   async removeSession(id) {
     const snap = this.state.sessions.slice();
     try {
+      this._invalidateIndex();
       const i = this.state.sessions.findIndex((s) => s.id === id);
       if (i < 0) return false;
       this.state.sessions.splice(i, 1);
@@ -878,7 +910,8 @@ export class Store {
     } catch (e) { this.state.sessions = snap; throw e; }
   }
 
-  sessionOfFile(fileId) {
+  /** 线性兜底：索引在建好之后又有分段被 push 进数组（saveSession 之前）时，按旧实现逐条查 */
+  _sessionOfFileLinear(fileId) {
     for (const s of this.state.sessions) {
       if ((s.segments || []).some((f) => f.id === fileId)) return s;
       if ((s.extras || []).some((f) => f.id === fileId)) return s;
@@ -888,16 +921,20 @@ export class Store {
     return null;
   }
 
+  sessionOfFile(fileId) {
+    const hit = this._index().files.get(fileId);
+    if (hit) return hit.session;
+    return this._sessionOfFileLinear(fileId);
+  }
+
   findFile(fileId) {
-    const s = this.sessionOfFile(fileId);
-    if (!s) {
-      const ext = this.state.external.find((f) => f.id === fileId);
-      return ext ? { file: ext, session: null } : null;
-    }
-    const all = [...(s.segments || []), ...(s.extras || [])];
-    if (s.merged) all.push(s.merged);
-    if (s.mp4) all.push(s.mp4);
-    return { file: all.find((f) => f.id === fileId), session: s };
+    const hit = this._index().files.get(fileId);
+    if (hit) return hit;
+    const s = this._sessionOfFileLinear(fileId);
+    if (!s) return null;
+    const all = [...(s.segments || []), ...(s.extras || []), s.merged, s.mp4];
+    const file = all.find((f) => f && f.id === fileId) || null;
+    return file ? { file, session: s } : null;
   }
 
   allFiles() {
@@ -910,8 +947,6 @@ export class Store {
     out.push(...this.state.external);
     return out;
   }
-
-  fileByPath(p) { return this.allFiles().find((f) => f.path === p) || null; }
 
   /**
    * 首帧海报落盘后回写 files.thumbnail_path（按物理路径匹配）。

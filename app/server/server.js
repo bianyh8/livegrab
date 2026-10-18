@@ -22,7 +22,7 @@ import { resolveRoom, platformList, PLATFORMS } from './resolvers/index.js';
 import { previewNaming, VARIABLES, DEFAULT_OPTIONS, qualityLabel, NAMING_OPTION_CHOICES } from './naming.js';
 import {
   ok, fail, HttpError, readBody, mimeByExt, parseRange, extOf, VERSION,
-  ensureDir, formatBytes, tzName, uid, safeJoin, errText, dateKey,
+  ensureDir, formatBytes, tzName, safeJoin, errText, dateKey,
 } from './util.js';
 
 // 播放日志节流：同一文件 10s 内只记一次，避免视频拖动/Range 请求刷屏日志
@@ -451,13 +451,22 @@ async function main() {
     const items = filtered.slice(start, start + pageSize);
     const bytes = filtered.reduce((n, { f }) => n + (Number(f.bytes) || 0), 0);
 
-    const allFiles = store.allFiles();
     const trash = storage.listTrash();
     const platforms = [...new Set(store.sessions.map((s) => s.platform).filter(Boolean))];
+    // 缺失文件计数：直接遍历，不再 store.allFiles() 拼一个全量数组（该接口 2s 被轮询一次）
+    let missingCount = 0;
+    const countMissing = (f) => { if (f && f.status === 'missing') missingCount += 1; };
+    for (const s of store.sessions) {
+      for (const f of (s.segments || [])) countMissing(f);
+      for (const f of (s.extras || [])) countMissing(f);
+      countMissing(s.merged);
+      countMissing(s.mp4);
+    }
+    for (const f of store.external) countMissing(f);
     return {
       total, items, page, pageSize, pages, platforms, bytes,
       summary: {
-        missing: allFiles.filter((f) => f.status === 'missing').length,
+        missing: missingCount,
         unregistered: store.external.length,
         trashCount: trash.count, trashBytes: trash.bytes,
         sessions: store.sessions.length,
@@ -618,10 +627,13 @@ async function main() {
       if (st && st.size > 0) return { path: rec.currentSegment.path, st };
     }
     // 2) 否则取该任务最近一次录完的文件（分段 / 合并 / 转封装，略过纯音频）
+    //    只看最近若干个场次：首帧图只需要「最新一个可用文件」，历史场次数百个时全量 stat 会拖慢请求
     let best = null;
     let bestM = 0;
+    let looked = 0;
     for (const s of store.sessions) {
       if (s.taskId !== taskId) continue;
+      if (looked++ >= 8) break;
       const cands = [];
       if (s.mp4) cands.push(s.mp4);
       if (s.merged) cands.push(s.merged);

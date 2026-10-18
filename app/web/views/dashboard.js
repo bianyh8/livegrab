@@ -13,28 +13,28 @@ import {
 
 export const page = 'dashboard';
 
-const state = { tasks: [], booted: false, pending: false, lastStatus: null };
+const state = { tasks: [], pending: false, html: '' };
 
 let boundRoot = null;
 
 export async function render(root, ctx) {
   boundRoot = root;
+  state.html = ''; // 重新进入页面必须强制重绘（DOM 已被路由清空）
   root.innerHTML = `<div class="stack"><div class="card"><div class="empty">${_t('dashboard.loading')}</div></div></div>`;
   ctx.onRefresh(() => tick(ctx));
-  await tick(ctx, true);
+  await tick(ctx);
 }
 
-export function destroy() { boundRoot = null; }
+export function destroy() { boundRoot = null; state.html = ''; }
 
-async function tick(ctx, initial) {
+async function tick(ctx) {
   if (state.pending) return;
   state.pending = true;
   try {
-    const [st, tk] = await Promise.allSettled([api.status(), api.tasks()]);
-    const status = st.status === 'fulfilled' ? (st.value || {}) : null;
-    if (tk.status === 'fulfilled') state.tasks = (tk.value && tk.value.items) || [];
-    state.lastStatus = status;
-    state.booted = true;
+    // 只拉 /api/status：它已带 LITE 任务列表（status.tasks，含 status/liveStatus/monitorOnly），
+    // 足够本页的「直播中/仅监控/录制中」统计；此前额外再拉一次 /api/tasks 全量是冗余请求。
+    const status = await api.status().catch(() => null);
+    if (status) state.tasks = status.tasks || [];
     paint(ctx, status);
   } finally {
     state.pending = false;
@@ -49,6 +49,7 @@ function paint(ctx, status) {
   const root = boundRoot;
   if (!root) return;
   if (!status && !state.tasks.length) {
+    state.html = '';
     root.innerHTML = `<div class="card"><div class="card-b">
       <div class="empty">${_t('dashboard.loadFailed')}</div>
     </div></div>`;
@@ -76,7 +77,7 @@ function paint(ctx, status) {
   const usePct = recCount && cap ? Math.round((recCount / cap) * 100) : 0;
   const totalDurationSec = Number(stats.totalDurationSec) || 0;
 
-  root.innerHTML = `
+  const html = `
     ${diskAlert(freeBytes)}
     <div class="ov-grid3">
       <div class="card">
@@ -118,6 +119,10 @@ function paint(ctx, status) {
       </div>
     </div>`;
 
+  // 内容未变就跳过重绘：2s 轮询下避免整页 innerHTML 重建（重新解析 HTML + 缩略图重新请求）
+  if (html === state.html) return;
+  state.html = html;
+  root.innerHTML = html;
   bind(root, ctx);
 }
 

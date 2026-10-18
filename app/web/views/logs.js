@@ -4,7 +4,7 @@
 
 import { api, normalizeLogLine } from '../api.js';
 import { t } from '../i18n.js';
-import { esc, formatLogTime, formatBytes, emptyBox, toast, copyText, downloadText, confirmDialog, openDialog, el } from '../ui.js';
+import { esc, formatLogTime, formatBytes, emptyBox, toast, copyText, downloadText, confirmDialog, openDialog, el, captureFocus, restoreFocus } from '../ui.js';
 
 const PAGE_SIZE = 50;
 const EXPORT_MAX = 20000;
@@ -53,7 +53,7 @@ export async function render(root, ctx) {
       if (ts > state.lastTs) state.lastTs = ts;
       state.total += 1;
       state.pages = Math.max(1, Math.ceil(state.total / state.pageSize));
-      appendRow(line, ctx);
+      appendRow(line);
     } else if (!state.livePending) {
       state.livePending = true;
       setTimeout(() => {
@@ -118,20 +118,11 @@ async function refresh(ctx, initial, full = true) {
   }
 }
 
-/* ---------- 过滤（当前页数据上的本地过滤：平台匹配 + 兜底） ---------- */
+/* ---------- 过滤（当前页数据上的本地兜底过滤） ---------- */
 
+/** 排序已由后端按 order 完成，这里只做与 SSE 实时追加共用的兜底过滤 */
 function filtered() {
-  const task = state.taskId;
-  const plat = state.platform;
-  const kw = state.q.trim().toLowerCase();
-  const rows = state.rows.filter((l) => {
-    if (state.level && String(l.level || '').toUpperCase() !== state.level) return false;
-    if (task && l.taskId !== task) return false;
-    if (plat && !String(l.msg || '').includes(plat) && !String(l.platform || '').includes(plat)) return false;
-    if (kw && !String(l.msg || '').toLowerCase().includes(kw) && !String(l.taskName || '').toLowerCase().includes(kw)) return false;
-    return true;
-  });
-  return state.newestFirst ? rows : rows.slice().reverse();
+  return state.rows.filter(matches);
 }
 
 /* 导出 / 复制：一次性拉取全量匹配日志（最多 EXPORT_MAX 条） */
@@ -164,27 +155,6 @@ function hintHtml() {
   let hint = t('logs.hint', retDays, retLevel, state.pageSize);
   if (state.files.length) hint += t('logs.filesNote', state.files.length, esc(formatBytes(totalBytes)));
   return hint;
-}
-
-/** 记录 root 内当前聚焦元素的 id 与光标位置（重绘后恢复，避免输入被打断）。 */
-function captureFocus(root) {
-  const a = (typeof document !== 'undefined') && document.activeElement;
-  if (!a || !a.id || !root.contains(a)) return null;
-  return {
-    id: a.id,
-    start: typeof a.selectionStart === 'number' ? a.selectionStart : null,
-    end: typeof a.selectionEnd === 'number' ? a.selectionEnd : null,
-  };
-}
-
-function restoreFocus(root, f) {
-  if (!f) return;
-  const el = root.querySelector('#' + f.id);
-  if (!el || typeof el.focus !== 'function') return;
-  try {
-    el.focus();
-    if (f.start != null && typeof el.setSelectionRange === 'function') el.setSelectionRange(f.start, f.end == null ? f.start : f.end);
-  } catch { /* ignore */ }
 }
 
 /** 全量渲染：工具栏 + 结果区。仅在初始/筛选切换/排序切换/清除等离散操作时调用。
@@ -231,7 +201,6 @@ function paint(ctx) {
   bind(ctx);
   restoreFocus(root, focus);
   syncCount();
-  scrollBottom();
 }
 
 /** 仅重绘结果区（表格 + 分页 + 计数 + 说明），不重建工具栏与搜索框。
@@ -249,7 +218,6 @@ function paintResults(ctx) {
   bindPager(ctx);
   restoreFocus(root, focus);
   syncCount();
-  scrollBottom();
 }
 
 function table() {
@@ -269,7 +237,7 @@ function row(l) {
     <td class="logline">${esc(l.msg || '')}</td></tr>`;
 }
 
-function appendRow(line, ctx) {
+function appendRow(line) {
   const tbody = boundRoot && boundRoot.querySelector('#lgBody');
   if (!tbody) return;
   if (!matches(line)) return;
@@ -278,7 +246,6 @@ function appendRow(line, ctx) {
   const tr = tmp.firstElementChild;
   if (state.newestFirst) tbody.insertBefore(tr, tbody.firstChild);
   else tbody.appendChild(tr);
-  if (!state.paused) scrollBottom();
   syncCount();
 }
 
@@ -289,13 +256,6 @@ function matches(l) {
   const kw = state.q.trim().toLowerCase();
   if (kw && !String(l.msg || '').toLowerCase().includes(kw) && !String(l.taskName || '').toLowerCase().includes(kw)) return false;
   return true;
-}
-
-function scrollBottom() {
-  const tb = boundRoot && boundRoot.querySelector('#lgTable');
-  if (!tb) return;
-  const box = tb.closest('.card') || tb.parentElement;
-  if (box && box.scrollHeight) { /* 视口滚动交给浏览器；页面本身不设固定高度 */ }
 }
 
 function syncCount() {

@@ -4,7 +4,7 @@
    ④据此重新生成 app/web/i18n.js 的 DEFAULT_DICT。
    用法：node app/web/i18n/build.mjs
    改文案/加键：编辑 ADD / REMOVE 后运行本脚本；zh-CN.json 是运行时权威，i18n.js 由它生成。 */
-import { readFileSync, writeFileSync, readdirSync, statSync } from 'node:fs';
+import { readFileSync, writeFileSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
@@ -24,7 +24,6 @@ const ADD = {
   'common.unknownAnchor': '未知主播',
   'common.monitorOnly': '仅监控',
   'common.waitSlot': '等待并发空位',
-  'common.pollSec': '轮询 {0} 秒',
   'common.unnamed': '未命名任务',
   'common.room': '房间 {0}',
   'common.checkLiveTip': '立即检测该直播间是否已开播',
@@ -39,8 +38,6 @@ const ADD = {
   'login.switchHintLogin': '首次部署？',
 
   // ui（播放器/弹窗等）
-  'ui.waitSlot': '等待并发空位', 'ui.pollSec': '轮询 {0} 秒',
-  'ui.finishedAt': '{0} 结束 · {1}', 'ui.autoRetry': ' · 自动重试 {0}',
   'ui.promptTitle': '请输入', 'ui.emptyContent': '内容不能为空',
   'ui.playbackBusy': '当前回放较多，请稍后再试', 'ui.playStartFail': '无法开始回放',
   'ui.remuxStreaming': '边转边播 · 不可拖动', 'ui.directPlay': '直接播放 · 可拖动',
@@ -251,6 +248,10 @@ const REMOVE = [
   'dashboard.waitSlot', 'dashboard.pollSec', 'dashboard.unnamed', 'dashboard.room',
   'dashboard.checkLiveTip', 'dashboard.diskTrash',
   'ui.waitSlot', 'ui.pollSec', 'ui.recorded', 'ui.playback',
+  // 死键清理：statusCell 已删除（状态单元格改由各视图自渲染）+ 永不再出现的 merging 状态
+  'ui.finishedAt', 'ui.autoRetry', 'common.pollSec', 'common.merging',
+  // 死键清理：全仓无任何引用（2026-10-18 清查）
+  'common.stopped', 'settings.upInvalidRepo',
   'files.completed', 'files.replay', 'files.unknownAnchor',
   'files.anchorPlaceholder',
   'tasks.unknownAnchor', 'tasks.monitorOnly',

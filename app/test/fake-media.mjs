@@ -12,7 +12,6 @@ export const buildMergeArgs = real.buildMergeArgs;
 export const buildConcatList = real.buildConcatList;
 export const buildPlayArgs = real.buildPlayArgs;
 export const extOfContainer = real.extOfContainer;
-export const parseSegmentList = real.parseSegmentList;
 
 export function spawnFfmpeg({ args = [], onStderr, onStdout } = {}) {
   return real.spawnFfmpeg({
@@ -38,5 +37,3 @@ export async function probeJson(file) {
 }
 export async function ffmpegVersion() { return { available: true, version: 'ffmpeg version fake-7.0-livegrab' }; }
 export { FAKE_FFMPEG as ffmpegPath };
-export const probeDurationReal = real.probeDuration;
-export const _file = fileURLToPath;

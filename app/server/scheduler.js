@@ -1,7 +1,6 @@
 // 调度：开播轮询、并发排队、任务生命周期（D3/D6/D16）
 import path from 'node:path';
 import fsp from 'node:fs/promises';
-import fs from 'node:fs';
 import { Recorder } from './recorder.js';
 import { Store } from './store.js';
 import { qualityLabel } from './naming.js';
@@ -470,7 +469,6 @@ export class Scheduler {
     const recorder = new Recorder({
       task, settings, getSettings: () => this.store.settings, naming: this.store.naming, logger: this.logger, resolveStream,
       mediaMod: this.mediaMod || undefined,
-      metaDir: path.join(this.store.configDir, 'meta', task.id), // seg 列表等临时文件放元数据目录，不进录制目录
       // 下播检测：ffmpeg 意外退出时先探一次直播状态，主播已下播就直接正常收尾，不进入断流重连
       probeOffline: async () => {
         try {
@@ -1200,6 +1198,11 @@ export class Scheduler {
     let bytes = 0;
     let durationSec = 0;
     for (const s of this.store.sessions) {
+      // 快速跳过整场都在今天之前的场次（历史越多收益越大）：仅当开始与结束都严格早于今天才跳过，
+      // 今天进行中 / 跨天 / 缺时间字段的场次仍逐文件精确判断，避免漏计异步转封装产物。
+      const sd = s.startedAt ? dateKey(new Date(s.startedAt)) : null;
+      const ed = s.endedAt ? dateKey(new Date(s.endedAt)) : null;
+      if (sd && ed && sd < day && ed < day) continue;
       const segs = s.segments || [];
       const segIds = new Set(segs.map((f) => f.id));
       for (const f of segs) {
@@ -1260,19 +1263,17 @@ export class Scheduler {
     if (this._pstore && now - (this._pstoreAt || 0) < 5000) return this._pstore;
     const map = new Map();
     const seen = new Set();
-    const cands = [];
     for (const s of this.store.sessions) {
       const key = s.platform || 'direct';
       if (!map.has(key)) map.set(key, { platform: key, name: s.platformName || key, bytes: 0 });
-      for (const f of [...(s.segments || []), ...(s.extras || []), s.merged, s.mp4].filter(Boolean)) {
-        if (f && f.path && !seen.has(f.path)) { seen.add(f.path); cands.push([key, f.path]); }
-      }
-    }
-    for (const [key, p] of cands) {
-      let size = 0;
-      try { size = fs.statSync(p).size; } catch { continue; }
       const e = map.get(key);
-      if (e) e.bytes += size;
+      // 直接累加索引内字节数，不再逐文件 statSync——该函数在 /api/status（2s 轮询）热路径上，
+      // 全量同步 stat 会阻塞事件循环；索引 bytes 与文件库/磁盘统计口径一致，精度足够。
+      for (const f of [...(s.segments || []), ...(s.extras || []), s.merged, s.mp4]) {
+        if (!f || !f.path || seen.has(f.path)) continue;
+        seen.add(f.path);
+        e.bytes += Number(f.bytes) || 0;
+      }
     }
     this._pstore = [...map.values()].filter((e) => e.bytes > 0).sort((a, b) => b.bytes - a.bytes);
     this._pstoreAt = now;
@@ -1319,7 +1320,7 @@ export class Scheduler {
       recent: this.logger.recent(8),
       platforms: platformList(settings).map((p) => ({ ...p, active: this.platformActive(p.id) })),
       platformStore: this.platformStore(),
-      tasks: tasks.map((t) => LITE(t)),
+      tasks,
     };
   }
 }

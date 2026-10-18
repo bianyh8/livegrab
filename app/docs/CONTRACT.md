@@ -17,24 +17,39 @@ app/
   server/
     util.js             # 通用工具（无依赖）
     naming.js           # 命名规则引擎（纯函数）
-    store.js            # 内存态 + SQLite 写穿透（tasks/sessions/files/settings/naming/trash）
-    db.js               # SQLite v2 建库/PRAGMA/表结构（唯一持久化真相源，无 data_json）
-    legacy-cleanup.js   # 旧 JSON 遗留清理（独立方法，日后可整段删除）
+    store.js            # 内存态 + SQLite 写穿透（tasks/sessions/files/settings/naming/trash/security）
+    db.js               # SQLite v2 建库/PRAGMA/表结构（唯一持久化真相源）
     logger.js           # 环形日志 + SSE 广播
-    storage.js          # 磁盘统计与清理策略
-    media.js            # ffmpeg/ffprobe 封装（子代理 A 负责）
-    recorder.js         # 单任务录制进程管理：分段/轮转/重连（子代理 A 负责）
+    storage.js          # 磁盘统计、扫描对账、回收站、转封装/合并、保留策略
+    media.js            # ffmpeg/ffprobe 封装与参数构造
+    recorder.js         # 单任务录制进程管理：分段/轮转/重连
+    scheduler.js        # 轮询开播、并发排队、任务生命周期
+    server.js           # http 服务：静态 + API + SSE
+    auth.js             # 登录/会话/改密（失败锁定、可信局域网）
+    notify.js           # Webhook 通知（开播/结束/错误/磁盘/风控）
+    play.js             # 回放：MP4 直放 / TS→fMP4 转封装流、并发上限
+    proxy-fetch.js      # 代理拉取（CONNECT 隧道、按平台生效）
+    file-order.js       # 文件库确定性排序比较器
+    httpClose.js        # HTTP 优雅关闭（SSE 长连接兜底）
+    legacy-cleanup.js   # 旧 JSON 遗留文件一次性清理
+    update.js           # 自更新：git 拉取 / 快照通道 / 直连降级
     resolvers/
-      index.js          # 平台识别 + 统一入口（子代理 B 负责）
-      bilibili.js       # B 站解析（子代理 B 负责）
-      douyin.js         # 抖音解析（子代理 B 负责）
-    scheduler.js        # 轮询开播、并发排队、任务生命周期（Lead 负责）
-    server.js           # http 服务：静态 + API + SSE（Lead 负责）
+      index.js          # 平台识别 + 统一入口
+      http.js           # 通用 HTTP 拉取（代理/UA）
+      room-url.js       # 房间号/分享链接解析
+      bilibili.js       # B 站解析
+      douyin.js         # 抖音解析
+      douyin-sign.js    # 抖音 a_bogus 签名
+      cn.js             # 国内其它平台（快手/虎牙/斗鱼/小红书/微博等）
+      direct.js         # 直链
   web/
-    index.html app.css app.js api.js views/*.js   # 前端（子代理 C 负责）
+    index.html app.css app.js api.js ui.js i18n.js
+    views/*.js          # dashboard/tasks/files/logs/trash + settings/tab-*
+    i18n/zh-CN.json     # 后端 /api/i18n 的权威文案源（i18n.js 为其首帧兜底快照）
   test/
     run.js              # 自带 assert，无框架：node app/test/run.js
     fake-ffmpeg.mjs     # 假 ffmpeg，用于无 ffmpeg 环境下的录制链路测试
+    db-sqlite.mjs e2e-*.mjs update-*.mjs ...  # 独立验证脚本
 docs/ (本文件)
 Dockerfile  docker-compose.yaml  README.md
 ```
@@ -118,7 +133,7 @@ Settings = {
 
 ## 4. 模块接口（跨文件调用必须严格一致）
 
-### 4.1 resolvers/index.js（子代理 B）
+### 4.1 resolvers/index.js
 ```js
 export function detectPlatform(input) // 'douyin'|'bilibili'|null；接受完整 URL / 纯房间号+platform 提示
 export async function resolveRoom(url, ctx) // ctx={settings,logger}
@@ -132,20 +147,20 @@ export async function resolveStream(task, ctx) // ctx={settings,logger}
 - 必须只用 `globalThis.fetch`，自带超时（AbortSignal.timeout）与 2 次重试；失败信息要能指导用户（例如"Cookie 失效"）。
 - 抖音需要 `ttwid`：先 GET `https://live.douyin.com/` 取 `set-cookie`，再调 `/webcast/room/web/enter/`；HTML 兜底解析 `RENDER_DATA`。
 
-### 4.2 media.js（子代理 A）
+### 4.2 media.js
 ```js
 export async function ffmpegVersion(ffmpegPath='ffmpeg') // → {available:boolean, version:string|null}
 export async function ffprobeJson(ffprobePath='ffprobe', file) // → {durationSec,bytes,width,height}|null
-export function buildRecordArgs({streamUrl, outputPattern, container='ts', segmentMode='time', segmentMinutes=60, segmentListPath, startNumber=1, headers={}, audioOnly=false, proxy=''})
+export function buildRecordArgs({streamUrl, outputPattern, container='ts', segmentMode='time', segmentMinutes=60, startNumber=1, headers={}, audioOnly=false, proxy=''})
 // → string[]（不含 ffmpeg 本身；见下方 5. 参数规范）
 export function buildRemuxArgs({input, output, audioOnly=false})
 export function buildMergeArgs({listFile, output})
 export function buildConcatList(inputs) // → 'file \'<escaped>\'\n...'
-export async function runFfmpeg({ffmpegPath, args, onStderr, onExit}) // → {code, signal}（子代理 A 可用 spawn 包装）
+export async function runFfmpeg({ffmpegPath, args, onStderr, onExit}) // → {code, signal}
 export function probeDuration(ffprobePath, file)
 ```
 
-### 4.3 recorder.js（子代理 A）
+### 4.3 recorder.js
 ```js
 export class Recorder extends EventEmitter {
   constructor({task, settings, naming, resolveStream, logger, media, onEvent})
@@ -179,14 +194,14 @@ export function reserveName(fullPath, existsFn)       // → 不冲突的最终�
 export function previewNaming({fnTemplate,dirTemplate,options,samples}) // → {lines,warnings}
 ```
 
-### 4.5 前端（子代理 C）
+### 4.5 前端
 - 入口 `app/web/index.html` 引入 `app.css`、`app.js`（`<script type="module">`）。
 - `app.js` 负责：左侧导航渲染与路由（hash 路由 `#/dashboard` 等）、顶栏、`#view` 容器、2s 轮询 `/api/status` + `/api/tasks`、SSE `/api/events` 追加日志、`toast()`、`confirmDialog()`、`formatBytes/formatDuration` 工具。
 - 每个视图导出 `export function render(root, ctx)`（同步返回 DOM 或 HTML 字符串），必要时导出 `destroy()`。
 - 视图模块：`views/dashboard.js`（总览）、`views/tasks.js`（任务表格 + 新建/编辑/详情弹窗）、`views/files.js`（文件库 + 播放器）、`views/settings/`（设置 7 页签：录制 / 存储 / 命名规则 / 平台账号 / 通知 / 安全与登录 / 系统更新，命名规则复用 `POST /api/naming/preview`）、`views/logs.js`。
 - 视觉完全沿用 `ui/index.html` 的设计令牌与组件类名（`ui/index.html` 是可读参考，直接复制其 `<style>` 到 `app.css` 并补充缺失类）。
 
-## 5. ffmpeg 参数规范（子代理 A 必须严格实现）
+## 5. ffmpeg 参数规范
 
 录制（TS 分段，关键帧对齐，直接产出最终文件名）：
 ```
@@ -197,12 +212,11 @@ ffmpeg -hide_banner -loglevel info -nostats
   -c copy                                         # 非 audioOnly
   -f segment -segment_time <sec> -segment_format mpegts
   -reset_timestamps 1 -segment_start_number <n>
-  -segment_list <listPath> -segment_list_type csv
   <outputPattern>                                 # 形如 /data/抖音/主播/2025-06-01/名字_%03d.ts
 ```
 - `container='flv'` 时 `-segment_format flv`、扩展名 `.flv`；`mkv` 时 `-segment_format matroska`、扩展名 `.mkv`。默认 `ts`。
 - `segmentMode:'none'` → 去掉 `-f segment` 全部参数，直接写单文件（文件名不含 `%03d`）。
-- `-segment_list` 的 CSV 行：`<path>,<start>,<end>`（秒，float），用于精确登记分段边界与时长。
+- 分段边界与时长由录制器在文件关闭后用 `ffprobe`（`probeDuration`）实测；不再生成 `-segment_list` CSV（无消费方，纯冗余 IO）。
 - 停止：向 stdin 写 `q`（必须 `stdio:['pipe','ignore','pipe']`）。
 - 转封装：`ffmpeg -hide_banner -y -i in.ts -c copy -movflags +faststart out.mp4`（audioOnly 用 `-c:a copy` 输出 `.m4a`）。
 - 合并：`ffmpeg -hide_banner -y -f concat -safe 0 -i list.txt -c copy out.<ext>`。
@@ -237,7 +251,7 @@ ffmpeg -hide_banner -loglevel info -nostats
 | POST | `/api/auth/login` | `{username,password,remember}` |
 | POST | `/api/auth/logout` / GET `/api/auth/me` / POST `/api/auth/password` | `{oldPassword,newPassword}` |
 | GET | `/api/platforms` | `{items:[{id,name,tier,enabled,needCookie,cookieHow,cookie:{has,updatedAt,valid},qualities:[{id,label,note}],cap,active,note}]}` |
-| GET | `/api/status` | `{stats:{recordingCount,activeCount,concurrencyCap,queuedCount,todayFiles,todayBytes,todayDurationSec},disk:{totalBytes,freeBytes,usedBytes,trashBytes},engine:{ffmpegAvailable,ffmpegVersion,tz,version,uptimeSec},recording:[TaskLite],waiting:[TaskLite],queue:[{id,name,reason}],recent:[LogLine]}` |
+| GET | `/api/status` | `{stats:{recordingCount,activeCount,concurrencyCap,queuedCount,waitingCount,platformCount,downSpeed,totalDurationSec,todayFiles,todayBytes,todayDurationSec},disk:{totalBytes,freeBytes,usedBytes,trashBytes,trashFiles,recordRoot},recordRoot,engine:{available,version,ffmpegAvailable,ffmpegVersion,tz,uptimeSec,node,playConcurrency},recording:[Task],waiting:[Task],queue:[{id,name,reason}],recent:[LogLine],platforms:[{...platform,active}],platformStore,tasks:[TaskLite]}` |
 | GET | `/api/tasks` | `{items:[Task]}`（含 `live:{bytes,elapsedSec,currentFile,segmentIndex}`） |
 | POST | `/api/tasks` | `{url}` 或 `{platform,roomId}` + 覆盖字段；重复房间 409 `DUPLICATE_ROOM` |
 | POST | `/api/resolve` | `{url}` → `{platform,roomId,anchorName,title,avatar,liveStatus,online,qualityOptions,note}` |
@@ -249,7 +263,7 @@ ffmpeg -hide_banner -loglevel info -nostats
 | GET/PUT | `/api/settings` | cookie 一律脱敏为 `{has,updatedAt}` |
 | POST | `/api/settings/cookie` | `{platform,cookie}`；DELETE 同路径 `?platform=` |
 | GET | `/api/settings/env` | `{tz,recordRoot,configDir,port,ffmpegAvailable,ffmpegVersion,version}` |
-| GET | `/api/files` | `?view=platform\|date\|task&platform=&date=&taskId=&status=&q=&limit=&offset=` → `{total,items:[Session],summary:{missing,unregistered,trashCount,trashBytes}}` |
+| GET | `/api/files` | `?view=platform\|date\|task&platform=&date=&taskId=&status=&q=&limit=&offset=` → `{total,items:[Session],summary:{missing,unregistered,trashCount,trashBytes,sessions}}` |
 | POST | `/api/files/scan` | `{added,updated,missing,unregistered,cleaned}` |
 | POST | `/api/files/:id/remux` / POST `/api/files/merge` | `{fileId}` / `{sessionId}` → 转封装 / 同步合并（merge 返回新 FileRecord，无 async job） |
 | POST | `/api/files/delete` | `{sessionIds?,fileIds?}` → `{movedToTrash,bytes}` |
@@ -279,12 +293,19 @@ FileItem = { id, sessionId, kind:'segment'|'mp4'|'m4a'|'merged'|'unregistered',
 ### 6.5.4 设置模型增量
 ```js
 Settings += {
-  trashRetentionDays:7, deleteToTrash:true, logRetentionDays:14, logLevel:'INFO',
-  playConcurrency:2, mergeOnStop:false, recordContainer:'ts', defaultMonitorOnly:false,
-  platformCaps:{douyin:4,bilibili:4,kuaishou:3,huya:3,douyu:3,xiaohongshu:2,weibo:2},
-  platformEnabled:{...}, pollIntervalSec:60, startDelaySec:5, stopDelaySec:30,
-  notify:{webhook,onStart,onEnd,onLive,onError,onDisk,onCookie,dedupeSec:60,dedupe:true},
-  naming:{activeId,profiles:[]}, customize:{}
+  recordRoot:'/data', configDir:'/config',          // 运行时环境项，不入库
+  maxConcurrency:8, defaultQuality:'origin', qualityFallback:['origin','bluray','uhd','hd','sd'],
+  defaultSegmentMode:'time', defaultSegmentMinutes:3600, defaultSegmentSizeMB:2048,
+  recordContainer:'ts', remuxToMp4:true, keepSource:true, autoMerge:false,
+  mergeOnStop:false, deleteAfterMerge:true, reconnectMax:5,
+  pollIntervalSec:60, startDelaySec:5, stopDelaySec:30, diskLimitGB:20, retentionDays:30,
+  deleteToTrash:true, trashRetentionDays:7, logRetentionDays:14, logLevel:'INFO',
+  playConcurrency:2, proxy:'', userAgent:'', defaultMonitorOnly:false,
+  platformCaps:{douyin:4,bilibili:4,kuaishou:3,huya:3,douyu:3,xiaohongshu:2,weibo:2,acfun:2,direct:8},
+  platformEnabled:{...}, platformUseProxy:{...},   // 按平台启用 / 按平台走代理
+  notify:{webhook,onStart,onEnd,onLive,onError,onDisk,onCookie,dedupeSec:60,dedupe:true,retry:true},
+  security:{sessionDays:30,failLimit:5,failLockMin:10,trustLan:false},
+  cookies:{...}, naming:{activeId,profiles:[]}, customize:{}
 }
 ```
 
@@ -305,7 +326,7 @@ Settings += {
 - recorder/media：使用 `app/test/fake-ffmpeg.mjs`（伪造 ffmpeg：忽略参数、按 `-f segment` 语义写递增文件、读 stdin 的 `q` 后正常退出）跑通"启动 → 分段轮转 → 优雅停止 → 分段收尾"全链路。
 - server：启动后在随机端口跑一遍主要 API 的 smoke（不依赖 ffmpeg）。
 
-实测（v0.1.26 复测）：`node app/test/run.js` → **PASS 342 ｜ FAIL 0**（含 17 项 web 视图守卫静态断言与 17 项更新链路守卫断言：`nextFrame()` 必须带 setTimeout 兜底、强制横屏的旋转必须落在内层舞台 `#plStage`（不得写在全屏元素 `#plBox` 上）、任务查询防抖必须走局部重绘 `paintResults`（不得全量重建 `#tkQ` 抢焦点，防抖 300ms，2s 轮询同样只局部重绘）、播放器进度条必须 Pointer Events 拖动（`bindSeekTrack`：按下预览不写 currentTime、松手结算、`setPointerCapture`、横屏方向实时读舞台矩阵、`touch-action:none` + 伪元素扩触控命中区；不得退回 onclick）、git 必须走 HTTP/1.1 + 降级重试、`GIT_TERMINAL_PROMPT=0`、快进用本地 `FETCH_HEAD`、快照通道与容器克隆重试；另有 9 项「任务级转封装跟随全局」行为断言、9 项「分段结束原因」行为断言（断流重连/自然轮转的 endReason 落库与重开库往返、探测 unknown 不停录）、9 项 ffmpeg 直播加固参数守卫；无 ffmpeg、无网络）；
+实测（v0.1.40 复测）：`node app/test/run.js` → **PASS 438 ｜ FAIL 0**（覆盖 web 视图守卫、更新链路守卫、代理链路、文件库扫描/排序、审计一致性、合并后清理等；关键断言：`nextFrame()` 必须带 setTimeout 兜底、强制横屏的旋转必须落在内层舞台 `#plStage`（不得写在全屏元素 `#plBox` 上）、任务查询防抖必须走局部重绘 `paintResults`（不得全量重建 `#tkQ` 抢焦点，防抖 300ms，2s 轮询同样只局部重绘）、播放器进度条必须 Pointer Events 拖动（`bindSeekTrack`：按下预览不写 currentTime、松手结算、`setPointerCapture`、横屏方向实时读舞台矩阵、`touch-action:none` + 伪元素扩触控命中区；不得退回 onclick）、git 必须走 HTTP/1.1 + 降级重试、`GIT_TERMINAL_PROMPT=0`、快进用本地 `FETCH_HEAD`、快照通道与容器克隆重试；另有 9 项「任务级转封装跟随全局」行为断言、9 项「分段结束原因」行为断言（断流重连/自然轮转的 endReason 落库与重开库往返、探测 unknown 不停录）、9 项 ffmpeg 直播加固参数守卫；无 ffmpeg、无网络）；
 `node app/test/update-manager.mjs` → 全部通过（mock GitHub，离线；P/Q/R 三组新增：传输层降级参数与报错分级、fetch 参数只认配置的更新源、快照地址推导与标记读写、tar.gz 解析落地（含超长路径 pax/GNU longname））；
 `node app/test/update-git-flow.mjs` → 全部通过（架构 B 容器更新链路，离线自建 git 场景；新增「拉取失败后的处理流程」：三档降级重试 → 本地快进 → 快照通道覆盖/清理上游已删文件 → 内容指纹安全自愈对齐 git 索引 → 安全闸门拒绝覆盖本地改动）；
 `node app/test/db-sqlite.mjs` → 82 通过（v1→v2 库作废重建等）；

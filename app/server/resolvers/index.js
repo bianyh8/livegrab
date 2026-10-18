@@ -60,7 +60,7 @@ export const PLATFORMS = [
   {
     id: 'acfun', name: 'AcFun', handler: null, tier: 'planned',
     match: /acfun\.cn/i, qualities: q('origin', 'hd', 'sd'), cap: 2, needCookie: false, cookieHow: 'none',
-    note: '待接入（P1）',
+    note: '未接入自动解析：可新建「直链」任务粘贴流地址录制',
   },
   {
     id: 'direct', name: '直链', handler: direct, tier: 'stable',

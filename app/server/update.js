@@ -551,13 +551,16 @@ export class UpdateManager {
         }
       }
 
-      // 覆盖式拷贝
+      // 覆盖式拷贝（目录去重：同一目录只 mkdir 一次）
       let copied = 0;
+      const madeDirs = new Set();
       for (const rel of files) {
+        const src = path.join(tmp, rel);
         const dst = path.join(env.gitRoot, rel);
-        fs.mkdirSync(path.dirname(dst), { recursive: true });
-        fs.copyFileSync(path.join(tmp, rel), dst);
-        try { fs.chmodSync(dst, fs.statSync(path.join(tmp, rel)).mode); } catch { /* 忽略 */ }
+        const dir = path.dirname(dst);
+        if (!madeDirs.has(dir)) { fs.mkdirSync(dir, { recursive: true }); madeDirs.add(dir); }
+        fs.copyFileSync(src, dst);
+        try { fs.chmodSync(dst, fs.statSync(src).mode); } catch { /* 忽略 */ }
         copied += 1;
       }
       if (version) latest = { ...(latest || {}), version };

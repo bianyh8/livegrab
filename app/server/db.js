@@ -320,11 +320,6 @@ export function setMeta(db, key, value) {
     .run(key, String(value));
 }
 
-export function getMeta(db, key) {
-  const row = db.prepare('SELECT value FROM meta WHERE key=?').get(key);
-  return row ? row.value : null;
-}
-
 /** 命名变量字典（token/desc/example）首次建库时落表，供前端展示与校验 */
 function seedVariables(db) {
   const ins = db.prepare('INSERT OR REPLACE INTO naming_variables(token, desc, example) VALUES(?,?,?)');
@@ -392,13 +387,4 @@ export function openDb(dbPath, onLog = null) {
     seedVariables(db);
   }
   return db;
-}
-
-/** 数据库是否为空（无任何场次记录）；读取失败抛错，绝不说成「空库」 */
-export function isEmpty(db) {
-  try {
-    return db.prepare('SELECT COUNT(*) c FROM sessions').get().c === 0;
-  } catch (e) {
-    throw new Error(`[db] 判定库是否为空时读取失败：${e?.message || e}`);
-  }
 }

@@ -3,7 +3,7 @@
    数据来自 GET /api/trash；还原 POST /api/trash/restore；清空 POST /api/trash/empty。 */
 
 import { api } from '../api.js';
-import { esc, formatBytes, formatDateTime, emptyBox, toast, confirmDialog } from '../ui.js';
+import { esc, formatBytes, formatDateTime, emptyBox, toast, confirmDialog, pagerHTML, bindPager } from '../ui.js';
 import { t } from '../i18n.js';
 
 export const page = 'trash';
@@ -12,26 +12,6 @@ const state = { items: [], total: 0, bytes: 0, retentionDays: 7, page: 1, pages:
 
 /* 分页：默认每页 10 条（任务/文件/回收站统一） */
 const PAGE_SIZE = 10;
-function pagerHTML(id, page, pages, total) {
-  return `<div class="pager" id="${id}">
-    <button class="btn sm ghost" data-pg="first"${page <= 1 ? ' disabled' : ''}>«</button>
-    <button class="btn sm ghost" data-pg="prev"${page <= 1 ? ' disabled' : ''}>‹ ${t('common.pagerPrev')}</button>
-    <span class="pager-info">${t('common.pagerInfo', page, pages, total)}</span>
-    <button class="btn sm ghost" data-pg="next"${page >= pages ? ' disabled' : ''}>${t('common.pagerNext')} ›</button>
-    <button class="btn sm ghost" data-pg="last"${page >= pages ? ' disabled' : ''}>»</button>
-  </div>`;
-}
-function bindPager(root, pagerId, st, paintFn) {
-  const el = root.querySelector('#' + pagerId);
-  if (!el) return;
-  el.querySelectorAll('[data-pg]').forEach((b) => {
-    b.onclick = () => {
-      const map = { first: 1, prev: st.page - 1, next: st.page + 1, last: st.pages };
-      st.page = Math.max(1, Math.min(st.pages, map[b.dataset.pg]));
-      paintFn();
-    };
-  });
-}
 
 let boundRoot = null;
 

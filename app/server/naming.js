@@ -4,7 +4,6 @@ import { byteLength, formatDate, formatTime, DATE_FORMAT_KEYS, TIME_FORMAT_KEYS 
 export const QUALITY_LABELS = {
   origin: '原画', bluray: '蓝光', uhd: '超清', hd: '高清', sd: '标清', audio: '仅音频',
 };
-export const QUALITY_IDS = Object.keys(QUALITY_LABELS);
 export const qualityLabel = (q) => QUALITY_LABELS[q] || String(q || '');
 
 // 跨平台并集：Linux 只禁 / 与 NUL，但宿主可能是 Windows/macOS，bind mount 后这些名字会落盘失败
