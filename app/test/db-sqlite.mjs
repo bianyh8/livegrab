@@ -182,6 +182,39 @@ const store3 = await new Store(tmp).init(db3);
 const sx1b = store3.sessions.find((s) => s.id === sx1.id);
 check('导入的场次重开后恢复（含文件归属）', !!sx1b && sx1b.segments[0]?.id === 'fx1' && sx1b.platform === 'douyin');
 check('自动注册的场次重开后恢复', store3.sessions.some((s) => s.id === sa.id && s.platform === 'huya'));
+
+// ---------- 重复独立场次清理：扫描先注册的产物场次让位给录制场次（v0.1.45 修复） ----------
+store3.settings.recordRoot = tmp;
+const dupPath = path.join(tmp, '抖音', '测试主播', '2026-05-20-10-00-00-001.mp4');
+fs.writeFileSync(dupPath, 'q'.repeat(32));
+const dupFile = (id, sid) => ({
+  id, sessionId: sid, kind: 'segment', name: '2026-05-20-10-00-00-001.mp4', path: dupPath,
+  relPath: '抖音/测试主播/2026-05-20-10-00-00-001.mp4', ext: 'mp4', bytes: 32, durationSec: 0,
+  status: 'ok', segmentIndex: 0, createdAt: '2026-05-20T10:00:00.000Z', completedAt: '2026-05-20T10:01:00.000Z',
+});
+const baseSession = (id, taskId, fid) => ({
+  id, taskId, platform: 'douyin', platformName: '抖音', streamer: '测试主播', title: 'x',
+  startedAt: '2026-05-20T10:00:00.000Z', endedAt: null, durationSec: 0, bytes: 32, status: 'done',
+  dir: path.dirname(dupPath), relDir: '抖音/测试主播', segments: [dupFile(fid, id)],
+  extras: [], merged: null, mp4: null, namingProfileId: null, taskSnapshot: { anchorName: '', roomId: '' },
+});
+const realS = baseSession('s_real', 't_real', 'fa1');
+await store3.addSession(realS); // 真实录制场次写库成功
+const orphanS = baseSession('s_orphan', null, 'fb1');
+store3.state.sessions.push(orphanS); // 独立场次只存在于内存（DB 写会 path UNIQUE 冲突——正是要修的 bug 场景）
+store3._invalidateIndex?.();
+const storage3 = new Storage({ store: store3, logger: { info() {}, warn() {}, error() {} } });
+storage3.activePathsFn = () => [];
+const scDup = await storage3.scan();
+check('扫描清理重复独立场次（让位给真实场次）', !store3.sessions.some((s) => s.id === 's_orphan'));
+check('真实场次保留', !!store3.sessions.find((s) => s.id === 's_real'));
+check('清理计数计入扫描结果', scDup.total >= 1);
+// _dropOrphanSessionByPath 独立验证（remux/merge 收编前的预防路径）
+const orphanS2 = baseSession('s_orphan2', null, 'fb2');
+store3.state.sessions.push(orphanS2);
+store3._invalidateIndex?.();
+const dropped = await storage3._dropOrphanSessionByPath(dupPath);
+check('_dropOrphanSessionByPath 让位独立场次', dropped === 1 && !store3.sessions.some((s) => s.id === 's_orphan2'));
 db3.close();
 
 // ---------- 老库升级：notify 表缺 on_live/dedupe 列（v0.1.36 迁移 bug：开播通知被静默关闭） ----------

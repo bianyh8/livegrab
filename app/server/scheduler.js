@@ -664,10 +664,14 @@ export class Scheduler {
     }
     this.onEvent({ type: 'task', task });
     if (session && session.segments.length) {
+      // 转封装与刮削（NFO/海报）独立执行：autoRemux 失败不能连坐 writeArt，
+      // 否则该场次永远没有 .nfo/.jpg（用户看到的就是「视频在、刮削缺失」）
       this.storage.autoRemux(session)
-        .then(() => this.storage.writeArt(session))
         .then(() => this.onEvent({ type: 'files' }))
         .catch((e) => this.logger.warn(`自动转封装失败：${errText(e)}`));
+      this.storage.writeArt(session)
+        .then(() => this.onEvent({ type: 'files' }))
+        .catch((e) => this.logger.warn(`刮削生成失败：${errText(e)}`));
     }
     this.tick().catch(() => {});
   }

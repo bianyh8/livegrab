@@ -419,9 +419,10 @@ async function main() {
     // 拍平：每个会话 → 单个文件行（分段 + 转封装/合并副本 + mp4/m4a），按 id/路径去重
     // （与前端原 allFiles() 口径一致；s 携带 sessionView 以保留播放所需的 segments/id）
     const rows = [];
+    // 去重集合提升到 session 循环外：同一路径若出现在多个场次（重复注册的独立场次），列表只显示一次
+    const seen = new Set(); const seenPath = new Set();
     for (const s of store.sessions) {
       const sv = sessionView(s);
-      const seen = new Set(); const seenPath = new Set();
       const push = (f, tag) => { if (f && f.id && !seen.has(f.id) && !seenPath.has(f.path)) { seen.add(f.id); seenPath.add(f.path); rows.push({ f, s: sv, tag }); } };
       (sv.segments || []).forEach((x) => push(x, null));
       (sv.extras || []).forEach((x) => push(x, x.kind === 'm4a' ? 'M4A' : x.kind === 'merged' ? '合并' : 'MP4'));

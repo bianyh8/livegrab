@@ -229,6 +229,25 @@ export class Storage {
         }
       }
     }
+    // 清理「重复注册的空壳独立场次」：taskId 为空的场次，若任一文件已被有 taskId 的录制场次认领，
+    // 整个独立场次让位（未认领的文件仍在磁盘，下一轮扫描会重新注册，无损）。
+    // 产生路径：转封装/合并产物先被一轮扫描注册成独立场次（taskId=null），随后原录制场次收编同一文件 →
+    // 同一路径出现在两个场次，文件列表重复显示，且独立场次的开始时间/时长不准（文件名推断 + durationSec=0）。
+    const taskOwnedPaths = new Set();
+    for (const s of this.store.state.sessions) {
+      if (!s.taskId) continue;
+      for (const f of [...(s.segments || []), ...(s.extras || []), s.merged, s.mp4]) if (f && f.path) taskOwnedPaths.add(f.path);
+    }
+    let duplicateOrphans = 0;
+    for (const s of [...this.store.state.sessions]) {
+      if (s.taskId) continue;
+      const files = [...(s.segments || []), ...(s.extras || []), s.merged, s.mp4];
+      if (files.some((f) => f && f.path && taskOwnedPaths.has(f.path))) {
+        await this.store.removeSession(s.id).catch(() => {});
+        duplicateOrphans++;
+        this.logger.info(`清理重复注册的独立场次：${s.id}（文件已被录制场次认领）`);
+      }
+    }
     // 清理"幽灵未登记条目"：① 文件已从磁盘消失；② 该路径已归属某个场次
     // （转封装/合并产物可能先被一次扫描当成"未登记"，随后又被登记为场次产物，旧条目若不清理会永久挂在文件库）
     const sessionPaths = new Set();
@@ -241,10 +260,10 @@ export class Storage {
     const beforeExternal = this.store.state.external.length;
     this.store.state.external = this.store.state.external.filter((f) => seen.has(f.path) && !sessionPaths.has(f.path));
     const cleaned = beforeExternal - this.store.state.external.length;
-    const changed = added || updated || missing || cleaned || ghosts;
+    const changed = added || updated || missing || cleaned || ghosts || duplicateOrphans;
     if (changed) {
       await this.store.persist();
-      this.logger.info(`扫描完成：新增场次 ${added}，更新 ${updated}，缺失 ${missing}${cleaned ? `，清理幽灵条目 ${cleaned}` : ''}${ghosts ? `，清理幽灵会话 ${ghosts}` : ''}`);
+      this.logger.info(`扫描完成：新增场次 ${added}，更新 ${updated}，缺失 ${missing}${cleaned ? `，清理幽灵条目 ${cleaned}` : ''}${ghosts ? `，清理幽灵会话 ${ghosts}` : ''}${duplicateOrphans ? `，清理重复独立场次 ${duplicateOrphans}` : ''}`);
       this.onEvent({ type: 'files' });
     } else {
       this.logger.debug(`扫描完成：无变化（共 ${found.length} 个媒体文件）`);
@@ -257,6 +276,23 @@ export class Storage {
     const before = this.store.state.external.length;
     this.store.state.external = this.store.state.external.filter((f) => f.path !== p);
     return before - this.store.state.external.length;
+  }
+
+  /** 收编产物前，清掉独占该路径的独立场次（taskId=null）：
+   *  扫描可能先一步把转封装产物注册成独立场次（files.path UNIQUE），真实场次收编时
+   *  saveSession 会因路径冲突抛错、内存态被污染 → 文件重复/串场。这里先让独立场次让位（删除）。 */
+  async _dropOrphanSessionByPath(p) {
+    let n = 0;
+    for (const s of [...this.store.state.sessions]) {
+      if (s.taskId) continue;
+      const files = [...(s.segments || []), ...(s.extras || []), s.merged, s.mp4];
+      if (files.some((f) => f && f.path === p)) {
+        await this.store.removeSession(s.id).catch(() => {});
+        n++;
+        this.logger.info(`独立场次让位（${s.id}）：${path.basename(p)} 由录制场次收编`);
+      }
+    }
+    return n;
   }
 
   /** 由未登记文件记录构造独立场次（路径推断平台/主播、文件名推断开始时间）；不写库。
@@ -290,6 +326,17 @@ export class Storage {
     const ok = st || await fsp.stat(rec.path).catch(() => null);
     if (!ok) return null;
     const session = this._sessionFromUnregistered(rec);
+    // 独立场次的文件记录 durationSec 默认为 0 → 文件库显示时长 0。对视频文件补一次 ffprobe 拿真实时长
+    // （仅在「新出现且无任何记录」时执行，每轮扫描新增文件少，开销可接受；probe 失败保持 0 不阻塞注册）。
+    if (!rec.durationSec && /\.(mp4|m4a|ts|flv|mkv|mov|mp3|aac|wav)$/i.test(rec.path || '')) {
+      try {
+        const info = await this.media.probeJson(rec.path);
+        if (info && Number(info.durationSec) > 0) {
+          rec.durationSec = Number(info.durationSec);
+          session.durationSec = Number(info.durationSec);
+        }
+      } catch { /* 保持 0 */ }
+    }
     this.store.state.external = this.store.state.external.filter((x) => x.id !== rec.id);
     await this.store.addSession(session);
     return session.id;
@@ -593,6 +640,7 @@ export class Storage {
           if (session.mp4 && session.mp4.path === outPath) session.mp4 = item;
           if (!session.mp4 && file.kind === 'segment') session.mp4 = item;
           this._dropExternalByPath(outPath); // 防止同名"未登记"条目残留（扫描可能先一步登记过这个文件）
+          await this._dropOrphanSessionByPath(outPath); // 让扫描先注册的独立场次让位，避免 files.path UNIQUE 冲突导致收编失败
           await this.store.saveSession(session);
         } else {
           this.store.external.push(item);
@@ -652,6 +700,7 @@ export class Storage {
       session.extras = session.extras || [];
       session.extras.push(item);
       this._dropExternalByPath(outPath); // 合并产物同理：清掉可能已存在的同名"未登记"条目
+      await this._dropOrphanSessionByPath(outPath); // 独立场次让位（同 remux 收编）
       await this.store.saveSession(session);
       this.logger.info(`合并完成：${mergedName}（${formatBytes(st.size)}）`);
       this._jobDone(job, { fileId: item.id, name: item.name });
@@ -771,33 +820,52 @@ export class Storage {
 
   async writeArt(session) {
     try {
-      const segs = (session.segments || []).filter((f) => f && f.path && !/\.(m4a|mp3|aac|wav)$/i.test(f.path));
-      // 整场代表文件：成品 mp4 → 合并档 → 首个分段 → extras 里的首个 mp4。
-      // （边录边转封装 + keepSource=false 时分段可能已删除，必须兜底到 extras 的 mp4，保证 nfo 始终生成且代表整场）
-      const mp4cand = (session.extras || []).find((f) => f && f.path && (f.kind === 'mp4' || f.kind === 'm4a'));
-      const primary = (session.mp4 && session.mp4.path) || (session.merged && session.merged.path) || (segs[0] && segs[0].path) || (mp4cand && mp4cand.path) || null;
-      if (!primary) return false;
-      const st = await fsp.stat(primary).catch(() => null);
-      if (!st || st.size <= 0) return false;
+      // 收集所有成品视频（mp4/m4a 转封装产物 + merged 合并档 + session.mp4），按路径去重；
+      // 每个成品视频生成同名 <base>.nfo，让 Jellyfin 对每段都能识别元数据（不只有整场代表）。
+      const seenP = new Set();
+      const candidates = [];
+      const pushCand = (f) => {
+        if (f && f.path && !seenP.has(f.path) && /\.(mp4|m4a|ts|flv|mkv|mov)$/i.test(f.path)) {
+          seenP.add(f.path);
+          candidates.push(f);
+        }
+      };
+      for (const f of [...(session.extras || []), session.merged, session.mp4]) pushCand(f);
+      // 兜底：未转封装/无成品时给首个非音频分段生成（保证至少一个 nfo）
+      if (!candidates.length) {
+        const seg = (session.segments || []).find((f) => f && f.path && !/\.(m4a|mp3|aac|wav)$/i.test(f.path));
+        if (seg) candidates.push(seg);
+      }
+      if (!candidates.length) return false;
+
+      // 整场代表文件：成品 mp4 → 合并档 → 首个候选（供海报与 scrape 落库）
+      const primary = (session.mp4 && session.mp4.path) || (session.merged && session.merged.path) || candidates[0].path;
+      const pStat = await fsp.stat(primary).catch(() => null);
+      if (!pStat || pStat.size <= 0) return false;
       const dir = path.dirname(primary);
+
+      // ① 每个成品视频各写一个 <base>.nfo
+      let nfoCount = 0;
+      for (const f of candidates) {
+        const base = path.basename(f.path, path.extname(f.path));
+        await this._writeNfo(path.join(dir, `${base}.nfo`), session, base, f.path);
+        nfoCount++;
+      }
+
+      // ② 海报只给整场代表（<代表名>.jpg + Jellyfin 目录海报 poster.jpg）
       const base = path.basename(primary, path.extname(primary));
       const poster = path.join(dir, `${base}.jpg`);
-      const nfo = path.join(dir, `${base}.nfo`);
       const existing = await fsp.stat(poster).catch(() => null);
-      if (existing && existing.mtimeMs >= st.mtimeMs) {
-        await this._writeNfo(nfo, session, base, primary);
-        await this._markArt(session, primary, poster, nfo);
-        return true;
+      if (!existing || existing.mtimeMs < pStat.mtimeMs) {
+        const img = await this.media.grabFrame({ input: primary, width: 480 });
+        if (img) {
+          await fsp.writeFile(poster, img);
+          await fsp.writeFile(path.join(dir, 'poster.jpg'), img).catch(() => {}); // Jellyfin 目录海报
+        }
       }
-      const img = await this.media.grabFrame({ input: primary, width: 480 });
-      if (img) {
-        await fsp.writeFile(poster, img);
-        await fsp.writeFile(path.join(dir, 'poster.jpg'), img).catch(() => {}); // Jellyfin 目录海报
-      }
-      await this._writeNfo(nfo, session, base, primary);
-      await this._markArt(session, primary, poster, nfo);
-      this.logger.info(`已生成刮削：${base}.jpg + ${base}.nfo`, { taskId: session.taskId, taskName: session.streamer });
-      return !!img;
+      await this._markArt(session, primary, poster, path.join(dir, `${base}.nfo`));
+      this.logger.info(`已生成刮削：${nfoCount} 个 .nfo + ${base}.jpg`, { taskId: session.taskId, taskName: session.streamer });
+      return true;
     } catch (e) {
       this.logger.warn(`刮削生成失败：${errText(e)}`);
       return false;
