@@ -1,7 +1,7 @@
-// 架构 B 容器更新链路集成测试（离线、自包含）：
-//   在临时目录构造「远端仓库 → clone 到 src（模拟容器 /config/src）→ 切到旧版本」场景，
-//   验证 UpdateManager 在 <repo>/app 布局下的 git 根探测、本地信息读取、fetch/pull 快进、
-//   更新判定与 npm install 的 cwd——即容器内点「立即更新」实际执行的 git 部分。
+// 本地 git 工作区更新链路集成测试（离线、自包含）：
+//   在临时目录构造「远端仓库 → clone 到 <repo>/app → 切到旧版本」场景，
+//   验证 UpdateManager 在本地 git 形态下的 git 根探测、本地信息读取、fetch/pull 快进、
+//   快照兜底与 npm install 的 cwd——容器部署走归档通道，不经过这里。
 // 无 git 环境自动跳过（exit 0）。
 import { execFile } from 'node:child_process';
 import fs from 'node:fs';
@@ -21,7 +21,7 @@ let bad = 0;
 const check = (cond, label, extra = '') => { if (!cond) bad++; console.log(`  ${cond ? 'PASS' : 'FAIL'}  ${label}${extra ? `  → ${extra}` : ''}`); };
 
 if (!(await run('git', ['--version'])).ok) {
-  console.log('未检测到 git，跳过架构 B 更新链路测试');
+  console.log('未检测到 git，跳过本地 git 更新链路测试');
   process.exit(0);
 }
 
@@ -187,5 +187,5 @@ const npmCwd = path.join(gitRoot, 'app');
 check(fs.existsSync(path.join(npmCwd, 'package.json')), 'npm install cwd 指向含 package.json 的 app 目录', npmCwd);
 
 fs.rmSync(TMP, { recursive: true, force: true });
-console.log(bad === 0 ? '\n架构 B 更新链路：全部通过 ✅' : `\n${bad} 项失败 ❌`);
+console.log(bad === 0 ? '\n本地 git 更新链路：全部通过 ✅' : `\n${bad} 项失败 ❌`);
 process.exit(bad ? 1 : 0);

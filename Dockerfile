@@ -20,7 +20,7 @@ FROM node:22-bookworm-slim
 
 # 版本号由构建参数注入（compose 里从 .env 的 APP_VERSION 传），避免与 app/package.json
 # 长期漂移——此前这里写死 "0.1.35"，早已落后实际版本，镜像元数据因此不准。
-ARG APP_VERSION=0.1.41
+ARG APP_VERSION=0.1.43
 
 LABEL org.opencontainers.image.title="LiveGrab 直播录制台" \
       org.opencontainers.image.description="抖音/B站/快手/虎牙/斗鱼/小红书/微博 直播分段录制，带 Web 管理页面" \
@@ -33,10 +33,10 @@ ENV NODE_ENV=production \
     TZ=Asia/Shanghai \
     LANG=C.UTF-8
 
-# ffmpeg 是唯一的外部依赖（录制/转封装/合并/回放全靠它）；git 供容器内「系统更新」在线拉取代码用。
+# ffmpeg 是唯一的外部依赖（录制/转封装/合并/回放全靠它）。git 只留给排障时手工查看
+# ${CONFIG_DIR}/src 下的历史，在线更新已改为「下载 GitHub 标签归档」，不再需要 git。
 # 运行时也必须保留编译工具链（python3/make/g++）：唯一运行时依赖 better-sqlite3 是原生模块，
-# 容器内「系统更新」与每次启动的 npm install 可能在缺工具链时构建失败并破坏 .node 二进制，导致服务启动即崩溃。
-# 见 https://github.com 上的问题：架构 B 自更新/recreate 后打不开页面。
+# 新版本若变更依赖声明，容器内更新需要现场编译；缺工具链会让更新失败（服务仍在跑旧版本）。
 RUN apt-get update \
  && apt-get install -y --no-install-recommends ffmpeg ca-certificates tzdata git python3 make g++ \
  && rm -rf /var/lib/apt/lists/* \
@@ -73,8 +73,8 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
 # 收到 SIGTERM 会优雅收尾正在录制的分段（compose 里留了 stop_grace_period）
 STOPSIGNAL SIGTERM
 
-# 入口脚本：首次启动把仓库 clone 到 ${CONFIG_DIR}/src 并切到镜像内置版本，之后从该目录运行；
-# 页面「立即更新」在容器内完成 git pull + npm install + 自重启（架构 B）。详见 deploy/entrypoint.sh 头部注释。
+# 入口脚本只选代码目录：有 ${CONFIG_DIR}/src/app（页面更新落位的新版本）就跑它，否则跑镜像内 /app。
+# 首启不 clone、不装依赖、不联网；更新在服务进程内完成（下载归档 → 原子切换 → 自重启）。
 COPY deploy/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]

@@ -13,7 +13,7 @@ const ICON_WARN = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" s
 const ICON_GITHUB = '<svg viewBox="0 0 24 24" fill="currentColor" width="16" height="16"><path d="M12 2C6.48 2 2 6.58 2 12.25c0 4.53 2.87 8.37 6.84 9.73.5.1.68-.22.68-.49 0-.24-.01-.88-.01-1.73-2.78.62-3.37-1.37-3.37-1.37-.45-1.18-1.11-1.49-1.11-1.49-.91-.64.07-.62.07-.62 1 .07 1.53 1.06 1.53 1.06.89 1.56 2.34 1.11 2.91.85.09-.66.35-1.11.63-1.36-2.22-.26-4.55-1.14-4.55-5.06 0-1.12.39-2.03 1.03-2.75-.1-.26-.45-1.3.1-2.71 0 0 .84-.28 2.75 1.05a9.4 9.4 0 0 1 5 0c1.91-1.33 2.75-1.05 2.75-1.05.55 1.41.2 2.45.1 2.71.64.72 1.03 1.63 1.03 2.75 0 3.93-2.34 4.79-4.57 5.05.36.32.68.94.68 1.9 0 1.37-.01 2.48-.01 2.82 0 .27.18.6.69.49A10.02 10.02 0 0 0 22 12.25C22 6.58 17.52 2 12 2z"/></svg>';
 
 let pollTimer = null;
-let expectingRestart = false;   // 有 git 仓库时更新将自动重启服务（本地与容器架构 B 均适用）
+let expectingRestart = false;   // 支持在线自更新（容器归档通道 / 本地 git）时，更新完成后会自动重启服务
 let sawRestartPhase = false;    // 后端已进入 restart 阶段
 let lastStatus = null;          // 最近一次成功拿到的状态（轮询失败时用于判断）
 let reloadedAfterRestart = false;
@@ -50,9 +50,9 @@ function startPolling(root) {
       lastStatus = st;
       if (root.isConnected) paint(root, st);
       if (st.phase === 'restart') sawRestartPhase = true;
-      // 有 git 仓库（本地源码目录 / 容器架构 B 的 /config/src）更新完成后会自动重启：
+      // 容器（归档通道）与本地 git 仓库都会在更新完成后自动重启：
       // 记录该意图，便于轮询失败（端口释放瞬间）时仍能提示「重启中」
-      if (lastStatus && lastStatus.env && lastStatus.env.gitAvailable && st.running) {
+      if (lastStatus && lastStatus.canSelfUpdate && st.running) {
         expectingRestart = true;
       }
       // 已检测到重启且服务重新上线（空闲）= 新版本已就绪：自动刷新页面
@@ -122,7 +122,7 @@ function paint(root, st) {
   const progressCard = running ? `
     <div class="card">
       <div class="card-h"><h3>${t('settings.upProgressTitle')}</h3>
-        <span class="chip bili" style="margin-left:auto"><i class="dot"></i>${esc(phaseLabel(st.phase))}</span></div>
+        <span class="chip bili" style="margin-left:auto"><i class="dot"></i>${esc(phaseLabel(st.phase, st.mode))}</span></div>
       <div class="card-b">
         ${st.task ? `<div style="font-size:12.5px;color:var(--txt-2)">${t('settings.upTaskLabel')}<span class="mono" style="color:var(--bili-2)">${esc(st.task)}</span></div>` : ''}
         <div class="up-bar"><i style="width:${clampNum(st.progress)}%"></i></div>
@@ -260,9 +260,8 @@ function paint(root, st) {
 
   const applyBtn = root.querySelector('#upApply');
   if (applyBtn) applyBtn.onclick = () => {
-    const env = (st && st.env) || (lastStatus && lastStatus.env) || null;
-    const gitSelfUpdate = !!(env && env.gitAvailable);
-    const confirmText = gitSelfUpdate
+    const selfUpdate = !!(st && st.canSelfUpdate);
+    const confirmText = selfUpdate
       ? t('settings.upApplyConfirmSelf')
       : t('settings.upApplyConfirmManual');
     confirmDialog({
@@ -279,7 +278,7 @@ function paint(root, st) {
           const r = await api.updateApply();
             if (r && r.running) {
               toast(t('settings.upApplyStarted'));
-              if (gitSelfUpdate) expectingRestart = true; // 有 git 仓库：将自动重启
+              if (selfUpdate) expectingRestart = true; // 支持自更新：将自动重启
           } else if (r && r.busy) toast(t('settings.upApplyBusy'), 'warn');
           const s = await api.updateStatus();
           paint(root, s);
@@ -338,11 +337,12 @@ function paint(root, st) {
   };
 }
 
-function phaseLabel(phase) {
+function phaseLabel(phase, mode) {
   switch (phase) {
     case 'fetch': return t('settings.upPhaseFetch');
-    case 'pull': return t('settings.upPhasePull');
+    case 'pull': return mode === 'archive' ? t('settings.upPhaseExtract') : t('settings.upPhasePull');
     case 'install': return t('settings.upPhaseInstall');
+    case 'switch': return t('settings.upPhaseSwitch');
     case 'restart': return t('settings.upPhaseRestart');
     case 'done': return t('common.completed');
     case 'error': return t('settings.upPhaseError');
@@ -352,6 +352,7 @@ function phaseLabel(phase) {
 
 function estimateLabel(phase) {
   if (phase === 'install') return '~ 1 分钟';
+  if (phase === 'switch') return '即将完成';
   if (phase === 'pull') return '~ 30 秒';
   if (phase === 'fetch') return '~ 15 秒';
   if (phase === 'restart') return '即将完成';

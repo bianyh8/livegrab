@@ -1371,9 +1371,10 @@ function testUpdateGuards() {
   ok(/'ls-tree',\s*'-r',\s*'-z'/.test(upd), '只清理「旧 commit 跟踪过」的文件（-z 取原始路径，避免非 ASCII 被转义而算错删除集）');
 
   const ep = fs.readFileSync(path.join(APP_DIR, '..', 'deploy', 'entrypoint.sh'), 'utf8');
-  ok(/GIT_FIX=.*http\.version=HTTP\/1\.1/.test(ep), '容器首次克隆同样走 HTTP/1.1 + protocol v0');
-  ok(/while\s+\[[^\]]*CLONE_TRY[^\]]*\]/.test(ep), '容器首次克隆失败会自动重试（3 次）');
-  ok(/GIT_TERMINAL_PROMPT=0/.test(ep), '容器克隆禁用交互式凭据提示（否则私库无 token 时启动卡死）');
+  ok(!/\bgit\s+(?:-c\s+\S+\s+)?clone\b/.test(ep), '入口脚本不再 clone（首次部署零网络，直接用镜像代码）');
+  ok(!/\bnpm\s+(?:install|ci)\b/.test(ep), '入口脚本不再装依赖（node_modules 由镜像提供）');
+  ok(/\$SRC\/app\/server\/server\.js/.test(ep) && /IMAGE_APP/.test(ep), '入口脚本优先用「页面更新落位」的代码，否则用镜像内置代码');
+  ok(/export LIVEGRAB_SRC_DIR/.test(ep), '入口脚本把更新落位目录交给服务进程（更新链路要知道往哪写）');
 }
 
 // ============ 12. 审计遗留死代码清理 ============

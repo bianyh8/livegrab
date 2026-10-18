@@ -171,14 +171,17 @@ async function bootstrap() {
     logger,
     getRepoConfig: () => (store.settings.customize || {}),
     getProxy: () => (store.settings.proxy || ''),
+    // 容器内：新版本落位目录（entrypoint 注入）与镜像内置代码目录（依赖基线来源）
+    srcRoot: process.env.LIVEGRAB_SRC_DIR || '',
+    imageApp: process.env.LIVEGRAB_IMAGE_APP || '',
   });
   // 更新完成后自重启：优雅停止录制器/持久化/关服务，再 re-exec 自身加载新版本。
-  // 本地运行直接生效；架构 B 容器（/config/src 自带 .git）同样走此钩子——
-  // re-exec 的新进程从 /config/src/app 加载新代码，配合 init:true 容器不退出。
-  // 容器首启克隆失败/镜像过旧（无 git）时 update.js 会提前返回手动重建指引，不走此钩子。
+  // 容器内「立即更新」会把新版本切到 ${CONFIG_DIR}/src/app，必须用该目录作为新进程的 cwd，
+  // 否则 re-exec 起来的还是旧代码（本地 git 模式不传 cwd，行为不变）。
   update.restartHook = async (info) => {
     const trans = info && info.to ? `（${info.from ? `v${info.from} → ` : ''}${info.to}）` : '';
-    logger.info(`更新完成${trans}，正在优雅停止当前实例并重启以加载新版本…`);
+    const nextCwd = (info && info.cwd) || process.cwd();
+    logger.info(`更新完成${trans}，正在优雅停止当前实例并重启以加载新版本（cwd=${nextCwd}）…`);
     scheduler.stopPolling();
     for (const [, rec] of scheduler.recorders) { try { await rec.stop('shutdown'); } catch { /* ignore */ } }
     for (const [, rec] of scheduler.detached) { try { await rec.stop('shutdown'); } catch { /* ignore */ } }
@@ -190,7 +193,7 @@ async function bootstrap() {
     await closeHttpServer(server, sseClients, 3000);
     logger.info('HTTP 服务已停止，正在启动新进程加载新版本…');
     const child = spawn(process.execPath, process.argv.slice(1), {
-      cwd: process.cwd(),
+      cwd: nextCwd,
       env: process.env,
       detached: true,
       stdio: 'inherit',

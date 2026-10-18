@@ -92,17 +92,25 @@ const entrySrc = fs.readFileSync(path.join(ROOT, 'deploy', 'entrypoint.sh'), 'ut
 const unread = envKeys.filter((k) => !serverSrc.includes(`process.env.${k}`) && !entrySrc.includes(k));
 check(unread.length === 0, 'compose 里的环境变量都被服务代码或入口脚本读取', unread.join(' ') || envKeys.join(' '));
 
-/* 代理绝不能以 HTTP_PROXY/HTTPS_PROXY/ALL_PROXY 注入容器环境：
-   ffmpeg 会读 HTTP_PROXY（实测对 http/https 输入都生效），一旦注入，用户在页面上关掉
-   「平台代理开关」的平台也会走代理，且拉流失败时无法判断是平台问题还是代理问题。
-   正确做法是 compose 只给 LIVEGRAB_PROXY，由入口脚本在 git/npm 命令行上显式使用。 */
-const leakedProxy = ['HTTP_PROXY', 'http_proxy', 'HTTPS_PROXY', 'https_proxy', 'ALL_PROXY', 'all_proxy']
+/* 代理绝不能以环境变量注入容器：ffmpeg 会读 HTTP_PROXY（实测对 http/https 输入都生效），
+   一旦注入，用户在页面上关掉「平台代理开关」的平台也会被强制走代理，开关形同失效，
+   且拉流失败时分不清是平台问题还是代理问题。
+   v0.1.43 起代理只在页面「系统设置 → 平台账号 → 网络代理」维护，compose 不再传任何代理变量。 */
+const leakedProxy = ['HTTP_PROXY', 'http_proxy', 'HTTPS_PROXY', 'https_proxy', 'ALL_PROXY', 'all_proxy', 'LIVEGRAB_PROXY']
   .filter((k) => new RegExp(`^\\s{6}${k}:`, 'm').test(compose));
-check(leakedProxy.length === 0, 'compose 不直接注入代理环境变量（否则 ffmpeg 会绕过平台开关）', leakedProxy.join(' ') || 'LIVEGRAB_PROXY');
-check(/\$\{LIVEGRAB_PROXY:-\}/.test(compose), 'compose 通过 LIVEGRAB_PROXY 传入代理（作用域限定 git/npm）');
-check(/-c\s+"http\.proxy=\$PROXY_URL"/.test(entrySrc), '入口脚本用 git -c http.proxy 传代理（而非导出环境变量）');
+check(leakedProxy.length === 0, 'compose 不注入任何代理变量（代理只在页面一处维护）', leakedProxy.join(' ') || '无');
 check(/route\('GET', '\/api\/health'/.test(serverSrc), '健康检查端点 /api/health 真实存在');
 check(/SIGTERM/.test(serverSrc) && /SIGINT/.test(serverSrc), '服务处理 SIGTERM/SIGINT 优雅退出');
+
+/* 首次部署必须零网络：入口脚本只负责选代码目录，不 clone、不装依赖、不读写代理 */
+check(!/\bgit\s+(?:-c\s+\S+\s+)?clone\b/.test(entrySrc), '入口脚本不 clone 仓库（首次部署零网络）');
+check(!/\bnpm\s+(?:install|ci)\b/.test(entrySrc), '入口脚本不装依赖（依赖由镜像内置基线提供）');
+check(!/HTTP_PROXY|HTTPS_PROXY|ALL_PROXY|LIVEGRAB_PROXY|npm_config_proxy/.test(entrySrc), '入口脚本不读写任何代理变量');
+check(/\$SRC\/app\/server\/server\.js/.test(entrySrc) && /IMAGE_APP/.test(entrySrc), '入口脚本按「更新落位目录优先、否则镜像代码」选目录');
+/* 更新通道：下载 GitHub 标签归档 + 原地切换，全程不需要 git */
+check(/codeload\.github\.com/.test(serverSrc) && /refs\/tags/.test(serverSrc), '更新链路下载标签归档（不依赖 git）');
+check(/LIVEGRAB_SRC_DIR/.test(serverSrc) && /LIVEGRAB_IMAGE_APP/.test(entrySrc), '入口脚本把「落位目录 / 镜像目录」交给服务进程');
+check(/\.livegrab-version\.json/.test(serverSrc), '更新落位后写版本标记（容器内无 .git 时的版本来源）');
 
 /* ---------- 5) 依赖：唯一第三方依赖 better-sqlite3，其余只允许 node: 内置模块与相对路径 ---------- */
 const pkg = JSON.parse(readIf(path.join(APP, 'package.json')) || '{}');
@@ -169,9 +177,72 @@ if (srv.exitCode === null) srv.kill();
 await sleep(300);
 fs.rmSync(SIM, { recursive: true, force: true });
 
+/* ---------- 7) 更新落位形态：从 ${CONFIG_DIR}/src/app 启动（页面「立即更新」之后的状态） ---------- */
+// 入口脚本在容器里就是这么选目录的：/config/src/app 存在且完整就跑它。
+// 这里把「更新落位目录」造出来（代码 + 指向镜像基线的 node_modules），验证：
+//   ① 能真正启动；② 更新模式判定为 archive（不依赖 git）；③ 本地版本取自 .livegrab-version.json。
+{
+  const UPD = path.join(os.tmpdir(), `livegrab-updated-${Date.now()}`);
+  const UPD_SRC = path.join(UPD, 'src');
+  const UPD_APP = path.join(UPD_SRC, 'app');
+  fs.mkdirSync(UPD_APP, { recursive: true });
+  // 手工遍历复制（不依赖 fs.cpSync：个别环境的 fs 沙箱不支持递归复制）
+  const copyTree = (src, dst) => {
+    fs.mkdirSync(dst, { recursive: true });
+    for (const e of fs.readdirSync(src, { withFileTypes: true })) {
+      const s = path.join(src, e.name);
+      const d = path.join(dst, e.name);
+      if (e.isDirectory()) copyTree(s, d);
+      else fs.copyFileSync(s, d);
+    }
+  };
+  for (const d of ['server', 'web']) copyTree(path.join(APP, d), path.join(UPD_APP, d));
+  fs.copyFileSync(path.join(APP, 'package.json'), path.join(UPD_APP, 'package.json'));
+  let nmHow = 'link';
+  try { fs.symlinkSync(path.join(APP, 'node_modules'), path.join(UPD_APP, 'node_modules'), 'junction'); }
+  catch { copyTree(path.join(APP, 'node_modules'), path.join(UPD_APP, 'node_modules')); nmHow = 'copy'; }
+  fs.writeFileSync(path.join(UPD_APP, '.livegrab-version.json'), JSON.stringify({ version: '9.9.9', tag: 'v9.9.9', commit: 'abc123456789', at: Date.now() }));
+
+  const PORT2 = PORT + 1;
+  const env2 = {
+    ...process.env, PORT: String(PORT2), RECORD_ROOT: path.join(UPD, 'data'), CONFIG_DIR: path.join(UPD, 'config'),
+    LIVEGRAB_SRC_DIR: UPD_SRC, LIVEGRAB_IMAGE_APP: APP, TZ: 'Asia/Shanghai',
+  };
+  const srv2 = spawn(process.execPath, ['server/server.js'], { cwd: UPD_APP, env: env2, stdio: ['ignore', 'pipe', 'pipe'] });
+  let up2 = false;
+  for (let i = 0; i < 40 && !up2; i++) {
+    try { up2 = (await fetch(`http://127.0.0.1:${PORT2}/api/health`)).ok; } catch { /* retry */ }
+    if (!up2) await sleep(300);
+  }
+  check(up2, '从「页面更新落位目录」启动成功（入口脚本选目录的最终形态）', `node_modules=${nmHow}`);
+  if (up2) {
+    const init2 = await fetch(`http://127.0.0.1:${PORT2}/api/auth/init`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: 'admin', password: 'livegrab123' }) });
+    const ck = (init2.headers.get('set-cookie') || '').split(';')[0];
+    const st = (await (await fetch(`http://127.0.0.1:${PORT2}/api/update/status`, { headers: { cookie: ck } })).json()).data || {};
+    check(st.mode === 'archive', '更新模式判定为容器归档通道（不需要 git）', String(st.mode));
+    check(st.canSelfUpdate === true, 'canSelfUpdate=true（页面据此显示自动重启提示）');
+    check(String(st.local?.version || '') === '9.9.9' && String(st.local?.tag || '') === 'v9.9.9', '本地版本取自 .livegrab-version.json', JSON.stringify(st.local));
+    check(String(st.srcRoot || '').replace(/\\/g, '/').replace(/\/$/, '').endsWith('/src'), '新版本落位目录来自 LIVEGRAB_SRC_DIR', String(st.srcRoot));
+    // 更新链路的自检信息写日志文件（logger 只落盘 + SSE，不打印到 stdout）
+    await sleep(300);
+    let fileLog = '';
+    try {
+      for (const f of fs.readdirSync(path.join(UPD, 'config', 'logs'))) {
+        if (f.endsWith('.log')) fileLog += fs.readFileSync(path.join(UPD, 'config', 'logs', f), 'utf8');
+      }
+    } catch { /* 日志目录还没建也不影响其它断言 */ }
+    check(/更新环境自检[^\n]*归档/.test(fileLog), '日志写明「更新走 GitHub 归档」（不用 git）', (fileLog.match(/更新环境自检[^\n]*/) || [''])[0].slice(0, 130) || fileLog.slice(-160));
+    srv2.kill('SIGTERM');
+    await new Promise((res) => { const t = setTimeout(res, 8000); srv2.on('exit', () => { clearTimeout(t); res(); }); });
+  }
+  if (srv2.exitCode === null) srv2.kill();
+  await sleep(200);
+  fs.rmSync(UPD, { recursive: true, force: true });
+}
+
 console.log(`\n==== 打包自检结果：${bad === 0 ? 'ALL PASS' : `${bad} 项失败`} ====`);
 console.log('提示：本脚本不执行 docker build（本机可能没装 Docker）。真正的镜像构建请在宿主机执行：');
 console.log('      docker compose up -d --build');
-console.log('      架构 B 下容器从 /config/src/app 运行，验证运行中代码：');
+console.log('      容器首次启动用镜像内 /app；页面「立即更新」后从 /config/src/app 运行。验证运行中代码：');
 console.log('      docker compose exec -w /config/src/app livegrab node test/e2e-ffmpeg.mjs');
 process.exit(bad ? 1 : 0);

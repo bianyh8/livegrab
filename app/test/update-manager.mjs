@@ -450,5 +450,108 @@ console.log('== R. tar.gz 解析与落地（零依赖快照通道的底座） ==
   }
 }
 
+console.log('== S. 容器归档通道：版本只升不降 → 下载 → 解包 → 切换 → 重启（全程不需要 git） ==');
+{
+  const tarOk = await runCmd('tar', ['--version']);
+  if (!tarOk.ok) {
+    console.log('  SKIP  未检测到 tar，跳过归档通道用例');
+  } else {
+    const ARCH = path.join(TMP, 'arch');
+    rmSync(ARCH, { recursive: true, force: true });
+    const srcRoot = path.join(ARCH, 'src');
+    const imgApp = path.join(ARCH, 'image');
+    mkdirSync(path.join(imgApp, 'server'), { recursive: true });
+    mkdirSync(path.join(imgApp, 'node_modules', 'better-sqlite3'), { recursive: true });
+    writeFileSync(path.join(imgApp, 'package.json'), JSON.stringify({ name: 'livegrab', version: '0.1.0', dependencies: { 'better-sqlite3': '^13.0.0' } }));
+    writeFileSync(path.join(imgApp, 'server', 'server.js'), '// old code 0.1.0\n');
+
+    // 造两个 GitHub 形状的归档：<repo>-<tag>/app/...
+    const packArchive = async (name, version, { withServer = true } = {}) => {
+      const base = path.join(ARCH, `tar-${name}`);
+      const root = path.join(base, `livegrab-${name}`);
+      mkdirSync(path.join(root, 'app', 'server'), { recursive: true });
+      writeFileSync(path.join(root, 'app', 'package.json'), JSON.stringify({ name: 'livegrab', version, dependencies: { 'better-sqlite3': '^13.0.0' } }));
+      if (withServer) writeFileSync(path.join(root, 'app', 'server', 'server.js'), `// new code ${version}\n`);
+      const out = path.join(ARCH, `${name}.tar.gz`);
+      let r = await runCmd('tar', ['-czf', out, '-C', base, `livegrab-${name}`]);
+      if (!r.ok) r = await runCmd('tar', ['-czf', out, '--force-local', '-C', base, `livegrab-${name}`]);
+      return readFileSync(out);
+    };
+    const good = await packArchive('0.2.0', '0.2.0');
+    const badTar = await packArchive('0.3.0', '0.3.0', { withServer: false });
+
+    // 远端版本可切换的 mock：tags/归档内容都由变量控制，便于测「降级/坏包/同版本」
+    let remoteTag = 'v0.2.0';
+    let archiveBody = good;
+    let archiveHits = 0;
+    global.fetch = async (url) => {
+      const u = String(url);
+      const json = (o, s = 200) => ({ ok: s < 400, status: s, json: async () => o, text: async () => JSON.stringify(o), arrayBuffer: async () => Buffer.from('{}') });
+      if (u.includes('codeload.github.com')) {
+        archiveHits += 1;
+        return { ok: true, status: 200, arrayBuffer: async () => archiveBody.buffer.slice(archiveBody.byteOffset, archiveBody.byteOffset + archiveBody.byteLength) };
+      }
+      if (u.includes('/releases/latest')) return json({ tag_name: remoteTag, published_at: '2026-10-01T00:00:00Z', body: '' });
+      if (u.includes('/tags')) return json([{ name: remoteTag }, { name: 'v0.1.0' }]);
+      if (u.includes('/commits/')) return json({ sha: 'deadbeef0001', commit: { message: 'feat: x', committer: { date: '2026-10-01T00:00:00Z' } } });
+      return json({ message: 'Not Found' }, 404);
+    };
+
+    let restarted = null;
+    const mk = (appDir) => new UpdateManager({
+      appDir, srcRoot,
+      getRepoConfig: () => ({ updateRepo: 'bianyh8/livegrab', updateBranch: 'main' }),
+      restart: async (info) => { restarted = info; },
+    });
+    const m = mk(imgApp);
+    const env = await m.detectEnv();
+    check(env.mode === 'archive', '容器形态判定为归档通道（不依赖 git）', env.mode);
+    check(env.srcRoot === srcRoot, '落位目录取自构造参数 / LIVEGRAB_SRC_DIR', env.srcRoot);
+    const loc0 = await m.localInfo();
+    check(loc0.version === '0.1.0', '未更新过时本地版本取自镜像 package.json', loc0.version);
+    check(m.status().canSelfUpdate === true, '容器内 canSelfUpdate=true（页面据此显示自动重启提示）');
+
+    // ① 版本相同：一次归档都不下载
+    m.state.local = { version: '0.2.0', commit: '', branch: 'main', commitAt: null, tag: 'v0.2.0' };
+    await m.apply();
+    await new Promise((r) => setTimeout(r, 600));
+    check(archiveHits === 0, '远端版本不高于本地时完全不下载归档', `hits=${archiveHits}`);
+    check(m.state.log.some((l) => /已是最新版本/.test(l.msg)), '日志写明「已是最新版本」', m.state.log.map((l) => l.msg).slice(-2).join(' | '));
+    check(restarted === null, '未更新时不重启');
+
+    // ② 正常更新 0.1.0 → 0.2.0
+    m.state.local = null;
+    m.state.checkedAt = 0;
+    await m.localInfo();
+    await m.apply();
+    await new Promise((r) => setTimeout(r, 2000));
+    check(archiveHits === 1, '远端更高时只下载一次归档', `hits=${archiveHits}`);
+    check(fsExists(path.join(srcRoot, 'app', 'server', 'server.js')), '新版本落位到 <src>/app');
+    check(readFileSync(path.join(srcRoot, 'app', 'server', 'server.js'), 'utf8').includes('0.2.0'), '落位的是归档里的新代码');
+    check(fsExists(path.join(srcRoot, 'app', 'node_modules', 'better-sqlite3')), '依赖复用镜像基线（软链或复制）');
+    const marker = JSON.parse(readFileSync(path.join(srcRoot, 'app', '.livegrab-version.json'), 'utf8'));
+    check(marker.version === '0.2.0' && marker.tag === 'v0.2.0', '写出版本标记（容器内无 .git 时的版本来源）', JSON.stringify(marker));
+    check(!fsExists(path.join(srcRoot, '.update-stage')), '暂存目录已清理');
+    check(!!restarted && restarted.cwd === path.join(srcRoot, 'app'), '重启钩子拿到新目录作为 cwd', JSON.stringify(restarted));
+    const m2 = mk(path.join(srcRoot, 'app'));
+    const loc2 = await m2.localInfo();
+    check(loc2.version === '0.2.0' && loc2.tag === 'v0.2.0', '重启后版本读自标记文件', `${loc2.version}/${loc2.tag}`);
+
+    // ③ 坏归档（缺 server.js）：放弃本次更新，正在运行的版本不受影响
+    const before = readFileSync(path.join(srcRoot, 'app', 'server', 'server.js'), 'utf8');
+    remoteTag = 'v0.3.0';
+    archiveBody = badTar;
+    const m3 = mk(path.join(srcRoot, 'app'));
+    await m3.detectEnv();
+    await m3.localInfo();
+    await m3.apply();
+    await new Promise((r) => setTimeout(r, 2000));
+    check(readFileSync(path.join(srcRoot, 'app', 'server', 'server.js'), 'utf8') === before, '坏归档不会破坏正在运行的版本');
+    check(m3.status().phase === 'error', '失败进入 error 状态（页面显示「重试更新」）', m3.status().phase);
+    check(m3.state.log.some((l) => /归档结构异常/.test(l.msg)), '日志给出失败原因', m3.state.log.map((l) => l.msg).slice(-2).join(' | '));
+    check(!fsExists(path.join(srcRoot, '.update-stage')), '失败后暂存目录也被清理');
+  }
+}
+
 console.log(bad === 0 ? '\n全部通过 ✅' : `\n${bad} 项失败 ❌`);
 process.exit(bad === 0 ? 0 : 1);

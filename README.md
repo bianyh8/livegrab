@@ -50,8 +50,8 @@ cd livegrab
 ```bash
 docker compose up -d --build
 ```
-> 镜像名 `livegrab:latest`，容器名 `livegrab`，`restart: unless-stopped` 自动开机自启。
-> 首次启动时容器会把代码仓库自动 clone 到 `./config/src`（私有仓库需先配好 `LIVEGRAB_GITHUB_TOKEN`，见下文），日志里可看到 `[entrypoint]` 开头的克隆进度。
+> 镜像里已包含完整源码，**首次启动零网络**：不 clone、不装依赖、不联网，秒起。
+> 启动日志只有一行 `[entrypoint] 启动服务：/app`（首次）或 `/config/src/app`（更新过的实例）。
 
 **③ 打开页面**
 ```
@@ -66,90 +66,128 @@ compose 相对 `livegrab/` 目录挂载：
 |---|---|---|
 | `./data` → `/data` | 录制成品与分段 | 占空间最大，挂到大容量磁盘 |
 | `./config` → `/config` | 账号哈希、Cookie、任务、场次索引、日志、SQLite 库（livegrab.db） | 长期保留 |
-| `./config/src` | 容器实际运行的代码（git  clone，架构 B） | 由容器管理，勿手改；删除后重启容器会重新克隆 |
+| `./config/src/app` | 页面「立即更新」落位的新版本代码（更新过之后才存在） | 由容器管理，勿手改；删掉即回到镜像内置版本 |
 
 ### 环境变量（`docker-compose.yaml` 可调）
+
+compose 里都有默认值，通常只有端口、时区、Token 需要改：
 
 | 变量 | 默认 | 说明 |
 |---|---|---|
 | `LIVEGRAB_PORT` | `18080` | 宿主机映射端口 |
 | `TZ` | `Asia/Shanghai` | 时区 |
 | `PORT` / `RECORD_ROOT` / `CONFIG_DIR` | `8080` / `/data` / `/config` | 容器内端口与卷路径 |
-| `LIVEGRAB_GITHUB_TOKEN` | （空） | **私有仓库**必备：GitHub Personal Access Token（需 `repo` 读权限）。用于版本检测、首启 clone、页面更新拉码三处 |
-| `LIVEGRAB_REPO` | `bianyh8/livegrab` | 更新检查与 clone 的目标仓库（`owner/repo`），分叉部署时改这里 |
-| `LIVEGRAB_BRANCH` | `main` | 更新检查与 clone 的目标分支 |
-| `LIVEGRAB_GIT_URL` | 由 `LIVEGRAB_REPO` 推导 | 仓库完整 clone URL（非 GitHub 托管时才需要显式设置） |
-| `LIVEGRAB_PROXY` | （空） | 容器出网代理，如 `http://192.168.1.10:20171`。作用于**首次启动的 git clone + npm install**；页面「立即更新」在页面未填代理时也回退用它 |
+| `LIVEGRAB_GITHUB_TOKEN` | （空） | **私有仓库**必备：GitHub Personal Access Token（`repo` 读权限）。用于版本检测与源码下载 |
 
-> **代理的作用范围（三条链路，互相独立）**
->
-> | 链路 | 代理由谁决定 |
-> |---|---|
-> | 容器首次启动的 `git clone` / `npm install` | `LIVEGRAB_PROXY`（compose / `.env`） |
-> | 页面「立即更新」的 `git fetch` / 归档下载 | 页面「系统设置 → 平台账号 → 网络代理」；留空则回退 `LIVEGRAB_PROXY` |
-> | **录制拉流 / 平台解析** | **页面「平台代理开关」**（按平台逐个开）+ 页面里的代理地址 |
->
-> 第三列是唯一影响录制流量的：**没开开关的平台一律直连**，哪怕容器环境里有代理。
-> 这是刻意的——`ffmpeg` 会读 `HTTP_PROXY` 环境变量（实测 8.x 对 http/https 输入都生效），
-> 若 compose 直接注入 `HTTP_PROXY`，关掉开关的平台也会被强制走代理，开关形同失效，
-> 出问题还分不清是平台侧还是代理侧。因此：
-> - compose **只**提供 `LIVEGRAB_PROXY`，入口脚本在 `git -c http.proxy=…` 与 `npm_config_proxy` 上显式使用；
-> - 服务端拉起 `ffmpeg` 时**主动剥离** `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY`（含小写），
->   代理只由显式的 `-http_proxy` 参数决定（日志页可见对应命令行）。
->
-> 两处地址都必须填**容器能到达**的地址。容器内的 `127.0.0.1` 指向容器自身，不是 NAS：
-> 代理是独立容器且已映射端口 → 用 NAS 局域网 IP（`http://192.168.1.10:20171`）；
-> 与 livegrab 在同一 compose 网络 → 用服务名（`http://clash:7890`，更稳）；
-> 纯 SOCKS 端口要写 `socks5://` 前缀。另外确认代理容器已开启 `allow-lan`，否则局域网 IP 也连不上。
+> 分叉部署要换仓库/分支：直接改页面「更新源配置」（推荐，页面配置优先），
+> 或在 compose 的 `environment` 里加 `LIVEGRAB_REPO` / `LIVEGRAB_BRANCH`。
+> **代理没有环境变量**——统一在页面「系统设置 → 平台账号 → 网络代理」配一处：
+> 录制拉流按「平台代理开关」决定用不用，页面「立即更新」配了就先走代理、失败自动改直连。
+> 详见下文「更新与代理」。
 
-### 系统更新（公开 / 私有仓库）
+## 更新与代理
 
-「系统设置 → 系统更新」从 GitHub 拉取最新版本对比时，**会自动判断仓库可见性**：
+### 点「立即更新」会发生什么
 
-| 仓库类型 | 是否需要 Token | 页面行为 |
-| --- | --- | --- |
-| 公开仓库 | ❌ 不需要 | 匿名读取 GitHub API，开箱即用 |
-| 私有仓库 | ✅ 需要 | 匿名读取失败后自动带 Token 重试 |
+1. **查版本**：只读 GitHub API，取仓库所有标签里语义化版本最高的一个（不下载代码）；
+2. **比版本**：远端**不高于**本地 → 日志写一条「已是最新版本 vX，无需更新」，结束，不下载、不重启；
+3. **下载**：远端更高 → 下载该标签的源码归档 `codeload.github.com/<repo>/tar.gz/refs/tags/<tag>`；
+4. **解包校验**：解到 `/config/src/.update-stage`，确认 `app/server/server.js` 与 `app/package.json` 存在，版本不低于本地；
+5. **准备依赖**：`package.json` 的 `dependencies` 没变 → 软链镜像里的 `/app/node_modules`（零联网，原生模块 ABI 永远跟当前镜像的 Node 一致）；只有变了才 `npm install`；
+6. **原子切换**：`.update-stage/app` → `/config/src/app` 用 `rename` 切换，失败自动回滚；旧目录留成 `app.old`（手动回滚点，下次更新时才替换）；
+7. **自重启**：优雅停掉录制器与 HTTP，再以新目录为 `cwd` 重新拉起进程，页面自动刷新。
 
-代码仓库 `bianyh8/livegrab` 当前是**私有仓库**，容器内需要提供 GitHub Token：
+任何一步失败都**不会改动正在运行的代码**，服务继续录制，按钮变「重试更新」，直接再点一次即可。
 
-```bash
-# ① 在 livegrab/ 目录建 .env 文件（不要提交到 git），写一行：
-echo "LIVEGRAB_GITHUB_TOKEN=ghp_你的token" > .env
-# ② 重启使环境变量生效
-docker compose up -d
+为什么落在 `/config`：镜像层 `/app` 会被 `docker compose up -d --build` 重置，挂载卷里的代码不会。
+所以**重建容器不会把版本打回去**，这也正是「更新结果能长期保留」的原因。
+
+### 版本判定规则
+
+- 只比语义化版本（`0.1.43` > `0.1.42`），**版本相同就不更新**，哪怕 main 上有新提交——否则每点一次都要重下一份同版本归档；
+- 本地版本来源：更新过的实例读 `/config/src/app/.livegrab-version.json`（记录落位的标签版本），从没更新过的读镜像构建信息（`.build-info.json`）；
+- 归档里 `package.json` 的版本与标签不一致时，以标签为准（避免「改了代码忘改版本号」导致反复提示更新）。
+
+### 代理：只有一个入口
+
+在页面「系统设置 → 平台账号 → 网络代理」填一个地址（如 `http://192.168.1.10:20171`），两条链路各自决定用不用：
+
+| 链路 | 是否用代理 |
+|---|---|
+| **录制拉流 / 平台解析** | 由「平台代理开关」逐个决定：开了才走，关了一律直连 |
+| **检查更新 / 立即更新** | 配了先走代理；代理失败**立刻改直连**并冷却 2 分钟；没配就直连 |
+
+日志会明确写出走的是哪条路：
+
+```
+[更新] 检查更新的网络路径：经代理 http://192.168.1.10:20171
+[更新] 更新网络路径：直连（未配置更新代理）
+[更新] 代理不可用（代理 CONNECT 失败 …），本次改用直连；120 秒内不再尝试代理
 ```
 
-- **Token 获取**：GitHub → Settings → Developer settings → Personal access tokens → Generate new token，勾选 `repo` 权限即可。
-- **Token 仅通过容器环境变量注入**，不写入数据库、不随接口返回、不在页面展示，安全性最高。
-- 本地免 Docker 运行（见下）时，服务会自动读取本机 `~/.git-credentials` 里的 GitHub 凭据，无需额外配置。
-- 页面行为：配置好 token 后「系统更新」页会显示远程最新版本，有新版本时「立即更新」按钮可用（容器内自动执行 git fetch → 快进拉取 → 安装依赖 → 自动重启，全程约 10~60 秒，页面有进度与重启提示）。
-- 未配置 token 访问**私有**仓库时，页面会明确提示「私有仓库需要配置 GitHub Token」，不会误报有新版本；**公开**仓库则不会有任何 token 相关提示。
+三个容易踩的点：
 
-### 拉取失败时会发生什么（v0.1.21 起）
+- 容器内的 `127.0.0.1` 指向**容器自身**，不是 NAS。代理是独立容器且映射了端口 → 填 NAS 局域网 IP；与 livegrab 同一 compose 网络 → 填服务名（`http://clash:7890`，更稳）。设置页在容器内检测到回环地址会直接警告；
+- 纯 SOCKS 端口要写 `socks5://` 前缀；
+- 代理容器要开 `allow-lan`，否则局域网 IP 也连不上。
 
-家宽/公司网络里 `git fetch` 被代理或网关打断是常见事（典型报错 `RPC failed; curl 16 Error in the HTTP2 framing layer`、`fatal: expected flush after ref listing`）。这些不再是死路：
+> 为什么代理不放进 compose：`ffmpeg` 会读 `HTTP_PROXY` 环境变量（实测 8.x 对 http/https 输入都生效），
+> 一旦在容器上注入，用户在页面上关掉「平台代理开关」的平台也会被强制走代理，开关形同失效。
+> 因此服务拉起 `ffmpeg` 时会主动剥离 `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY`（含小写），
+> 代理只由显式的 `-http_proxy` 参数决定（日志页可见对应命令行）。
 
-1. **传输层自动降级重试**：第 1 次用 HTTP/1.1；第 2 次加 `protocol.version=0`（绕开 v2 的 ref 通告解析，专治 `expected flush after ref listing`）；第 3 次原样再试（这类错误多为瞬时抖动）。全部用 `-c` 临时注入，不改你的 `.git/config`。
-2. **失败原因分级 + 可操作建议**：更新日志里会直接告诉你是 HTTP2/代理问题、DNS/连不通、认证失败还是仓库不存在，并给出可复制的命令（含你配置的仓库地址），而不是只留一行 `exit 128`。
-3. **快照通道兜底（git 完全走不通时）**：改用普通 HTTPS 从 `codeload.github.com` 下载分支归档并覆盖工作区 —— 只覆盖代码文件、不动 `.git` 索引，用本地 git 对象算出「上游已删除的文件」清单再清理（绝不碰 `node_modules` 等你自己的文件）。更新照样能完成并重启，页面会提示「代码已由快照通道更新，git 索引待对齐」。
-4. **下次联网自愈**：再点一次「立即更新」时，只要工作区自快照落地后没有被改动过（按内容指纹比对），就会自动 `reset --hard` 把 `.git` 索引对齐到远端，恢复正常 git 语义；若你改过代码则跳过对齐并给出提示，绝不覆盖你的改动。
-5. **永远可以重试**：任何失败都不会改动代码，按钮会变成「重试更新」，直接再点一次即可。
+### 私有仓库（Token）
 
-容器的**首次克隆**同样走 HTTP/1.1 + protocol v0，并自动重试 3 次；未配 token 时禁止交互式凭据提示（不会出现「启动卡在 Username for...」）。
+`bianyh8/livegrab` 是私有仓库，检测版本和下载源码都需要 Token：
 
-### 容器里代码从哪来、怎么更新（架构 B）
+```bash
+# 在 livegrab/ 目录建 .env（别提交到 git），写一行
+echo "LIVEGRAB_GITHUB_TOKEN=ghp_你的token" > .env
+docker compose up -d          # 重启使环境变量生效
+```
 
-镜像本身**不包含业务源码**（只含 `node_modules` 基线、ffmpeg、git 和入口脚本）。容器首次启动时，入口脚本 `deploy/entrypoint.sh` 会把仓库 clone 到 `./config/src`、切换到镜像内置版本，之后服务从该目录运行。因此：
+- **Token 获取**：GitHub → Settings → Developer settings → Personal access tokens → 勾 `repo` 读权限即可；
+- 只经容器环境变量注入，不写数据库、不随接口返回、不在页面展示；
+- 也可以在页面「更新源配置」里填 Token（存本地 SQLite，随 `/config` 一起备份）；
+- 未配 Token 访问**私有**仓库时，页面明确提示「私有仓库需要配置 GitHub Token」，不会误报有更新；**公开**仓库不会有任何 Token 提示。
 
-- **日常更新 = 页面点「立即更新」**：容器内自己完成 `git fetch → 快进 → npm install → 重启`（fetch 失败时自动降级重试，仍不行则走 tar.gz 快照通道，见上文），不动镜像、不丢录制，宿主机无需干预。
-- **镜像级变更才需要在宿主机重建**（更换 ffmpeg / Node 版本、修改入口脚本本身）：
-  ```bash
-  cd livegrab && git pull && docker compose up -d --build
-  ```
-- `./config/src` 由容器管理：能写该目录 ≈ 能在容器内执行代码，请按配置目录的密级对待；代码目录损坏时会自动重克，也可手动 `rm -rf ./config/src` 后重启容器恢复。
+公开 / 私有仓库的识别是自动的：先匿名读 GitHub API，404 且配了 Token 时再带认证重试。
 
-### 不想克隆也能直接构建
+### 重建镜像 vs 页面更新
+
+| 变更类型 | 怎么做 |
+|---|---|
+| 业务代码（绝大多数版本） | 页面「系统设置 → 系统更新 → 立即更新」，约 10~60 秒，不动容器 |
+| 换 ffmpeg / Node、改 Dockerfile、改入口脚本 | 宿主机 `git pull && docker compose up -d --build` |
+
+重建后入口脚本按版本取新的那份：`/config/src/app`（上次更新落位）比镜像新就用它，镜像更新就用镜像。
+所以**重建不会把版本打回去**；想彻底回到镜像内置版本：`rm -rf ./config/src && docker compose restart livegrab`。
+
+`./config/src` 等于**可执行代码**：能写这个目录 ≈ 能在容器里执行任意代码，请按配置目录的密级对待。
+
+### 常见问题
+
+- **页面提示「无法获取远程版本信息」**：网络不通或私有仓库没配 Token。先看日志里那行「更新网络路径」，确认走的是代理还是直连。
+- **更新到一半网络断了**：代码没被改动，服务照常录制，直接再点「重试更新」。
+- **更新后打不开页面**：`docker compose logs --tail=100 livegrab` 看新版本是否启动报错；`rm -rf ./config/src && docker compose restart livegrab` 可回到镜像版本。
+- **本地免 Docker 运行**（见下文）时，更新走 git 语义：`git fetch` 失败会自动降级 HTTP/1.1 + `protocol.version=0` 重试，仍失败则改用归档覆盖工作区（不动 `.git` 索引，下次联网自动对齐）。
+
+### 容器里到底跑的是哪份代码
+
+镜像里**已经包含完整源码**（`/app/server`、`/app/web`、`/app/package.json`、预编译好的 `node_modules`），
+入口脚本只做一件事——选目录：
+
+| 情况 | 运行目录 | 启动耗时 |
+|---|---|---|
+| 从没更新过（首次部署） | 镜像 `/app` | 秒级，零网络 |
+| 页面更新过 | `/config/src/app`（挂载卷，跨容器重建保留） | 秒级 |
+| `/config/src/app` 损坏（缺 `server/server.js`） | 回退镜像 `/app`，并在日志里 WARN | 秒级 |
+
+依赖不随代码走：更新落位的新版本里 `node_modules` 是一条指向镜像 `/app/node_modules` 的软链，
+所以原生模块（`better-sqlite3`）的 ABI 永远和当前镜像的 Node 一致；镜像重建后软链悬空，入口脚本会自动修好。
+只有新版本真的改了 `dependencies`，才会在更新时 `npm install`（装失败则放弃本次更新，旧版本照常用）。
+
+### 不想克隆仓库也能构建
 
 ```bash
 docker build -t livegrab:latest https://github.com/bianyh8/livegrab.git
@@ -159,16 +197,15 @@ docker run -d --name livegrab -p 18080:8080 \
   --restart unless-stopped \
   livegrab:latest
 ```
-（compose 方式更省事，这个适合想手写 `run` 的情况。私有仓库不配 token 也能启动，但首启 clone 会失败并回退镜像内置代码。）
+（compose 方式更省事，这个适合想手写 `run` 的情况。）
 
 ### 停止 / 排障
 
 - 停止：`docker compose stop`（已配置 `stop_grace_period: 30s`，会先把当前分段收尾再退出）；彻底移除：`docker compose down`。
 - 看日志：`docker compose logs -f --tail=200 livegrab`。
-- 更新页提示「容器内未检测到代码仓库」：首启克隆失败（网络/ token），修好后重启容器即可，页面「立即更新」在此期间不可用。
-- 更新页日志里报 `RPC failed; curl 16 ... HTTP2 framing` / `expected flush after ref listing`：网络中间设备（代理/网关）改写了 git 的长连接，程序会自动降级 HTTP/1.1 重试；仍不行时会自动走快照通道完成更新，详见上文「拉取失败时会发生什么」。
-- 更新页出现「重试更新」：上次更新未完成、代码未被改动，直接再点一次即可（首次失败后会自动重试 3 档）。
-- 容器行为异常、怀疑代码目录损坏：`rm -rf ./config/src` 后 `docker compose restart livegrab`，会重新克隆到镜像内置版本。
+- 运行日志页里，`[容器启动]` 前缀是入口脚本的引导记录（这次用的是哪份代码），`[更新]` 前缀是更新链路（版本对比、网络路径、下载、切换、重启）。
+- 更新页出现「重试更新」：上次更新未完成、代码未被改动，直接再点一次即可。
+- 更新页提示「无法获取远程版本信息」：网络问题或私有仓库缺 Token，按上文「常见问题」处理。
 
 ---
 
@@ -188,13 +225,13 @@ start-local.cmd        # Windows：双击或命令行运行
 
 ```bash
 cd app
-node test/run.js                # 常规单元测试（含 API / 解析 / 存储），438 项
+node test/run.js                # 常规单元测试（含 API / 解析 / 存储），442 项
 node test/db-sqlite.mjs         # SQLite 持久层：建表 / 迁移 / 落库往返 / 旧库作废重建，82 项
 node test/load.mjs              # 大数据量测试：2000 任务 + 1.2 万文件 + 20 万行日志（约 15s）
                                 #   LOAD_SCALE=2 放大一倍，=0.2 快速冒烟
-node test/update-manager.mjs   # 更新管理器单元测试（mock GitHub，离线）
-node test/update-git-flow.mjs  # 架构 B 容器更新链路集成测试（离线自建 git 场景，无 git 自动跳过）
-node test/check-docker.mjs     # Docker 打包自检（无需装 Docker）：Dockerfile/compose/.dockerignore 静态校验 + 容器形态冒烟 + 依赖校验（唯一第三方依赖 better-sqlite3）
+node test/update-manager.mjs   # 更新管理器单元测试（mock GitHub，离线；含容器归档通道：只升不降 / 解包 / 切换 / 回滚）
+node test/update-git-flow.mjs  # 本地 git 工作区更新链路集成测试（离线自建 git 场景，无 git 自动跳过）
+node test/check-docker.mjs     # Docker 打包自检（无需装 Docker）：静态校验 + 容器形态冒烟 + 更新落位目录启动冒烟 + 依赖校验
 node test/e2e-ffmpeg.mjs       # 录制链路端到端（假 ffmpeg：分段 / 收尾 / 转封装 / 合并）
 node test/e2e-ui.mjs           # 真实浏览器端到端（需本机 Edge/Chrome，找不到会自动跳过）
 ```
@@ -214,7 +251,7 @@ app/
   docs/          # 接口契约等文档
 ui/              # UI 设计原型与说明（不进 Docker 镜像）
 Dockerfile / docker-compose.yaml / .dockerignore
-deploy/          # entrypoint.sh（容器入口：clone/回退/启动）
+deploy/          # entrypoint.sh（容器入口：只选代码目录，不联网）
 start-local.cmd  # 本地一键启动
 ```
 

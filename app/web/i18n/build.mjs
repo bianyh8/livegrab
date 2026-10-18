@@ -129,13 +129,14 @@ const ADD = {
   'settings.upLogTitle': '更新日志', 'settings.upLogAlsoInLogs': '同步记录到「运行日志」页', 'settings.upNotesTitle': '更新说明', 'settings.upNotesMain': '主要更新内容', 'settings.upNotesFix': '修复内容',
   'settings.upNotesNone': '暂无更新说明。',
   'settings.upApplyConfirmTitle': '确认立即更新？',
-  'settings.upApplyConfirmSelf': '将从 GitHub 拉取最新代码并安装依赖，完成后自动重启服务加载新版本（本地与容器部署均支持）。更新期间请勿关闭页面。',
-  'settings.upApplyConfirmManual': '当前部署未检测到代码仓库（git），无法在线更新。点击后将生成手动更新指引：本地请在源码目录执行 git pull 并安装依赖；容器请检查网络与 LIVEGRAB_GITHUB_TOKEN，或重建镜像。更新期间请勿关闭页面。',
+  'settings.upApplyConfirmSelf': '将从 GitHub 下载最新版本的源码归档，解包校验后切换到新目录，并自动重启服务加载新版本（容器部署）；本地源码目录则走增量拉取。更新期间请勿关闭页面。',
+  'settings.upApplyConfirmManual': '当前部署既不在容器内、也没有 git 源码目录，无法在线更新。点击后会在日志里生成手动更新步骤。更新期间请勿关闭页面。',
   'settings.upApplyStarted': '更新任务已启动',
   'settings.upApplyBusy': '更新任务正在进行中，请稍候',
   'settings.upCheckFailed': '检查更新失败：{0}',
   'settings.upRepo': '仓库 {0} · 分支 {1}',
-  'settings.upPhaseIdle': '空闲', 'settings.upPhaseFetch': '拉取代码', 'settings.upPhasePull': '更新代码',
+  'settings.upPhaseIdle': '空闲', 'settings.upPhaseFetch': '下载更新', 'settings.upPhasePull': '更新代码',
+  'settings.upPhaseExtract': '解包校验', 'settings.upPhaseSwitch': '切换到新版本',
   'settings.upPhaseInstall': '安装依赖', 'settings.upPhaseError': '未完成',
   'settings.upLogEmpty': '暂无更新日志。',
   'settings.upLatestChip': '最新',
@@ -270,7 +271,7 @@ const REMOVE = [
   'files.unregScan', 'files.unregScanDone', 'files.unregScanFail',
   // 更新日志卡片移除未实现的「全部日志」筛选占位下拉框
   'settings.upLogAll',
-  // 更新确认弹窗改按「有无 git 仓库」区分（本地/容器架构 B 均可自更新）；
+  // 更新确认弹窗按「能否在线自更新」区分（容器归档通道 / 本地 git 均可自更新）；
   // 移除旧的本地/容器二分键与未引用的 upApplyConfirmText
   'settings.upApplyConfirmText', 'settings.upApplyConfirmLocal', 'settings.upApplyConfirmContainer',
   // 死键清理：dedupe 已归并键 + 无视图引用键（2026-10-15 全仓清查）

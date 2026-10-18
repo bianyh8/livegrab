@@ -1,12 +1,17 @@
 /* LiveGrab · server/update.js —— 更新管理器
-   职责：① 读取本地版本信息（package.json version + git commit/分支/提交时间）；
-   ② 从「更新源配置」指定的仓库（UI 配置 > 环境变量 > 内置默认）经 GitHub API 拉取最新版本与提交，做对比；
-   ③ 「立即更新」后台任务：按配置的仓库地址 fetch + pull（环境支持时），否则给出手动更新指引；
+   职责：① 读取本地版本信息（容器：版本标记 .livegrab-version.json / 构建信息；本地：package.json + git）；
+   ② 从「更新源配置」指定的仓库（UI 配置 > 环境变量 > 内置默认）经 GitHub API 拉取最新版本，做对比；
+   ③ 「立即更新」后台任务：容器内下载 GitHub 归档解包切换，本地 git 工作区走增量 fetch；
    ④ 内存态更新进度与日志（前端轮询 /api/update/status 获取）。
-   日志约定：所有更新事件（环境自检/检查对比/拉取/安装/重启）都经 _log 同步写入日志文件
+   日志约定：所有更新事件（环境自检/网络路径/检查对比/下载/安装/重启）都经 _log 同步写入日志文件
    （前缀 [更新]，与「运行日志」页同一套 logger）；检查结果相同不重复记，避免刷屏。
-   设计约定：本地与架构 B 容器（/config/src 自带 .git）走完整的「拉取 → 装依赖 → 自重启」；
-   容器首启克隆失败/镜像过旧（无 .git / 无 git）时不伪更新，明确提示手动步骤；本模块零第三方依赖。 */
+   设计约定（v0.1.43 起）：
+     · 部署不联网——镜像里已有完整源码，首启直接用 /app 启动，不 clone、不装依赖、不涉及 git；
+     · 容器内更新 = 下载该版本标签的 tar.gz 归档 → 解包到 /config/src → 原子切换 → 自重启，
+       全程不需要 git，也就不存在「首次必须联网拿到 .git」这个前提；
+     · 只有远端语义化版本严格更高才更新，版本相同一律不动（不重复下载同版本归档）；
+     · 代理只有一个入口（页面「系统设置 → 平台账号 → 网络代理」）：配了先走代理，代理失败立刻
+       改直连并冷却 2 分钟，日志逐次写明走的是代理还是直连；本模块零第三方依赖。 */
 
 import { execFile } from 'node:child_process';
 import crypto from 'node:crypto';
@@ -21,6 +26,8 @@ const UA = 'LiveGrab-update-manager';
 const DEFAULT_REPO = process.env.LIVEGRAB_REPO || 'bianyh8/livegrab';
 const DEFAULT_BRANCH = process.env.LIVEGRAB_BRANCH || 'main';
 const DEFAULT_GIT_URL = process.env.LIVEGRAB_GIT_URL || `https://github.com/${DEFAULT_REPO}.git`;
+/** 代理失败后的直连冷却时间：这段时间内不再尝试代理，避免每次请求都先卡一遍代理超时。 */
+const PROXY_COOLDOWN_MS = 120 * 1000;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const run = (cmd, args, opts = {}) =>
@@ -220,29 +227,33 @@ export function extractTarGzTo(buf, destDir) {
 }
 
 export class UpdateManager {
-  constructor({ appDir, logger, token, restart, getRepoConfig } = {}) {
+  constructor({ appDir, logger, token, restart, getRepoConfig, getProxy, srcRoot, imageApp } = {}) {
     this.appDir = appDir || process.cwd();
     this.logger = logger || null;
     // 更新完成后的自重启钩子：由 server.js 注入优雅停止 + re-exec 逻辑。
-    // 本地运行与架构 B 容器（/config/src 自带 .git）都会走到此钩子；
-    // 容器首启克隆失败/镜像过旧（无 git）时提前返回手动重建指引，不走此钩子。
+    // 容器内切换目录后必须用新目录重启，故钩子支持 { cwd }（见 archive 通道）。
     this.restartHook = (typeof restart === 'function') ? restart : null;
     // 动态配置来源：server.js 注入 store.settings.customize 读取函数；
     // 用户未在 UI 配置时回退到环境变量 / 默认值。
     this.getRepoConfig = (typeof getRepoConfig === 'function') ? getRepoConfig : null;
     // 系统更新代理来源：server.js 注入读取 store.settings.proxy 的函数。
-    // 需求：系统更新若设置了代理地址，则优先使用代理，否则走正常网络连接。
+    // 唯一入口就是页面「系统设置 → 平台账号 → 网络代理」——容器环境变量不再参与，
+    // 这样「配一处、两处生效」的歧义消失，日志也能明确说出走的是哪条路。
     this.getProxy = (typeof getProxy === 'function') ? getProxy : null;
+    // 容器内新版本的落位目录（entrypoint 注入 LIVEGRAB_SRC_DIR，默认 ${CONFIG_DIR}/src）
+    this.srcRoot = String(srcRoot || process.env.LIVEGRAB_SRC_DIR || '').trim();
+    // 镜像内置代码目录（依赖基线与「未更新过」时的运行目录）
+    this.imageApp = String(imageApp || process.env.LIVEGRAB_IMAGE_APP || '').trim();
     // 兜底 token：显式传入 > 环境变量 LIVEGRAB_GITHUB_TOKEN > 本地 ~/.git-credentials
     this.envToken = token || process.env.LIVEGRAB_GITHUB_TOKEN || readGitCredentialsToken() || '';
     this.state = {
-      env: null,            // { gitAvailable, gitRoot, dockerAvailable, inContainer }
+      env: null,            // { mode, gitAvailable, gitRoot, dockerAvailable, inContainer, srcRoot }
       local: null,          // { version, commit, branch, commitAt, tag }
       latest: null,         // { version, tag, commit, commitAt, commitMsg, publishedAt, releaseUrl, releaseNotes }
       checkedAt: 0,
       checking: false,
       running: false,       // 更新任务进行中
-      phase: 'idle',        // idle|fetch|pull|install|done|error
+      phase: 'idle',        // idle|fetch|pull|install|switch|restart|done|error
       progress: 0,          // 0-100
       task: '',             // 当前构建/更新任务描述
       startedAt: 0,
@@ -250,6 +261,8 @@ export class UpdateManager {
     };
     this._envSig = '';       // 环境自检结果签名（相同则不重复记日志）
     this._lastCheckSig = ''; // 最近一次已记录检查结果的签名（相同则不重复记日志）
+    this._proxyCooldownUntil = 0; // 代理失败后的直连冷却截止时间
+    this._lastPathSig = '';  // 最近一次记录过的网络路径（代理地址 / direct），用于日志去重
   }
 
   /* ---------- 动态仓库配置（UI 可配置 > 环境变量 > 默认值） ---------- */
@@ -294,36 +307,71 @@ export class UpdateManager {
 
   _api() { return `https://api.github.com/repos/${this._repo()}`; }
 
-  /** 系统更新代理地址。
-   *  优先级：页面「系统设置 → 平台账号 → 网络代理」（显式设置）> 容器环境变量 LIVEGRAB_PROXY
-   *  （compose 注入，与首启 clone 同一来源）。回退的意义：NAS 上只需在 .env 配一处，
-   *  首启 clone 与页面「立即更新」就都走代理，不必两处维护同一个地址。
-   *  不能用 HTTP_PROXY 环境变量做回退——ffmpeg 会读它，语义也不同（那条是给容器全局的）。 */
+  /** 系统更新代理地址：唯一来源是页面「系统设置 → 平台账号 → 网络代理」。
+   *  不再回退容器环境变量（v0.1.43 起 compose 不注入任何代理变量）：代理只在一处维护，
+   *  排查时不需要再判断「这条链路到底读的是环境变量还是页面设置」。
+   *  不能用 HTTP_PROXY 环境变量做回退——ffmpeg 会读它，会让「平台代理开关」失效。 */
   _proxy() {
-    const v = (this.getProxy && this.getProxy()) || process.env.LIVEGRAB_PROXY || '';
+    const v = (this.getProxy && this.getProxy()) || '';
     return v ? normalizeProxy(v) : '';
   }
 
-  /** 统一的 HTTP GET：设置了代理则经代理（零依赖 CONNECT 隧道），否则走原生 fetch。
+  /** 本次请求实际走的网络路径（写进日志，回答「到底用没用代理」）。 */
+  _netPath() {
+    const p = this._proxy();
+    return p ? `经代理 ${p}` : '直连（未配置更新代理）';
+  }
+
+  /** 记录一次网络路径。同一路径只记一次（避免每次检查刷屏），切换代理/回退直连时会重新记。 */
+  _noteNetPath(prefix = '更新网络路径') {
+    const p = this._proxy();
+    const sig = p ? `proxy:${p}` : 'direct';
+    if (sig === this._lastPathSig) return;
+    this._lastPathSig = sig;
+    this._log('INFO', `${prefix}：${p ? `经代理 ${p}` : '直连（未配置更新代理）'}`);
+  }
+
+  /** 统一 HTTP GET：配了代理先走代理，代理失败立刻改直连（并冷却 2 分钟）；没配代理直接直连。
    *  返回 Response 兼容对象（ok/status/json/text/arrayBuffer），调用方无需关心底层是否走代理。
    *  binary=true 用于下载 tar.gz 归档（按字节取，不能按文本解码）。 */
-  async _fetch(url, { headers = {}, timeoutMs = 15000, retries = 2, label = '', binary = false } = {}) {
+  async _fetch(url, opts = {}) {
+    const { headers = {}, timeoutMs = 15000, retries = 2, label = '', binary = false } = opts;
     const proxy = this._proxy();
-    if (!proxy) {
-      return fetch(url, { headers, signal: AbortSignal.timeout(timeoutMs) });
+    if (!proxy) return this._fetchDirect(url, { headers, timeoutMs });
+    if (Date.now() < this._proxyCooldownUntil) return this._fetchDirect(url, { headers, timeoutMs });
+    try {
+      return await this._fetchViaProxy(url, proxy, { headers, timeoutMs, retries, label, binary });
+    } catch (e) {
+      // 代理挂了（连不上/被拒/隧道失败）：不是错误，只是这条路不通——改直连并冷静一会儿，
+      // 否则每次检查都要先卡满一次代理超时，页面表现为「检查更新特别慢」。
+      this._proxyCooldownUntil = Date.now() + PROXY_COOLDOWN_MS;
+      this._lastPathSig = 'direct';
+      this._log('WARN', `代理不可用（${this._firstLine(e.message || e)}），本次改用直连；${Math.round(PROXY_COOLDOWN_MS / 1000)} 秒内不再尝试代理`);
+      return this._fetchDirect(url, { headers, timeoutMs: Math.max(timeoutMs, 20000) });
     }
+  }
+
+  _fetchDirect(url, { headers = {}, timeoutMs = 15000 } = {}) {
+    return fetch(url, { headers, signal: AbortSignal.timeout(timeoutMs) });
+  }
+
+  async _fetchViaProxy(url, proxy, { headers = {}, timeoutMs = 15000, retries = 2, label = '', binary = false } = {}) {
+    // 502/504 视为「代理本身不可用」（CONNECT 隧道失败时常见），交给上层回退直连；
+    // 其余状态码（404/403 等）是远端的真实回答，不能当成代理故障。
+    const bad = (status) => status === 502 || status === 504;
     if (binary) {
       const r = await httpGetBufferViaProxy(url, { headers, timeoutMs, retries, logger: this.logger, label, proxy });
-      if (!r.ok) throw new Error(`归档下载失败 HTTP ${r.status}`);
+      if (bad(r.status)) throw new Error(`代理返回 HTTP ${r.status}`);
       const buf = r.buffer;
       return {
-        ok: true, status: r.status, statusText: 'OK', headers: r.headers,
+        ok: r.ok, status: r.status, statusText: '', headers: r.headers,
         json: async () => JSON.parse(buf.toString('utf8')),
         text: async () => buf.toString('utf8'),
         arrayBuffer: async () => buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength),
       };
     }
     const r = await httpGetViaProxy(url, { headers, timeoutMs, retries, logger: this.logger, label, proxy });
+    if (bad(r.status)) throw new Error(`代理返回 HTTP ${r.status}`);
     const text = r.text;
     return {
       ok: r.ok, status: r.status, statusText: r.statusText || '', headers: r.headers,
@@ -470,7 +518,7 @@ export class UpdateManager {
       this._log('INFO', '若宿主机同样报错，请检查代理/网关（公司网络、软路由、科学上网工具常改写长连接）。');
     } else if (kind === 'network') {
       this._log('INFO', `无法连接仓库地址，请确认网络与 DNS：${gitUrl}`);
-      this._log('INFO', '容器部署请确认容器能访问外网（docker compose 里不要用 host 网络的代理例外）。');
+      this._log('INFO', '需要在页面「系统设置 → 平台账号 → 网络代理」里配置代理？配好后重试即可（失败会自动改直连）。');
     } else if (kind === 'auth') {
       this._log('INFO', '认证失败：私有仓库请在「更新源配置」里填写 GitHub Token（或设置环境变量 LIVEGRAB_GITHUB_TOKEN）后重试。');
     } else if (kind === 'notfound') {
@@ -654,25 +702,57 @@ export class UpdateManager {
 
   /* ---------- 环境与本地信息 ---------- */
 
+  /** 容器内新版本的落位根目录（其下 app/ 就是下次启动要运行的代码）。
+   *  只有容器才默认 ${CONFIG_DIR}/src —— 本地运行即便设了 CONFIG_DIR，也不该走归档通道
+   *  （那会用标签归档覆盖开发者的工作区，完全不是想要的行为）。 */
+  _srcRoot(inContainer = false) {
+    if (this.srcRoot) return this.srcRoot;
+    if (!inContainer) return '';
+    const cfg = String(process.env.CONFIG_DIR || '').trim();
+    return cfg ? path.join(cfg, 'src') : '';
+  }
+
+  /** 运行形态：
+   *    archive —— 容器部署：代码在 ${CONFIG_DIR}/src/app 或镜像 /app，更新靠 GitHub 归档解包，不需要 git；
+   *    git     —— 本地开发：有 .git 工作区，走增量 fetch；
+   *    none    —— 本地且无 git：无法在线更新，只给手动步骤。 */
+  _mode(env = this.state.env) {
+    if (!env) return 'none';
+    if (env.mode) return env.mode;
+    return env.gitAvailable ? 'git' : 'none';
+  }
+
   async detectEnv() {
     const gitBin = await run('which', ['git']).then((r) => (r.ok ? r.out.trim() : ''));
     const dockerBin = await run('which', ['docker']).then((r) => (r.ok ? r.out.trim() : ''));
     const inContainer = await fsp.access('/.dockerenv').then(() => true).catch(() => false);
     const gitRoot = gitBin ? await this._findGitRoot(this.appDir) : null;
+    const srcRoot = this._srcRoot(inContainer);
+    // 容器（或调用方显式指定了落位目录）→ 归档通道；其余仍是 git 语义，本地开发行为不变
+    const mode = (inContainer || srcRoot) ? 'archive'
+      : (gitBin && gitRoot ? 'git' : 'none');
     this.state.env = {
+      mode,
       gitAvailable: !!gitBin && !!gitRoot,
       gitBin: gitBin || '',
       gitRoot: gitRoot || '',
       dockerAvailable: !!dockerBin,
       inContainer,
+      srcRoot: mode === 'archive' ? srcRoot : '',
+      imageApp: this.imageApp || '',
     };
     // 环境自检结果记入日志（每次启动首次检测时一条）：排查「为什么不能在线更新」的第一手信息
     const sig = JSON.stringify(this.state.env);
     if (sig !== this._envSig) {
       this._envSig = sig;
-      this._log('INFO', this.state.env.gitAvailable
-        ? `更新环境自检：git 可用（仓库 ${this.state.env.gitRoot}${inContainer ? ' · 运行于容器' : ' · 本地运行'}），支持在线更新`
-        : `更新环境自检：未检测到 git 仓库${gitBin ? '' : '（系统无 git）'}${inContainer ? ' · 运行于容器' : ' · 本地运行'}，无法在线拉取代码，更新时将给出手动指引`);
+      const where = inContainer ? '运行于容器' : '本地运行';
+      if (mode === 'archive') {
+        this._log('INFO', `更新环境自检：更新走 GitHub 归档（${where}，当前代码 ${this.appDir} → 新版本落位 ${srcRoot || '（未配置）'}），无需 git`);
+      } else if (mode === 'git') {
+        this._log('INFO', `更新环境自检：git 可用（仓库 ${gitRoot} · ${where}），支持增量更新`);
+      } else {
+        this._log('INFO', `更新环境自检：未检测到 git 仓库${gitBin ? '' : '（系统无 git）'}（${where}），无法在线拉取代码，更新时将给出手动指引`);
+      }
     }
     return this.state.env;
   }
@@ -704,11 +784,21 @@ export class UpdateManager {
       if (at.ok) commitAt = at.out;
       if (tg.ok) tag = tg.out;
     } else {
-      // 容器/无 git：尝试从构建时注入的构建信息读取自身 commit（镜像构建时写入 .build-info.json 或 LIVEGRAB_BUILD_COMMIT），
-      // 用于和远程分支 HEAD 做精确比对；拿不到则回退到版本号比对。
-      const buildCommit = (process.env.LIVEGRAB_BUILD_COMMIT || '').trim()
-        || (await this._readBuildCommit().catch(() => ''));
-      if (buildCommit) commit = String(buildCommit).slice(0, 12);
+      // 容器/无 git：版本以「页面更新落位时写入的标记」为准（.livegrab-version.json，
+      // 里面记的是 GitHub 标签版本，容器里没有 .git 时这就是唯一权威来源）；
+      // 从没更新过（用的是镜像代码）则回退构建信息（.build-info.json / LIVEGRAB_BUILD_COMMIT）。
+      const marker = this._readVersionMarker(this.appDir);
+      this.state.versionMarker = marker || null;
+      if (marker) {
+        if (marker.version) version = String(marker.version);
+        if (marker.commit) commit = String(marker.commit).slice(0, 12);
+        if (marker.tag) tag = String(marker.tag);
+        if (marker.at) commitAt = new Date(marker.at).toISOString();
+      } else {
+        const buildCommit = (process.env.LIVEGRAB_BUILD_COMMIT || '').trim()
+          || (await this._readBuildCommit().catch(() => ''));
+        if (buildCommit) commit = String(buildCommit).slice(0, 12);
+      }
       branch = this._branch();
     }
     if (snap) {
@@ -728,6 +818,16 @@ export class UpdateManager {
       const raw = JSON.parse(await fsp.readFile(path.join(this.appDir, '.build-info.json'), 'utf8'));
       return raw && raw.commit ? String(raw.commit).trim() : '';
     } catch { return ''; }
+  }
+
+  /** 读取「页面立即更新」落位时写入的版本标记（<appDir>/.livegrab-version.json）。
+   *  容器里没有 .git，这份标记就是「当前跑的到底是哪个版本」的权威来源：
+   *  版本号取 GitHub 标签（而不是归档里的 package.json），避免「改了代码忘改版本号」时反复提示有更新。 */
+  _readVersionMarker(dir = this.appDir) {
+    try {
+      const raw = JSON.parse(fs.readFileSync(path.join(dir, '.livegrab-version.json'), 'utf8'));
+      return raw && (raw.version || raw.tag) ? raw : null;
+    } catch { return null; }
   }
 
   /* ---------- GitHub 最新版本 ---------- */
@@ -822,6 +922,7 @@ export class UpdateManager {
     this.state.checking = true;
     try {
       await this.localInfo();
+      this._noteNetPath('检查更新的网络路径');
       await this.fetchRemote();
       this.state.checkedAt = Date.now();
       // 检查结果记入日志（与上次已记录的结果相同则跳过，避免反复打开更新页刷屏）：
@@ -871,6 +972,14 @@ export class UpdateManager {
 
   async _runUpdate(env, local) {
     try {
+      // 先写清这次拉取走的是代理还是直连（排查「配了代理还是慢/失败」的第一手信息）
+      this._noteNetPath();
+      // 容器部署：归档通道（不需要 git，也不碰 .git）
+      if (this._mode(env) === 'archive') {
+        await this._runArchiveUpdate(env, local);
+        return;
+      }
+
       // ① 拉取远端对比
       await this.fetchRemote();
       const latest = this.state.latest;
@@ -898,19 +1007,15 @@ export class UpdateManager {
       if (hasNew) this._log('INFO', `发现新版本：${latest.tag} (${latest.commit || '?'})`);
 
       if (!env.gitAvailable) {
-        // 容器/无 git：不能伪更新，给手动指引。这是正常的「需手动重建」状态，不是错误。
-        // 架构 B 下容器正常启动后自带 .git（/config/src），只有首启克隆失败或镜像过旧才会到这里。
-        this._phase('done', 15, '需手动重建镜像更新');
-        this._log('WARN', env.inContainer
-          ? '容器内未检测到代码仓库（首次启动克隆失败，或镜像过旧未内置 git）'
-          : '未检测到可用 git 仓库，无法在线拉取代码');
+        // 走到这里只剩「本地运行且没有 git 工作区」：容器部署早已由归档通道接管。
+        // 不能伪更新，给手动步骤（这不是错误，属于部署方式限制）。
+        this._phase('done', 15, '需手动更新');
+        this._log('WARN', '未检测到可用 git 工作区，无法在线更新（容器部署不受影响：容器走归档通道）');
         const branch = this._branch();
         const gitUrl = this._gitUrl();
-      this._log('INFO', env.inContainer
-          ? '请检查容器网络；私有仓库需配置 LIVEGRAB_GITHUB_TOKEN。重启容器会重试自动克隆；或在宿主机执行：docker compose up -d --build'
-          : `请在源码目录手动执行：git -c http.version=HTTP/1.1 pull ${gitUrl} ${branch} && npm install`);
-        this._log('INFO', '已生成手动更新指引。重建并重启容器后生效。');
-        this._phase('done', 100, '需手动重建镜像更新');
+        this._log('INFO', `请在源码目录手动执行：git -c http.version=HTTP/1.1 pull ${gitUrl} ${branch} && npm install`);
+        this._log('INFO', '已生成手动更新指引。更新后重启服务即可生效。');
+        this._phase('done', 100, '需手动更新');
         return;
       }
 
@@ -1052,6 +1157,214 @@ export class UpdateManager {
     }
   }
 
+  /* ---------- 容器更新通道：GitHub 归档（不需要 git） ---------- */
+
+  /** 某个标签的源码归档地址（GitHub codeload，普通 HTTPS GET）。非 GitHub 仓库返回空。 */
+  _tagArchiveUrl(tag) {
+    let repo = this._repo();
+    if (!repo) repo = parseOwnerRepoFromGitHubUrl(this._gitUrl());
+    if (!repo || !/^[\w.-]+\/[\w.-]+$/.test(repo)) return '';
+    const t = String(tag || '').trim();
+    if (!t) return '';
+    return `https://codeload.github.com/${repo}/tar.gz/refs/tags/${encodeURIComponent(t)}`;
+  }
+
+  /** 依赖声明签名（只比 dependencies 的键与版本要求）：相同就能直接复用镜像的 node_modules。 */
+  _depSignature(pkg) {
+    const d = (pkg && pkg.dependencies) || {};
+    return Object.keys(d).sort().map((k) => `${k}@${d[k]}`).join('|');
+  }
+
+  _currentPkg() {
+    try { return JSON.parse(fs.readFileSync(path.join(this.appDir, 'package.json'), 'utf8')); } catch { return {}; }
+  }
+
+  /** 可复用的 node_modules 基线：优先当前镜像的 /app/node_modules（ABI 永远跟镜像里的 Node 一致）。 */
+  _baselineNodeModules() {
+    const cands = [];
+    if (this.imageApp) cands.push(path.join(this.imageApp, 'node_modules'));
+    cands.push('/app/node_modules');
+    cands.push(path.join(this.appDir, 'node_modules'));
+    for (const p of cands) {
+      try {
+        if (fs.statSync(p).isDirectory() && fs.existsSync(path.join(p, 'better-sqlite3'))) return p;
+      } catch { /* 试下一个 */ }
+    }
+    return '';
+  }
+
+  /** 给新版本目录准备 node_modules：软链到镜像基线（零复制、零联网）。
+   *  极少数文件系统不支持软链时退回复制——都能保证「依赖不跟着代码走，永远以当前镜像为准」。 */
+  _linkNodeModules(appDir) {
+    const target = this._baselineNodeModules();
+    if (!target) throw new Error('找不到可复用的 node_modules 基线（镜像 /app/node_modules 缺失）');
+    const link = path.join(appDir, 'node_modules');
+    fs.rmSync(link, { recursive: true, force: true });
+    try {
+      fs.symlinkSync(target, link, process.platform === 'win32' ? 'junction' : 'dir');
+      return 'link';
+    } catch { /* 继续退回复制 */ }
+    fs.cpSync(target, link, { recursive: true, dereference: true });
+    return 'copy';
+  }
+
+  /** npm install：只有依赖声明变了才走这里；npm 用 npm_config_* 走代理（ffmpeg 不读这两个键）。 */
+  _npmInstall(dir) {
+    const env = { ...process.env };
+    const proxy = this._proxy();
+    if (proxy) {
+      env.npm_config_proxy = proxy;
+      env.npm_config_https_proxy = proxy;
+    }
+    return run('npm', ['install', '--omit=dev', '--no-audit', '--no-fund'], { cwd: dir, timeout: 300000, env });
+  }
+
+  /** 下载标签归档（tar.gz）。私有仓库带 token；走代理失败会自动直连（见 _fetch）。 */
+  async _downloadTagArchive(url, tag) {
+    const headers = { 'User-Agent': UA };
+    const t = this._token();
+    if (t) headers['Authorization'] = `Bearer ${t}`;
+    const r = await this._fetch(url, { headers, timeoutMs: 300000, retries: 1, label: `GitHub 归档 ${tag}`, binary: true });
+    if (!r.ok) {
+      throw new Error(`归档下载失败 HTTP ${r.status}${r.status === 404 ? '（标签不存在，或私有仓库未配 Token）' : ''}`);
+    }
+    const buf = Buffer.from(await r.arrayBuffer());
+    if (!buf.length) throw new Error('归档内容为空');
+    if (buf.length > 128 * 1024 * 1024) throw new Error('归档过大（>128MB），已放弃');
+    return buf;
+  }
+
+  /** 原子切换：cur(app) → app.old，newApp → cur；失败自动回滚，保证「更新失败 = 服务照常跑」。
+   *  成功后旧目录不立刻删：此刻进程的 cwd 还指着它，删掉会让「重启失败」失去退路；
+   *  留着当手动回滚点（`mv app.old app`），下次更新开头才会被替换掉。 */
+  _swapIn(newApp, root) {
+    const cur = path.join(root, 'app');
+    const old = path.join(root, 'app.old');
+    fs.mkdirSync(root, { recursive: true });
+    fs.rmSync(old, { recursive: true, force: true });
+    const hadCur = fs.existsSync(cur);
+    if (hadCur) fs.renameSync(cur, old);
+    try {
+      fs.renameSync(newApp, cur);
+    } catch (e) {
+      if (hadCur) { try { fs.renameSync(old, cur); } catch { /* 回滚失败时旧目录仍留在 app.old */ } }
+      throw new Error(`切换新版本失败（已回滚到旧版本）：${e.message}`);
+    }
+    return cur;
+  }
+
+  /** 容器内更新：查版本 →（远端更高才）下载归档 → 解包校验 → 组装 → 原子切换 → 自重启。
+   *  版本不高于本地时什么都不下载、不重启，日志写一条「已是最新」。 */
+  async _runArchiveUpdate(env, local) {
+    const root = env.srcRoot || this._srcRoot(true);
+    if (!root) throw new Error('无法确定新版本落位目录（LIVEGRAB_SRC_DIR / CONFIG_DIR 均缺失）');
+
+    await this.fetchRemote();
+    const latest = this.state.latest;
+    this.state.progress = 8;
+    if (latest && latest.unavailable) {
+      this._phase('done', 100, '');
+      this._log('WARN', '无法获取远程版本信息（仓库不可见或网络异常），本次更新已取消');
+      this._log('INFO', '请检查网络后重试；私有仓库需在「更新源配置」填 GitHub Token（或环境变量 LIVEGRAB_GITHUB_TOKEN）');
+      return;
+    }
+    if (!this._computeHasUpdate(local, latest)) {
+      this._phase('done', 100, '');
+      this._log('OK', `已是最新版本 v${local.version}（远端 ${latest.tag}），无需更新`);
+      return;
+    }
+
+    const tag = latest.tag;
+    const url = this._tagArchiveUrl(tag);
+    if (!url) throw new Error('更新源不是 GitHub 仓库，无法下载源码归档');
+    this._log('INFO', `发现新版本 ${tag}（本地 v${local.version}），下载源码归档…`);
+    this._phase('fetch', 20, `下载 ${tag}`);
+    const buf = await this._downloadTagArchive(url, tag);
+    const mb = buf.length / 1048576;
+    this._log('OK', `归档下载完成（${mb >= 1 ? `${mb.toFixed(1)} MB` : `${Math.max(1, Math.round(buf.length / 1024))} KB`}）`);
+
+    // 解包到落位目录下的暂存区：与最终目录同一文件系统，后面才能用 rename 原子切换
+    const stage = path.join(root, '.update-stage');
+    const stageApp = path.join(stage, 'app');
+    this._phase('pull', 45, '解包并校验');
+    fs.rmSync(stage, { recursive: true, force: true });
+    fs.mkdirSync(stage, { recursive: true });
+    let depsInstalled = false;
+    try {
+      const info = extractTarGzTo(buf, stage);
+      if (!fs.existsSync(path.join(stageApp, 'server', 'server.js')) || !fs.existsSync(path.join(stageApp, 'package.json'))) {
+        throw new Error('归档结构异常（缺少 app/server/server.js 或 app/package.json），已放弃');
+      }
+      this._log('OK', `解包完成：${info.files.length} 个文件`);
+
+      let pkg = {};
+      try { pkg = JSON.parse(fs.readFileSync(path.join(stageApp, 'package.json'), 'utf8')); } catch { /* 忽略 */ }
+      const pkgVersion = String(pkg.version || '');
+      if (pkgVersion && parseVersion(pkgVersion) && compareVersions(pkgVersion, local.version) < 0) {
+        throw new Error(`归档内版本 v${pkgVersion} 低于本地 v${local.version}，已放弃（不做降级）`);
+      }
+      if (pkgVersion && latest.version && compareVersions(pkgVersion, latest.version) !== 0) {
+        this._log('WARN', `归档内 package.json 版本为 v${pkgVersion || '?'}，与标签 ${tag} 不一致：以标签版本为准记录本地版本`);
+      }
+
+      // 依赖：声明没变就复用镜像基线（这是绝大多数版本的情况，更新全程只访问 GitHub，不碰 npm registry）
+      const depsChanged = this._depSignature(pkg) !== this._depSignature(this._currentPkg());
+      this._phase('install', 62, depsChanged ? '安装依赖' : '准备依赖');
+      if (depsChanged) {
+        this._log('WARN', `依赖声明有变化（${this._depSignature(pkg) || '无第三方依赖'}），需要联网安装依赖…`);
+        const npmR = await this._npmInstall(stageApp);
+        if (!npmR.ok) {
+          throw new Error(`依赖安装失败（exit ${npmR.code}），已放弃本次更新：${this._firstLine(npmR.err || npmR.out)}`);
+        }
+        depsInstalled = true;
+        this._log('OK', '依赖安装完成');
+      } else {
+        const how = this._linkNodeModules(stageApp);
+        this._log('OK', how === 'link'
+          ? '依赖复用镜像基线（软链 /app/node_modules，无需联网安装）'
+          : '依赖复用镜像基线（文件系统不支持软链，已复制一份）');
+      }
+
+      // 版本标记：容器里没有 .git，这份标记就是「当前版本」的权威来源
+      fs.writeFileSync(path.join(stageApp, '.livegrab-version.json'), JSON.stringify({
+        version: latest.version || pkgVersion,
+        tag,
+        commit: latest.commit || '',
+        pkgVersion,
+        depsInstalled,
+        at: Date.now(),
+        from: local.version || '',
+      }, null, 2));
+
+      this._phase('switch', 82, `切换到 ${tag}`);
+      const newApp = this._swapIn(stageApp, root);
+      this._log('OK', `代码已切换到 ${tag}（${newApp}）`);
+    } catch (e) {
+      // 失败：整个暂存区丢掉，旧版本目录没被动过，服务继续正常录制
+      try { fs.rmSync(stage, { recursive: true, force: true }); } catch { /* 忽略 */ }
+      throw e;
+    }
+    try { fs.rmSync(stage, { recursive: true, force: true }); } catch { /* 忽略 */ }
+
+    this.state.progress = 90;
+    if (typeof this.restartHook !== 'function') {
+      this._phase('done', 100, `更新完成 ${tag}`);
+      this._log('OK', '更新完成。请重启容器使新版本生效。');
+      return;
+    }
+    this._phase('restart', 92, '正在重启服务');
+    this._log('OK', '正在重启服务以加载新版本…');
+    await sleep(1200);
+    try {
+      // 关键：新进程必须以新目录为 cwd 启动，否则跑的还是旧代码
+      await this.restartHook({ from: local.version, to: tag, cwd: path.join(root, 'app') });
+    } catch (e) {
+      this._log('WARN', `自动重启失败（${e?.message || e}），请手动重启容器使新版本生效`);
+    }
+    this._phase('done', 100, `更新完成 ${tag}`);
+    this._log('OK', `更新完成：v${local.version} → ${tag}`);
+  }
+
   /* ---------- 状态输出 ---------- */
 
   /** 计算是否真的有更新。判据按优先级：
@@ -1066,6 +1379,12 @@ export class UpdateManager {
     const rv = parseVersion(latest && latest.version);
     const lc = local && local.commit ? String(local.commit).slice(0, 12) : '';
     const rc = latest && latest.commit ? String(latest.commit).slice(0, 12) : '';
+    // 容器（归档通道）：只比语义化版本。版本相同就是最新——不再比 commit，
+    // 否则「main 上有新提交但还没发版」会让每次点按钮都重新下载一份同版本归档。
+    if (this._mode() === 'archive') {
+      if (lv && rv) return cmpParsedVersion(rv, lv) > 0;
+      return !!(latest.version && local && local.version && latest.version !== local.version);
+    }
     if (lv && rv) {
       const cmp = cmpParsedVersion(rv, lv);
       if (cmp > 0) return true;   // 远端版本严格更高 → 有更新
@@ -1079,8 +1398,14 @@ export class UpdateManager {
   status() {
     const s = this.state;
     const now = Date.now();
+    const mode = this._mode();
     return {
       env: s.env || null,
+      mode,
+      // 能否在线自更新：容器（归档通道）与本地 git 仓库都能，本地无 git 只能给手动步骤
+      canSelfUpdate: mode !== 'none',
+      appDir: this.appDir,
+      srcRoot: (s.env && s.env.srcRoot) || '',
       local: s.local || null,
       latest: s.latest || null,
       checkedAt: s.checkedAt || 0,

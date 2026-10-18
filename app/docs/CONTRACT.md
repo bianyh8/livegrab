@@ -328,7 +328,7 @@ Settings += {
 
 实测（v0.1.40 复测）：`node app/test/run.js` → **PASS 438 ｜ FAIL 0**（覆盖 web 视图守卫、更新链路守卫、代理链路、文件库扫描/排序、审计一致性、合并后清理等；关键断言：`nextFrame()` 必须带 setTimeout 兜底、强制横屏的旋转必须落在内层舞台 `#plStage`（不得写在全屏元素 `#plBox` 上）、任务查询防抖必须走局部重绘 `paintResults`（不得全量重建 `#tkQ` 抢焦点，防抖 300ms，2s 轮询同样只局部重绘）、播放器进度条必须 Pointer Events 拖动（`bindSeekTrack`：按下预览不写 currentTime、松手结算、`setPointerCapture`、横屏方向实时读舞台矩阵、`touch-action:none` + 伪元素扩触控命中区；不得退回 onclick）、git 必须走 HTTP/1.1 + 降级重试、`GIT_TERMINAL_PROMPT=0`、快进用本地 `FETCH_HEAD`、快照通道与容器克隆重试；另有 9 项「任务级转封装跟随全局」行为断言、9 项「分段结束原因」行为断言（断流重连/自然轮转的 endReason 落库与重开库往返、探测 unknown 不停录）、9 项 ffmpeg 直播加固参数守卫；无 ffmpeg、无网络）；
 `node app/test/update-manager.mjs` → 全部通过（mock GitHub，离线；P/Q/R 三组新增：传输层降级参数与报错分级、fetch 参数只认配置的更新源、快照地址推导与标记读写、tar.gz 解析落地（含超长路径 pax/GNU longname））；
-`node app/test/update-git-flow.mjs` → 全部通过（架构 B 容器更新链路，离线自建 git 场景；新增「拉取失败后的处理流程」：三档降级重试 → 本地快进 → 快照通道覆盖/清理上游已删文件 → 内容指纹安全自愈对齐 git 索引 → 安全闸门拒绝覆盖本地改动）；
+`node app/test/update-git-flow.mjs` → 全部通过（本地 git 工作区更新链路，离线自建 git 场景；v0.1.43 起容器部署改走「下载标签归档」通道，不经 git，归档通道的用例在 update-manager.mjs 的 S 组；此处覆盖「拉取失败后的处理流程」：三档降级重试 → 本地快进 → 快照通道覆盖/清理上游已删文件 → 内容指纹安全自愈对齐 git 索引 → 安全闸门拒绝覆盖本地改动）；
 `node app/test/db-sqlite.mjs` → 82 通过（v1→v2 库作废重建等）；
 `node app/test/check-docker.mjs` → ALL PASS（37 项：静态校验打包三件套 + 容器形态环境变量真起一次服务；宿主 8080 被占用时自动换端口冒烟）；
 `node app/test/close-http.mjs` → 全部通过（关闭 HTTP 服务：对照组复现「页面开着 SSE 长连接时 `server.close()` 不回调」，修复后 `closeHttpServer` 在超时兜底内返回）；
