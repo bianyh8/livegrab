@@ -161,7 +161,7 @@ const PAGES = [
   { pg: 'tasks', needles: ['验证任务A', '验证任务B', '验证任务C', '仅监控', '直播', '录制状态', '新建'], absent: ['分段策略', '命名规则'] },
   { pg: 'files', needles: ['文件库'] },
   { pg: 'settings', needles: ['命名规则', '平台账号', '系统更新'], absent: ['时区', '来自容器环境变量 TZ', 'TZ ', '平台并发上限'] },
-  { pg: 'logs', needles: ['日志', '调度器就绪', '最新在前'], absent: ['Copyright'] },
+  { pg: 'logs', needles: ['日志', '最新在前'], absent: ['Copyright'] },
   { pg: 'trash', needles: ['回收站'], absent: ['Copyright'], minLen: 20 },
 ];
 for (const { pg, needles, absent = [], minLen = 40 } of PAGES) {
@@ -206,6 +206,30 @@ for (const { pg, needles, absent = [], minLen = 40 } of PAGES) {
     check(!inView && !inChrome, `${pg} 不再出现「${n}」（简化显示）`, inView ? '仍出现在视图' : inChrome ? '仍出现在顶栏/侧栏' : '');
   }
   if (pg === 'logs') {
+    /* 回归：「日志页能查到服务启动日志」不能用首屏文本断言。
+       本测试自己的 4 个任务（FFMPEG_PATH=nonexistent-ffmpeg）会反复触发「断流 → 第 N 次重连」，
+       单轮就能刷出上百行 WARN；日志页按「最新在前 + 每页 50 条」分页，启动那条「调度器就绪」
+       会被挤到第 2~3 页 → 直接读 #view 的 innerText 必然失败（与代码正确性无关）。
+       改为走搜索过滤断言：既验证了启动日志确实落库可检索，又不受日志总量影响。 */
+    await send('Runtime.evaluate', { expression: `(() => {
+      const q = document.querySelector('#lgQ');
+      if (!q) return false;
+      q.value = '调度器就绪';
+      q.dispatchEvent(new Event('input', { bubbles: true }));
+      return true;
+    })()` });
+    let hit = '';
+    for (let i = 0; i < 25; i++) {
+      const sq = await send('Runtime.evaluate', { expression: `(document.querySelector('#view')||{}).innerText || ''`, returnByValue: true });
+      hit = String(sq?.result?.result?.value || '');
+      if (hit.includes('调度器就绪')) break;
+      await sleep(200);
+    }
+    check(hit.includes('调度器就绪'), 'logs 搜索「调度器就绪」能查到服务启动日志（不受分页影响）', hit.includes('调度器就绪') ? '' : '（搜索后仍未出现）');
+    // 清空搜索条件，后续工具栏/暂停等检查在无筛选状态下进行
+    await send('Runtime.evaluate', { expression: `(() => { const q = document.querySelector('#lgQ'); if (!q) return false; q.value = ''; q.dispatchEvent(new Event('input', { bubbles: true })); return true; })()` });
+    await sleep(600);
+
     /* 回归：设置页数据在飞行中时切走页面，迟到的绘制不得覆盖新视图。
        页面内把 /api/settings 延迟 800ms，稳定复现该竞态（不靠时序碰运气）。 */
     await send('Runtime.evaluate', { expression: `(() => { const of = window.fetch; window.__lgFetch = of; window.fetch = (u, o) => { const s = String((u && u.url) || u); if (s.includes('/api/settings')) return new Promise((r) => setTimeout(() => r(of(u, o)), 800)); return of(u, o); }; return true; })()` });
