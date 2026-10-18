@@ -168,11 +168,21 @@ start-local.cmd        # Windows：双击或命令行运行
 
 ```bash
 cd app
-node test/run.js                # 常规单元测试（含 API / 解析 / 存储）
+node test/run.js                # 常规单元测试（含 API / 解析 / 存储），438 项
+node test/db-sqlite.mjs         # SQLite 持久层：建表 / 迁移 / 落库往返 / 旧库作废重建，82 项
+node test/load.mjs              # 大数据量测试：2000 任务 + 1.2 万文件 + 20 万行日志（约 15s）
+                                #   LOAD_SCALE=2 放大一倍，=0.2 快速冒烟
 node test/update-manager.mjs   # 更新管理器单元测试（mock GitHub，离线）
 node test/update-git-flow.mjs  # 架构 B 容器更新链路集成测试（离线自建 git 场景，无 git 自动跳过）
 node test/check-docker.mjs     # Docker 打包自检（无需装 Docker）：Dockerfile/compose/.dockerignore 静态校验 + 容器形态冒烟 + 依赖校验（唯一第三方依赖 better-sqlite3）
+node test/e2e-ffmpeg.mjs       # 录制链路端到端（假 ffmpeg：分段 / 收尾 / 转封装 / 合并）
+node test/e2e-ui.mjs           # 真实浏览器端到端（需本机 Edge/Chrome，找不到会自动跳过）
 ```
+
+`test/load.mjs` 用「尽可能多的数据」压测上一轮的性能优化：上万文件下 `findFile` 逐个与
+旧线性扫描做黄金比对、20 万行日志的分页/过滤结果与暴力统计逐项核对、上千真实磁盘文件
+的扫描幂等性。小样本测不出这些问题——O(n²) 要几千条才肉痛，分页错位要跨页才暴露，
+索引失效要「写操作之后再读」才现形。
 
 ## 目录结构
 
