@@ -424,6 +424,8 @@ const DEFAULT_DICT = {
   "settings.recLogLevelLabel": "默认日志级别",
   "settings.recMergeOnStopDesc": "停止录制后自动把本场分段合并为一个文件",
   "settings.recMergeOnStopLabel": "停止时合并整场（mergeOnStop）",
+  "settings.recDeleteAfterMergeLabel": "合并后删除原始分段",
+  "settings.recDeleteAfterMergeDesc": "合并整场后自动删除原始 .ts 分段，仅保留整场文件（释放重复占用的空间）",
   "settings.recPlayConcurrencyHint": "同时最多 N 路 TS/FLV 转封装回放，超出返回 429；MP4 直放不受限",
   "settings.recPlayConcurrencyLabel": "并发回放上限",
   "settings.recReconnUnit": "次",

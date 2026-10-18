@@ -1476,12 +1476,110 @@ async function testMergeOnStopAndDeleteCount() {
   ok(merged3 === true, 'autoMerge=true & remuxToMp4=true → 仍触发合并（既有语义保留）');
 }
 
+// ============ 合并后自动删除原始分段（deleteAfterMerge，v0.1.39） ============
+async function testMergeDeleteSource() {
+  suite('合并后自动删除原始分段（deleteAfterMerge）');
+  const logger = { debug() {}, info() {}, warn() {}, error() {} };
+  const exists = async (pp) => !!(await fsp.stat(pp).catch(() => null));
+
+  // 不依赖真实 media/ffmpeg：FakeMedia 只把输出文件落盘，让 mergeSession 全流程跑通
+  const FakeMedia = {
+    buildConcatList(list) { return list.map((x) => `file '${x}'`).join('\n'); },
+    buildMergeArgs({ listFile, output }) { return ['-y', '-f', 'concat', '-i', listFile, '-c', 'copy', output]; },
+    buildRemuxArgs({ input, output }) { return ['-y', '-i', input, '-c', 'copy', output]; },
+    async runFfmpeg({ args }) {
+      const out = args[args.length - 1];
+      await fsp.mkdir(path.dirname(out), { recursive: true });
+      await fsp.writeFile(out, Buffer.alloc(2048));
+      return { code: 0 };
+    },
+    async probeJson() { return null; },
+  };
+
+  async function makeSession(store, id) {
+    const dir = p('merge-del', id, '抖音', '主播A', '2026-01-01');
+    await fsp.mkdir(dir, { recursive: true });
+    const a = path.join(dir, '2026-01-01_主播A_001.ts');
+    const b = path.join(dir, '2026-01-01_主播A_002.ts');
+    await fsp.writeFile(a, Buffer.alloc(4096, 1));
+    await fsp.writeFile(b, Buffer.alloc(4096, 2));
+    const session = {
+      id, taskId: 'task_' + id, platform: 'douyin', platformName: '抖音', streamer: '主播A',
+      title: '', roomId: 'r', startedAt: '2026-01-01T00:00:00Z', quality: '原画', durationSec: 10, status: 'completed',
+      segments: [
+        { id: id + '_seg1', sessionId: id, kind: 'segment', name: path.basename(a), path: a, relPath: 'a.ts', ext: 'ts', bytes: 4096, durationSec: 5, status: 'ok', segmentIndex: 1 },
+        { id: id + '_seg2', sessionId: id, kind: 'segment', name: path.basename(b), path: b, relPath: 'b.ts', ext: 'ts', bytes: 4096, durationSec: 5, status: 'ok', segmentIndex: 2 },
+      ],
+      extras: [], merged: null, mp4: null, bytes: 8192,
+    };
+    store.sessions.push(session);
+    await store.saveSession(session);
+    return session;
+  }
+
+  // Case A: deleteAfterMerge=true → 停止时自动合并后，原始散段被删，仅留整场
+  const storeA = await openStore(p('merge-del-a'));
+  await storeA.updateSettings({ deleteAfterMerge: true, remuxToMp4: false, mergeOnStop: true });
+  const sessA = await makeSession(storeA, 'A');
+  const pathsA = sessA.segments.map((s) => s.path);
+  const storageA = new Storage({ store: storeA, logger, mediaMod: FakeMedia });
+  await storageA.autoRemux(sessA);
+  ok(!(await exists(pathsA[0])) && !(await exists(pathsA[1])), 'deleteAfterMerge=true → 自动合并后原始散段已从磁盘删除');
+  ok(sessA.segments.length === 0, 'deleteAfterMerge=true → session.segments 清空');
+  ok(sessA.merged && (await exists(sessA.merged.path)), '合并产物 _整场.ts 存在');
+  ok(sessA.bytes < 8192 && sessA.bytes > 0, '合并后字节仅含整场成品（不再含原始散段）', String(sessA.bytes));
+
+  // Case B: deleteAfterMerge=false → 自动合并后保留原始散段
+  const storeB = await openStore(p('merge-del-b'));
+  await storeB.updateSettings({ deleteAfterMerge: false, remuxToMp4: false, mergeOnStop: true });
+  const sessB = await makeSession(storeB, 'B');
+  const pathsB = sessB.segments.map((s) => s.path);
+  const storageB = new Storage({ store: storeB, logger, mediaMod: FakeMedia });
+  await storageB.autoRemux(sessB);
+  ok((await exists(pathsB[0])) && (await exists(pathsB[1])), 'deleteAfterMerge=false → 原始散段保留在磁盘');
+  ok(sessB.segments.length === 2, 'deleteAfterMerge=false → session.segments 仍有 2 个');
+  ok(sessB.merged && (await exists(sessB.merged.path)), '合并产物 _整场.ts 仍存在（保留散段 + 整场）');
+
+  // Case C: 手动 mergeSession 不受 deleteAfterMerge 影响（保持非破坏性，用户自行决定去留）
+  const storeC = await openStore(p('merge-del-c'));
+  await storeC.updateSettings({ deleteAfterMerge: true, remuxToMp4: false, mergeOnStop: false });
+  const sessC = await makeSession(storeC, 'C');
+  const pathsC = sessC.segments.map((s) => s.path);
+  const storageC = new Storage({ store: storeC, logger, mediaMod: FakeMedia });
+  await storageC.mergeSession('C');
+  ok((await exists(pathsC[0])) && (await exists(pathsC[1])), '手动合并不删除原始分段（保持非破坏性）');
+  ok(sessC.segments.length === 2, '手动合并后 session.segments 仍保留');
+  ok(sessC.merged && (await exists(sessC.merged.path)), '手动合并产物存在');
+
+  // Case D: 合并失败时绝不删散段（散段是唯一副本，删了即数据丢失）
+  const storeD = await openStore(p('merge-del-d'));
+  await storeD.updateSettings({ deleteAfterMerge: true, remuxToMp4: false, mergeOnStop: true });
+  const sessD = await makeSession(storeD, 'D');
+  const pathsD = sessD.segments.map((s) => s.path);
+  const storageD = new Storage({ store: storeD, logger, mediaMod: FakeMedia });
+  storageD.mergeSession = async () => { throw new Error('ffmpeg exit=1'); };
+  await storageD.autoRemux(sessD);
+  ok((await exists(pathsD[0])) && (await exists(pathsD[1])), '合并失败 → 原始散段必须保留（绝不误删）');
+  ok(sessD.segments.length === 2, '合并失败 → session.segments 仍有 2 个');
+
+  // Case E: 合并产物缺失/为空时也不删散段（安全闸兜底）
+  const storeE = await openStore(p('merge-del-e'));
+  await storeE.updateSettings({ deleteAfterMerge: true, remuxToMp4: false, mergeOnStop: true });
+  const sessE = await makeSession(storeE, 'E');
+  const pathsE = sessE.segments.map((s) => s.path);
+  const storageE = new Storage({ store: storeE, logger, mediaMod: FakeMedia });
+  // 合并"成功"但产物文件不存在（模拟异常场景）
+  storageE.mergeSession = async () => { sessE.merged = { id: 'mz', path: p('merge-del-e', 'not-exist_整场.ts'), name: 'x_整场.ts', bytes: 0 }; return sessE.merged; };
+  await storageE.autoRemux(sessE);
+  ok((await exists(pathsE[0])) && (await exists(pathsE[1])), '合并产物缺失 → 原始散段必须保留（安全闸兜底）');
+}
+
 // ============ 主流程 ============
 (async () => {
   console.log(`LiveGrab 测试开始（临时目录 ${tmpRoot}）`);
   await rmrf(tmpRoot);
   await fsp.mkdir(tmpRoot, { recursive: true });
-  const suites = [testUtil, testNaming, testStore, testResolvers, testAuth, testRecordChain, testRemuxFollowGlobal, testPullBlockedBackoff, testConcurrentStart, testRepeatSessionNaming, testTodayStats, testQueue, testHttp, testViewGuards, testUpdateGuards, testProxy, testSegmentEndReason, testSegmentGuards, testFfmpegGuards, testFileScanGuards, testFileOrder, testRecorderLiveProxy, testAuditConsistency, testAuditRemainder, testDeadCodeRemainder, testMergeOnStopAndDeleteCount];
+  const suites = [testUtil, testNaming, testStore, testResolvers, testAuth, testRecordChain, testRemuxFollowGlobal, testPullBlockedBackoff, testConcurrentStart, testRepeatSessionNaming, testTodayStats, testQueue, testHttp, testViewGuards, testUpdateGuards, testProxy, testSegmentEndReason, testSegmentGuards, testFfmpegGuards, testFileScanGuards, testFileOrder, testRecorderLiveProxy, testAuditConsistency, testAuditRemainder, testDeadCodeRemainder, testMergeOnStopAndDeleteCount, testMergeDeleteSource];
   for (const s of suites) {
     try { await s(); } catch (e) {
       failed++;

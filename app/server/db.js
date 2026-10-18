@@ -34,6 +34,7 @@ CREATE TABLE IF NOT EXISTS settings (
   keep_source            INTEGER,
   auto_merge             INTEGER,
   merge_on_stop          INTEGER,
+  delete_after_merge     INTEGER,            -- 合并整场后是否删除原始 .ts 分段（v0.1.39）
   reconnect_max          INTEGER,
   poll_interval_sec      INTEGER,
   start_delay_sec        INTEGER,
@@ -379,6 +380,7 @@ export function openDb(dbPath, onLog = null) {
     if (!fileCols.includes('end_reason')) db.exec('ALTER TABLE files ADD COLUMN end_reason TEXT');
     const setCols = db.prepare("SELECT name FROM pragma_table_info('settings')").all().map((c) => c.name);
     if (!setCols.includes('default_monitor_only')) db.exec('ALTER TABLE settings ADD COLUMN default_monitor_only INTEGER');
+    if (!setCols.includes('delete_after_merge')) db.exec('ALTER TABLE settings ADD COLUMN delete_after_merge INTEGER');
     const ntCols = db.prepare("SELECT name FROM pragma_table_info('notify')").all().map((c) => c.name);
     if (!ntCols.includes('on_live')) db.exec('ALTER TABLE notify ADD COLUMN on_live INTEGER');
     if (!ntCols.includes('dedupe')) db.exec('ALTER TABLE notify ADD COLUMN dedupe INTEGER');

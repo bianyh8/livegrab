@@ -638,7 +638,12 @@ export class Storage {
     // 停止时合并整场：mergeOnStop 打开，或（autoMerge 打开且要转 MP4）时，先合并再（按需）转
     if (segs.length > 1 && (this.store.settings.mergeOnStop
       || (this.store.settings.autoMerge && this.store.settings.remuxToMp4))) {
-      await this.mergeSession(session.id).catch((e) => this.logger.warn(`停止时合并失败：${errText(e)}`));
+      const mergedItem = await this.mergeSession(session.id)
+        .catch((e) => { this.logger.warn(`停止时合并失败：${errText(e)}`); return null; });
+      // 仅合并成功才清理原始散段（合并失败时散段是唯一副本，绝不能删）
+      if (mergedItem) {
+        await this._consolidateAfterMerge(session).catch((e) => this.logger.warn(`合并后清理原始分段失败：${errText(e)}`));
+      }
       return [];
     }
     if (!this.store.settings.remuxToMp4) return [];
@@ -696,6 +701,28 @@ export class Storage {
     this.logger.info(`转封装后已删除源文件：${seg.name}`, { taskId: session.taskId, taskName: session.streamer });
     session.segments = (session.segments || []).filter((x) => x.id !== seg.id);
     await this._recalcSession(session); // 口径含 extras/merged/mp4，删源后不再归零，并同步任务总量
+  }
+
+  /** 合并整场后，按 deleteAfterMerge 删除原始散段（保留 merged/extras 整场成品）。
+   *  合并的本意就是把散段拼成一个整场，散段因此成为冗余——默认删除以释放重复占用的空间。
+   *  仅「停止时自动合并」路径调用；手动合并（mergeSession 本身）不删，保持非破坏性。 */
+  async _consolidateAfterMerge(session) {
+    if (!this.store.settings.deleteAfterMerge) return;
+    const segs = (session.segments || []).filter((f) => f.status !== 'missing');
+    if (!segs.length) return;
+    // 安全闸：整场成品必须真实存在且非空，否则绝不删散段（此时散段是唯一副本）
+    const mergedPath = session.merged && session.merged.path;
+    const mst = mergedPath ? await fsp.stat(mergedPath).catch(() => null) : null;
+    if (!mst || mst.size <= 0) {
+      this.logger.warn('合并产物不存在或为空，跳过删除原始分段（保留散段）');
+      return;
+    }
+    for (const f of segs) {
+      await fsp.rm(f.path, { force: true }).catch(() => {});
+      this.logger.info(`合并后删除原始分段：${f.name}`, { taskId: session.taskId, taskName: session.streamer });
+    }
+    session.segments = [];
+    await this._recalcSession(session); // 字节/时长仅含整场成品（merged/extras/mp4），并同步任务总量
   }
 
   // ---------- 刮削：录制收尾时一次生成海报 + Jellyfin .nfo，之后接口/Jellyfin 只读取 ----------

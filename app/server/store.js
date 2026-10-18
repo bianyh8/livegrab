@@ -22,6 +22,7 @@ export const DEFAULT_SETTINGS = {
   keepSource: true,
   autoMerge: false,
   mergeOnStop: false,
+  deleteAfterMerge: true,
   reconnectMax: 5,
   pollIntervalSec: 60,
   startDelaySec: 5,
@@ -91,7 +92,7 @@ const FILE_COLS = [
 ];
 const SETTINGS_COLS = [
   'max_concurrency', 'default_quality', 'quality_fallback', 'default_segment_mode', 'default_segment_minutes',
-  'default_segment_size_mb', 'record_container', 'remux_to_mp4', 'keep_source', 'auto_merge', 'merge_on_stop',
+  'default_segment_size_mb', 'record_container', 'remux_to_mp4', 'keep_source',   'auto_merge', 'merge_on_stop', 'delete_after_merge',
   'reconnect_max', 'poll_interval_sec', 'start_delay_sec', 'stop_delay_sec', 'disk_limit_gb', 'retention_days',
   'delete_to_trash', 'trash_retention_days', 'log_retention_days', 'log_level', 'play_concurrency', 'proxy', 'user_agent',
   'default_monitor_only',
@@ -316,6 +317,7 @@ function settingsFromRow(r) {
     defaultSegmentMode: r.default_segment_mode, defaultSegmentMinutes: r.default_segment_minutes,
     defaultSegmentSizeMB: r.default_segment_size_mb, recordContainer: r.record_container,
     remuxToMp4: !!r.remux_to_mp4, keepSource: !!r.keep_source, autoMerge: !!r.auto_merge, mergeOnStop: !!r.merge_on_stop,
+    deleteAfterMerge: r.delete_after_merge == null ? true : !!r.delete_after_merge,
     reconnectMax: r.reconnect_max, pollIntervalSec: r.poll_interval_sec,
     startDelaySec: r.start_delay_sec, stopDelaySec: r.stop_delay_sec,
     diskLimitGB: r.disk_limit_gb, retentionDays: r.retention_days,
@@ -666,7 +668,7 @@ export class Store {
       default_segment_mode: strOrNull(s.defaultSegmentMode), default_segment_minutes: numOrNull(s.defaultSegmentMinutes),
       default_segment_size_mb: numOrNull(s.defaultSegmentSizeMB), record_container: strOrNull(s.recordContainer),
       remux_to_mp4: boolish(s.remuxToMp4), keep_source: boolish(s.keepSource), auto_merge: boolish(s.autoMerge),
-      merge_on_stop: boolish(s.mergeOnStop), reconnect_max: numOrNull(s.reconnectMax),
+      merge_on_stop: boolish(s.mergeOnStop), delete_after_merge: boolish(s.deleteAfterMerge), reconnect_max: numOrNull(s.reconnectMax),
       poll_interval_sec: numOrNull(s.pollIntervalSec), start_delay_sec: numOrNull(s.startDelaySec),
       stop_delay_sec: numOrNull(s.stopDelaySec), disk_limit_gb: numOrNull(s.diskLimitGB),
       retention_days: numOrNull(s.retentionDays), delete_to_trash: boolish(s.deleteToTrash),

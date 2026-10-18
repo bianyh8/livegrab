@@ -69,6 +69,7 @@ export async function render(root, ctx, kit) {
           <div class="sw-row"><div><div class="t">${t('settings.recKeepSourceLabel')}</div><div class="d">${t('settings.recKeepSourceDesc')}</div></div><div class="spacer"></div>${switchEl(s.keepSource !== false, 'id="setKeep"')}</div>
           <div class="sw-row"><div><div class="t">${t('settings.recAutoMergeLabel')}</div><div class="d">${t('settings.recAutoMergeDesc')}</div></div><div class="spacer"></div>${switchEl(!!s.autoMerge, 'id="setAutoMerge"')}</div>
           <div class="sw-row"><div><div class="t">${t('settings.recMergeOnStopLabel')}</div><div class="d">${t('settings.recMergeOnStopDesc')}</div></div><div class="spacer"></div>${switchEl(!!s.mergeOnStop, 'id="setMergeOnStop"')}</div>
+          <div class="sw-row"><div><div class="t">${t('settings.recDeleteAfterMergeLabel')}</div><div class="d">${t('settings.recDeleteAfterMergeDesc')}</div></div><div class="spacer"></div>${switchEl(s.deleteAfterMerge !== false, 'id="setDeleteAfterMerge"')}</div>
           <div class="sw-row"><div><div class="t">${t('settings.recDefaultMonitorLabel')}</div><div class="d">${t('settings.recDefaultMonitorDesc')}</div></div><div class="spacer"></div>${switchEl(!!read(kit.state, 'defaultMonitorOnly', false), 'id="setDefaultMonitor"')}</div>
           <div class="sw-row"><div><div class="t">${t('settings.recReconnectLabel')}</div><div class="d">${t('settings.recReconnectDesc')}</div></div><div class="spacer"></div>
             <div class="row" style="align-items:center;gap:8px">
@@ -105,6 +106,7 @@ export async function render(root, ctx, kit) {
     else if (id === 'setKeep') kit.set('keepSource', on);
     else if (id === 'setAutoMerge') kit.set('autoMerge', on);
     else if (id === 'setMergeOnStop') kit.set('mergeOnStop', on);
+    else if (id === 'setDeleteAfterMerge') kit.set('deleteAfterMerge', on);
     else if (id === 'setDefaultMonitor') kit.set('defaultMonitorOnly', on);
   });
 }
