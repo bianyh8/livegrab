@@ -36,11 +36,13 @@ function inferStreamer(relDir) {
   return parts[1] || '';
 }
 
-/** 旧命名 YYYY-MM-DD[-HH[-MM[-SS]]] 前缀 → 开始时间（UTC）；解析失败回退文件时间 */
+/** 旧命名 YYYY-MM-DD[-HH[-MM[-SS]]] 前缀 → 开始时间；解析失败回退文件时间。
+ *  文件名里的时间戳是「本地时间」（录制目录按本地时区命名），必须用本地时区构造再转 ISO——
+ *  曾用 Date.UTC 解析，东八区存出的 ISO 比真实录制时间早 8 小时，前端本地化显示会变成次日凌晨。 */
 function inferStartedAt(name, fallback) {
   const m = String(name || '').match(/(\d{4})-(\d{2})-(\d{2})(?:[-_ ](\d{2}))?(?:[-_ ](\d{2}))?(?:[-_ ](\d{2}))?/);
   if (m) {
-    const d = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3], +(m[4] || 0), +(m[5] || 0), +(m[6] || 0)));
+    const d = new Date(+m[1], +m[2] - 1, +m[3], +(m[4] || 0), +(m[5] || 0), +(m[6] || 0));
     if (!Number.isNaN(d.getTime())) return d.toISOString();
   }
   return fallback || nowIso();
@@ -246,7 +248,11 @@ export class Storage {
         await this.store.removeSession(s.id).catch(() => {});
         duplicateOrphans++;
         this.logger.info(`清理重复注册的独立场次：${s.id}（文件已被录制场次认领）`);
+        continue;
       }
+      // 存量校准：taskId=null 的场次（扫描注册/收编失败的产物场次）时间可能差 8 小时（旧 Date.UTC 解析 bug）、
+      // 时长恒 0。按文件名重新推断 startedAt（文件名为本地时间戳），并对视频补一次 ffprobe 时长。
+      await this._healOrphanSession(s);
     }
     // 清理"幽灵未登记条目"：① 文件已从磁盘消失；② 该路径已归属某个场次
     // （转封装/合并产物可能先被一次扫描当成"未登记"，随后又被登记为场次产物，旧条目若不清理会永久挂在文件库）
@@ -269,6 +275,33 @@ export class Storage {
       this.logger.debug(`扫描完成：无变化（共 ${found.length} 个媒体文件）`);
     }
     return { added, updated, missing, unregistered: this.store.state.external.length, cleaned, total: found.length };
+  }
+
+  /** 独立场次校准：startedAt 按文件名重新推断（覆盖旧 UTC 解析的 8 小时偏差）；durationSec=0 时用 ffprobe 补真实时长 */
+  async _healOrphanSession(s) {
+    let changed = false;
+    const file = [...(s.segments || []), ...(s.extras || []), s.merged, s.mp4].find((f) => f && f.path);
+    if (file) {
+      const inferred = inferStartedAt(path.basename(file.path), '');
+      if (inferred && inferred !== s.startedAt) {
+        s.startedAt = inferred;
+        changed = true;
+      }
+      if (!s.durationSec && /\.(mp4|m4a|ts|flv|mkv|mov)$/i.test(file.path)) {
+        try {
+          const info = await this.media.probeJson(file.path);
+          if (info && Number(info.durationSec) > 0) {
+            file.durationSec = Number(info.durationSec);
+            s.durationSec = Number(info.durationSec);
+            changed = true;
+          }
+        } catch { /* 保持 0 */ }
+      }
+    }
+    if (changed) {
+      await this.store.saveSession(s).catch(() => {});
+      this.logger.info(`独立场次校准（${s.id}）：startedAt=${s.startedAt} durationSec=${s.durationSec}`);
+    }
   }
 
   /** 同一路径已归属场次时，清掉此前误登记为"未登记"的条目 */

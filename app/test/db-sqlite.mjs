@@ -159,7 +159,8 @@ check('每个外部文件生成独立场次', !!sx1 && !!sx2 && store2.sessions.
 check('平台/主播由路径推断（抖音）', sx1.platform === 'douyin' && sx1.platformName === '抖音' && sx1.streamer === '测试主播');
 check('平台/主播由路径推断（哔哩哔哩）', sx2.platform === 'bilibili' && sx2.platformName === '哔哩哔哩' && sx2.streamer === '央视网快看');
 check('标题取文件名', sx1.title === '2026-03-01-12-30-00-001');
-check('开始时间由文件名推断', sx1.startedAt === '2026-03-01T12:30:00.000Z' && sx2.startedAt === '2026-02-10T08:00:00.000Z');
+const localIso = (y, mo, d, h, mi, s) => new Date(y, mo - 1, d, h, mi, s).toISOString(); // 文件名时间戳是本地时间
+check('开始时间由文件名推断', sx1.startedAt === localIso(2026, 3, 1, 12, 30, 0) && sx2.startedAt === localIso(2026, 2, 10, 8, 0, 0));
 check('文件行原地升级为 segment（复用原 id，path 无冲突）', db2.prepare("SELECT kind k, session_id s FROM files WHERE id='fx1'").get().k === 'segment'
   && db2.prepare("SELECT session_id s FROM files WHERE id='fx1'").get().s === sx1.id);
 check('场次 platform 落库', db2.prepare('SELECT platform p FROM sessions WHERE id = ?').get(sx1.id).p === 'douyin');
@@ -173,7 +174,7 @@ const sa = store2.sessions.find((s) => s.segments[0]?.path === autoPath);
 check('scan 自动注册未登记文件为场次', !!sa && scanRes.added === 1);
 check('scan 自动注册后未登记区清空（含幽灵条目）', store2.external.length === 0);
 check('自动注册按路径/文件名推断平台·主播·时间', sa.platform === 'huya' && sa.platformName === '虎牙'
-  && sa.streamer === '某主播' && sa.startedAt === '2026-04-05T09:30:00.000Z');
+  && sa.streamer === '某主播' && sa.startedAt === localIso(2026, 4, 5, 9, 30, 0));
 check('自动注册场次落库（platform=huya）', db2.prepare('SELECT platform p FROM sessions WHERE id = ?').get(sa.id).p === 'huya');
 check('自动注册文件行 kind=segment 且归属该场次', db2.prepare('SELECT kind k, session_id s FROM files WHERE path = ?').get(autoPath).s === sa.id);
 db2.close();
@@ -215,6 +216,23 @@ store3.state.sessions.push(orphanS2);
 store3._invalidateIndex?.();
 const dropped = await storage3._dropOrphanSessionByPath(dupPath);
 check('_dropOrphanSessionByPath 让位独立场次', dropped === 1 && !store3.sessions.some((s) => s.id === 's_orphan2'));
+// 独立场次校准：存量 startedAt 用旧 Date.UTC 解析差 8 小时，scan 应按文件名（本地时间）修正
+const healS = baseSession('s_heal', null, 'fh1');
+healS.startedAt = new Date(Date.UTC(2026, 4, 20, 18, 0, 0)).toISOString(); // 旧 bug：文件名 18:00 被 Date.UTC 解析存成 18:00Z（本地 18:00 应为 10:00Z）
+const healPath = path.join(tmp, '抖音', '测试主播', '2026-05-20-18-00-00-001.mp4');
+fs.writeFileSync(healPath, 'h'.repeat(16));
+healS.segments[0].path = healPath;
+healS.segments[0].relPath = '抖音/测试主播/2026-05-20-18-00-00-001.mp4';
+healS.segments[0].name = '2026-05-20-18-00-00-001.mp4';
+healS.dir = path.dirname(healPath);
+healS.durationSec = 0;
+store3.state.sessions.push(healS);
+store3._invalidateIndex?.();
+const storage3b = new Storage({ store: store3, logger: { info() {}, warn() {}, error() {} } });
+storage3b.activePathsFn = () => [];
+await storage3b.scan();
+const healAfter = store3.sessions.find((s) => s.id === 's_heal');
+check('独立场次校准：startedAt 按文件名本地时间修正', !!healAfter && healAfter.startedAt === localIso(2026, 5, 20, 18, 0, 0));
 db3.close();
 
 // ---------- 老库升级：notify 表缺 on_live/dedupe 列（v0.1.36 迁移 bug：开播通知被静默关闭） ----------
