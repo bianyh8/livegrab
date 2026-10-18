@@ -102,12 +102,17 @@ function paint(root, st) {
       ? `<span class="chip wait"><i class="dot"></i>${t('settings.upAvailable')}</span>`
       : `<span class="chip on"><i class="dot"></i>${t('common.completed')}</span>`;
 
+  // 判据是 commit：会出现「两边版本号相同、只有提交不同」的情况，
+  // 这种情况下把短提交号带进提示，否则「v0.1.43 → v0.1.43 有更新」看着像没变化。
+  const sameVer = !!(local.version && latest.version && local.version === latest.version);
+  const newLabel = (hasUpdate && sameVer && latest.commit) ? `${latestVer} · ${latest.commit}` : latestVer;
+
   const tip = remoteUnavailable
     ? (st.authHint === 'private-repo-needs-token'
       ? `<span style="color:var(--txt-3);font-size:12.5px">${t('settings.upPrivateRepoHint')}</span>`
       : `<span style="color:var(--txt-3);font-size:12.5px">${t('settings.upRemoteUnavailable')}</span>`)
     : hasUpdate
-      ? `<span style="color:var(--txt-3);font-size:12.5px">${t('settings.upNewTip', '<b style="color:var(--warn)">' + esc(latestVer) + '</b>')}</span>`
+      ? `<span style="color:var(--txt-3);font-size:12.5px">${t('settings.upNewTip', '<b style="color:var(--warn)">' + esc(newLabel) + '</b>')}</span>`
       : `<span style="color:var(--txt-3);font-size:12.5px">${t('settings.upUpToDate')}</span>`;
 
   const applyDisabled = running || remoteUnavailable || !hasUpdate;

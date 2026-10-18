@@ -450,7 +450,7 @@ console.log('== R. tar.gz 解析与落地（零依赖快照通道的底座） ==
   }
 }
 
-console.log('== S. 容器归档通道：版本只升不降 → 下载 → 解包 → 切换 → 重启（全程不需要 git） ==');
+console.log('== S. 容器归档通道：按 commit 比对 → 下载该提交 → 解包 → 切换 → 重启（全程不需要 git） ==');
 {
   const tarOk = await runCmd('tar', ['--version']);
   if (!tarOk.ok) {
@@ -480,20 +480,23 @@ console.log('== S. 容器归档通道：版本只升不降 → 下载 → 解包
     const good = await packArchive('0.2.0', '0.2.0');
     const badTar = await packArchive('0.3.0', '0.3.0', { withServer: false });
 
-    // 远端版本可切换的 mock：tags/归档内容都由变量控制，便于测「降级/坏包/同版本」
+    // 远端版本可切换的 mock：tags/commit/归档内容都由变量控制，便于测「同提交/异提交/降级/坏包」
     let remoteTag = 'v0.2.0';
+    let remoteSha = 'deadbeef0001';
     let archiveBody = good;
     let archiveHits = 0;
+    let lastArchiveUrl = '';
     global.fetch = async (url) => {
       const u = String(url);
       const json = (o, s = 200) => ({ ok: s < 400, status: s, json: async () => o, text: async () => JSON.stringify(o), arrayBuffer: async () => Buffer.from('{}') });
       if (u.includes('codeload.github.com')) {
         archiveHits += 1;
+        lastArchiveUrl = u;
         return { ok: true, status: 200, arrayBuffer: async () => archiveBody.buffer.slice(archiveBody.byteOffset, archiveBody.byteOffset + archiveBody.byteLength) };
       }
       if (u.includes('/releases/latest')) return json({ tag_name: remoteTag, published_at: '2026-10-01T00:00:00Z', body: '' });
       if (u.includes('/tags')) return json([{ name: remoteTag }, { name: 'v0.1.0' }]);
-      if (u.includes('/commits/')) return json({ sha: 'deadbeef0001', commit: { message: 'feat: x', committer: { date: '2026-10-01T00:00:00Z' } } });
+      if (u.includes('/commits/')) return json({ sha: remoteSha, commit: { message: 'feat: x', committer: { date: '2026-10-01T00:00:00Z' } } });
       return json({ message: 'Not Found' }, 404);
     };
 
@@ -511,13 +514,44 @@ console.log('== S. 容器归档通道：版本只升不降 → 下载 → 解包
     check(loc0.version === '0.1.0', '未更新过时本地版本取自镜像 package.json', loc0.version);
     check(m.status().canSelfUpdate === true, '容器内 canSelfUpdate=true（页面据此显示自动重启提示）');
 
-    // ① 版本相同：一次归档都不下载
-    m.state.local = { version: '0.2.0', commit: '', branch: 'main', commitAt: null, tag: 'v0.2.0' };
+    // ① 同一提交：一次归档都不下载（即使标签版本看着更高也不算更新）
+    m.state.local = { version: '0.2.0', commit: 'deadbeef0001', branch: 'main', commitAt: null, tag: 'v0.2.0' };
     await m.apply();
     await new Promise((r) => setTimeout(r, 600));
-    check(archiveHits === 0, '远端版本不高于本地时完全不下载归档', `hits=${archiveHits}`);
-    check(m.state.log.some((l) => /已是最新版本/.test(l.msg)), '日志写明「已是最新版本」', m.state.log.map((l) => l.msg).slice(-2).join(' | '));
+    check(archiveHits === 0, 'commit 相同（哪怕标签更高）→ 完全不下载归档', `hits=${archiveHits}`);
+    check(m.state.log.some((l) => /已是最新代码/.test(l.msg)), '日志写明「已是最新代码」', m.state.log.map((l) => l.msg).slice(-2).join(' | '));
     check(restarted === null, '未更新时不重启');
+
+    // ①-b 版本号相同、提交不同 → 判定为有更新（这是本次改动的核心）
+    {
+      const mm = mk(imgApp);
+      mm.state.env = { mode: 'archive', srcRoot, inContainer: true };
+      mm.state.local = { version: '0.2.0', commit: 'aaaabbbbcccc', branch: 'main', commitAt: null, tag: 'v0.2.0' };
+      mm.state.latest = { unavailable: false, version: '0.2.0', tag: 'v0.2.0', commit: 'deadbeef0001', commitFull: 'deadbeef0001' };
+      check(mm.status().hasUpdate === true, '同版本号但提交不同 → hasUpdate=true', JSON.stringify(mm.status().hasUpdate));
+      mm.state.latest = { unavailable: false, version: '0.2.0', tag: 'v0.2.0', commit: 'aaaabbbbcccc' };
+      check(mm.status().hasUpdate === false, '同版本号且提交相同 → hasUpdate=false');
+      // 远端标签版本更高、但提交相同（标签挪到了同一提交）：不算更新
+      mm.state.latest = { unavailable: false, version: '0.3.0', tag: 'v0.3.0', commit: 'aaaabbbbcccc' };
+      check(mm.status().hasUpdate === false, '标签更高但提交相同 → 不算更新（只认 commit）');
+      // 不降级：远端提交时间早于本地（远端被 reset 回旧提交）→ 不更新
+      mm.state.local = { version: '0.5.0', commit: 'aaaabbbbcccc', branch: 'main', tag: 'v0.5.0', commitDate: '2026-10-10T00:00:00Z' };
+      mm.state.latest = { unavailable: false, version: '0.3.0', tag: 'v0.3.0', commit: 'ffffffffffff', commitAt: '2026-09-01T00:00:00Z' };
+      check(mm.status().hasUpdate === false, '远端提交时间更早 → 不更新（不降级）');
+      // 版本号不参与判定：远端提交更新但版本号更低，仍然要更新
+      mm.state.latest = { unavailable: false, version: '0.4.0', tag: 'v0.4.0', commit: 'ffffffffffff', commitAt: '2026-10-12T00:00:00Z' };
+      check(mm.status().hasUpdate === true, '远端提交更新（哪怕版本号更低）→ 有更新');
+      // 本地没有 commit 记录（镜像未传 BUILD_COMMIT）：按有更新处理，点一次即锚定
+      mm.state.local = { version: '0.2.0', commit: '', branch: 'main', tag: 'v0.2.0' };
+      mm.state.latest = { unavailable: false, version: '0.2.0', tag: 'v0.2.0', commit: 'deadbeef0001' };
+      check(mm.status().hasUpdate === true, '本地无 commit 记录 → 按有更新处理（更新后可精确比对）');
+      // 远端拿不到 commit（API 异常）：退回版本号比较
+      mm.state.local = { version: '0.2.0', commit: 'aaaabbbbcccc', branch: 'main', tag: 'v0.2.0' };
+      mm.state.latest = { unavailable: false, version: '0.2.0', tag: 'v0.2.0', commit: '' };
+      check(mm.status().hasUpdate === false, '远端无 commit → 退回版本号，相同即不更新');
+      mm.state.latest = { unavailable: false, version: '0.2.1', tag: 'v0.2.1', commit: '' };
+      check(mm.status().hasUpdate === true, '远端无 commit 但版本更高 → 有更新');
+    }
 
     // ② 正常更新 0.1.0 → 0.2.0
     m.state.local = null;
@@ -525,21 +559,35 @@ console.log('== S. 容器归档通道：版本只升不降 → 下载 → 解包
     await m.localInfo();
     await m.apply();
     await new Promise((r) => setTimeout(r, 2000));
-    check(archiveHits === 1, '远端更高时只下载一次归档', `hits=${archiveHits}`);
+    check(archiveHits === 1, '提交不同 → 下载一次归档', `hits=${archiveHits}`);
+    check(/\/tar\.gz\/deadbeef0001$/.test(lastArchiveUrl) && !/refs\/tags/.test(lastArchiveUrl),
+      '归档按 commit 取（不是按标签）', lastArchiveUrl);
     check(fsExists(path.join(srcRoot, 'app', 'server', 'server.js')), '新版本落位到 <src>/app');
     check(readFileSync(path.join(srcRoot, 'app', 'server', 'server.js'), 'utf8').includes('0.2.0'), '落位的是归档里的新代码');
     check(fsExists(path.join(srcRoot, 'app', 'node_modules', 'better-sqlite3')), '依赖复用镜像基线（软链或复制）');
     const marker = JSON.parse(readFileSync(path.join(srcRoot, 'app', '.livegrab-version.json'), 'utf8'));
     check(marker.version === '0.2.0' && marker.tag === 'v0.2.0', '写出版本标记（容器内无 .git 时的版本来源）', JSON.stringify(marker));
+    check(marker.commit === 'deadbeef0001' && marker.commitFull === 'deadbeef0001',
+      '标记记录本次下载的 commit（下次据此精确比对）', JSON.stringify(marker));
+    check(marker.commitAt === '2026-10-01T00:00:00Z', '标记记录该提交的时间（用于「不降级」保护）', String(marker.commitAt));
     check(!fsExists(path.join(srcRoot, '.update-stage')), '暂存目录已清理');
     check(!!restarted && restarted.cwd === path.join(srcRoot, 'app'), '重启钩子拿到新目录作为 cwd', JSON.stringify(restarted));
     const m2 = mk(path.join(srcRoot, 'app'));
     const loc2 = await m2.localInfo();
     check(loc2.version === '0.2.0' && loc2.tag === 'v0.2.0', '重启后版本读自标记文件', `${loc2.version}/${loc2.tag}`);
+    check(loc2.commit === 'deadbeef0001', '重启后 commit 读自标记文件', String(loc2.commit));
+    check(Date.parse(loc2.commitDate) === Date.parse('2026-10-01T00:00:00Z'), '重启后「提交时间」读自标记（不是落位时间）', String(loc2.commitDate));
+
+    // ②-b 幂等：刚更新到该提交，再点一次不再下载
+    m2.state.checkedAt = 0;
+    await m2.apply();
+    await new Promise((r) => setTimeout(r, 800));
+    check(archiveHits === 1, '同一提交再点更新不重复下载（幂等）', `hits=${archiveHits}`);
 
     // ③ 坏归档（缺 server.js）：放弃本次更新，正在运行的版本不受影响
     const before = readFileSync(path.join(srcRoot, 'app', 'server', 'server.js'), 'utf8');
     remoteTag = 'v0.3.0';
+    remoteSha = 'cafebabe0002';
     archiveBody = badTar;
     const m3 = mk(path.join(srcRoot, 'app'));
     await m3.detectEnv();
@@ -547,6 +595,8 @@ console.log('== S. 容器归档通道：版本只升不降 → 下载 → 解包
     await m3.apply();
     await new Promise((r) => setTimeout(r, 2000));
     check(readFileSync(path.join(srcRoot, 'app', 'server', 'server.js'), 'utf8') === before, '坏归档不会破坏正在运行的版本');
+    const markerAfter = JSON.parse(readFileSync(path.join(srcRoot, 'app', '.livegrab-version.json'), 'utf8'));
+    check(markerAfter.commit === 'deadbeef0001', '失败后版本标记未变（下次仍会重试该提交）', JSON.stringify(markerAfter));
     check(m3.status().phase === 'error', '失败进入 error 状态（页面显示「重试更新」）', m3.status().phase);
     check(m3.state.log.some((l) => /归档结构异常/.test(l.msg)), '日志给出失败原因', m3.state.log.map((l) => l.msg).slice(-2).join(' | '));
     check(!fsExists(path.join(srcRoot, '.update-stage')), '失败后暂存目录也被清理');

@@ -23,6 +23,8 @@ evt() { printf '%s %s\n' "$1" "$2" >> "$EVT_FILE" 2>/dev/null || true; }
 
 # 读 package.json 的版本号（镜像里一定有 node）
 pkgver() { node -e 'try{process.stdout.write(String(require(process.argv[1]).version||""))}catch(e){}' "$1/package.json" 2>/dev/null || true; }
+# 读 JSON 里的某个字符串字段（容器里没 jq，用 node；读不到就输出空）
+jsonfield() { node -e 'try{process.stdout.write(String(require(process.argv[1])[process.argv[2]]||""))}catch(e){}' "$1" "$2" 2>/dev/null || true; }
 # 语义化版本比较：a>b 输出 1，a<b 输出 -1，相等输出 0
 vercmp() {
   node -e 'const v=(s)=>String(s||"").replace(/^v/i,"").split(".").map((x)=>parseInt(x,10)||0);
@@ -50,6 +52,15 @@ if [ -f "$SRC/app/server/server.js" ]; then
   else
     log "使用持久化代码目录：$APP_DIR（页面「立即更新」落位的新版本 v${SRC_VER:-?}）"
     evt INFO "使用持久化代码目录 $APP_DIR（v${SRC_VER:-?}，跨容器重建保留）"
+    # 判据是 commit：版本号相同也可能不是同一份代码。镜像与落位代码的提交不一致时
+    # 如实说一句当前跑的是哪个，避免「重建了镜像却还是旧代码」的困惑（不擅自改选目录：
+    # 落位代码是用户点过更新的结果，贸然切回镜像反而可能把线上打回旧提交）。
+    IMG_SHA=$(jsonfield "$IMAGE_APP/.build-info.json" commit)
+    SRC_SHA=$(jsonfield "$SRC/app/.livegrab-version.json" commit)
+    if [ -n "$IMG_SHA" ] && [ -n "$SRC_SHA" ] && [ "$IMG_SHA" != "$SRC_SHA" ]; then
+      log "注意：镜像提交 $(printf %.8s "$IMG_SHA") 与落位代码 $(printf %.8s "$SRC_SHA") 不同，本次运行落位代码"
+      evt WARN "镜像提交 $(printf %.8s "$IMG_SHA") 与落位代码 $(printf %.8s "$SRC_SHA") 不一致，本次运行落位代码；要切到远端最新请点「立即更新」"
+    fi
   fi
 elif [ -e "$SRC/app" ]; then
   log "代码目录不完整（$SRC/app 缺少 server/server.js），回退镜像内置代码 $IMAGE_APP"

@@ -20,7 +20,7 @@ FROM node:22-bookworm-slim
 
 # 版本号由构建参数注入（compose 里从 .env 的 APP_VERSION 传），避免与 app/package.json
 # 长期漂移——此前这里写死 "0.1.35"，早已落后实际版本，镜像元数据因此不准。
-ARG APP_VERSION=0.1.43
+ARG APP_VERSION=0.1.44
 
 LABEL org.opencontainers.image.title="LiveGrab 直播录制台" \
       org.opencontainers.image.description="抖音/B站/快手/虎牙/斗鱼/小红书/微博 直播分段录制，带 Web 管理页面" \
@@ -34,7 +34,7 @@ ENV NODE_ENV=production \
     LANG=C.UTF-8
 
 # ffmpeg 是唯一的外部依赖（录制/转封装/合并/回放全靠它）。git 只留给排障时手工查看
-# ${CONFIG_DIR}/src 下的历史，在线更新已改为「下载 GitHub 标签归档」，不再需要 git。
+# ${CONFIG_DIR}/src 下的历史，在线更新已改为「按 commit 下载 GitHub 源码归档」，不再需要 git。
 # 运行时也必须保留编译工具链（python3/make/g++）：唯一运行时依赖 better-sqlite3 是原生模块，
 # 新版本若变更依赖声明，容器内更新需要现场编译；缺工具链会让更新失败（服务仍在跑旧版本）。
 RUN apt-get update \
@@ -56,8 +56,9 @@ COPY README.md ./README.md
 COPY app/package.json ./package.json
 
 # 构建时注入 commit（由 docker compose 的 build.args 传入，手动构建时 --build-arg BUILD_COMMIT=xxx），
-# 写入 .build-info.json，供「系统更新」在容器内（无 .git）精确比对自身代码版本，避免误报更新。
-# 未传入则 commit 为空，更新检测回退到版本号比对（此时 package.json 的 version 必须准确）。
+# 写入 .build-info.json。容器里没有 .git，更新判定就是「远端 HEAD 的 commit vs 本地记录的 commit」，
+# 传了才能从第一次点「立即更新」起就精确；没传则第一次按「有更新」处理一次，落位后即以 sha 精确比对
+# （见 update.js 的 _computeHasUpdate）。
 ARG BUILD_COMMIT=""
 RUN VER=$(node -p "require('./package.json').version") \
  && echo "{\"version\":\"${VER}\",\"commit\":\"${BUILD_COMMIT}\",\"builtAt\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}" > /app/.build-info.json

@@ -107,8 +107,9 @@ check(!/\bgit\s+(?:-c\s+\S+\s+)?clone\b/.test(entrySrc), '入口脚本不 clone 
 check(!/\bnpm\s+(?:install|ci)\b/.test(entrySrc), '入口脚本不装依赖（依赖由镜像内置基线提供）');
 check(!/HTTP_PROXY|HTTPS_PROXY|ALL_PROXY|LIVEGRAB_PROXY|npm_config_proxy/.test(entrySrc), '入口脚本不读写任何代理变量');
 check(/\$SRC\/app\/server\/server\.js/.test(entrySrc) && /IMAGE_APP/.test(entrySrc), '入口脚本按「更新落位目录优先、否则镜像代码」选目录');
-/* 更新通道：下载 GitHub 标签归档 + 原地切换，全程不需要 git */
-check(/codeload\.github\.com/.test(serverSrc) && /refs\/tags/.test(serverSrc), '更新链路下载标签归档（不依赖 git）');
+/* 更新通道：按 commit 下载 GitHub 归档 + 原地切换，全程不需要 git */
+check(/codeload\.github\.com/.test(serverSrc) && /_commitArchiveUrl/.test(serverSrc), '更新链路按 commit 下载源码归档（不依赖 git）');
+check(/commitFull/.test(serverSrc) && /_computeHasUpdate/.test(serverSrc), '版本判定以 commit 为准（commitFull 参与比对）');
 check(/LIVEGRAB_SRC_DIR/.test(serverSrc) && /LIVEGRAB_IMAGE_APP/.test(entrySrc), '入口脚本把「落位目录 / 镜像目录」交给服务进程');
 check(/\.livegrab-version\.json/.test(serverSrc), '更新落位后写版本标记（容器内无 .git 时的版本来源）');
 

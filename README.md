@@ -53,6 +53,12 @@ docker compose up -d --build
 > 镜像里已包含完整源码，**首次启动零网络**：不 clone、不装依赖、不联网，秒起。
 > 启动日志只有一行 `[entrypoint] 启动服务：/app`（首次）或 `/config/src/app`（更新过的实例）。
 
+> 想让镜像从第一次启动就「知道自己是哪个提交」（版本判定精确，页面不误报），构建时把提交号传进去：
+> ```bash
+> BUILD_COMMIT=$(git rev-parse HEAD) docker compose up -d --build
+> ```
+> 不传也能用：本地没有提交记录时，第一次点「立即更新」会先按「有更新」处理一次，落位后即以提交号精确比对。
+
 **③ 打开页面**
 ```
 http://<主机IP>:18080
@@ -89,10 +95,10 @@ compose 里都有默认值，通常只有端口、时区、Token 需要改：
 
 ### 点「立即更新」会发生什么
 
-1. **查版本**：只读 GitHub API，取仓库所有标签里语义化版本最高的一个（不下载代码）；
-2. **比版本**：远端**不高于**本地 → 日志写一条「已是最新版本 vX，无需更新」，结束，不下载、不重启；
-3. **下载**：远端更高 → 下载该标签的源码归档 `codeload.github.com/<repo>/tar.gz/refs/tags/<tag>`；
-4. **解包校验**：解到 `/config/src/.update-stage`，确认 `app/server/server.js` 与 `app/package.json` 存在，版本不低于本地；
+1. **查提交**：只读 GitHub API，取当前分支 HEAD 的 commit（不下载代码）；
+2. **比提交**：远端 commit 与本地记录的一致 → 日志写一条「已是最新代码」，结束，不下载、不重启；
+3. **下载**：不同 → 下载**该提交**的源码归档 `codeload.github.com/<repo>/tar.gz/<commit>`（按 sha 而不是按标签，标签只是可读的名字，可能被挪动）；
+4. **解包校验**：解到 `/config/src/.update-stage`，确认 `app/server/server.js` 与 `app/package.json` 存在；
 5. **准备依赖**：`package.json` 的 `dependencies` 没变 → 软链镜像里的 `/app/node_modules`（零联网，原生模块 ABI 永远跟当前镜像的 Node 一致）；只有变了才 `npm install`；
 6. **原子切换**：`.update-stage/app` → `/config/src/app` 用 `rename` 切换，失败自动回滚；旧目录留成 `app.old`（手动回滚点，下次更新时才替换）；
 7. **自重启**：优雅停掉录制器与 HTTP，再以新目录为 `cwd` 重新拉起进程，页面自动刷新。
@@ -102,11 +108,14 @@ compose 里都有默认值，通常只有端口、时区、Token 需要改：
 为什么落在 `/config`：镜像层 `/app` 会被 `docker compose up -d --build` 重置，挂载卷里的代码不会。
 所以**重建容器不会把版本打回去**，这也正是「更新结果能长期保留」的原因。
 
-### 版本判定规则
+### 版本判定规则：比 commit，不比版本号
 
-- 只比语义化版本（`0.1.43` > `0.1.42`），**版本相同就不更新**，哪怕 main 上有新提交——否则每点一次都要重下一份同版本归档；
-- 本地版本来源：更新过的实例读 `/config/src/app/.livegrab-version.json`（记录落位的标签版本），从没更新过的读镜像构建信息（`.build-info.json`）；
-- 归档里 `package.json` 的版本与标签不一致时，以标签为准（避免「改了代码忘改版本号」导致反复提示更新）。
+- **commit 不同就算有更新**：往 main 推了新提交，哪怕 `package.json` 的 `version` 忘了改，点「立即更新」照样会拉下来；
+- 本地 commit 来自 `/config/src/app/.livegrab-version.json`——每次落位时写入的、**实际下载的那个 sha**；
+- 从没点过更新的实例，本地 commit 取自镜像构建信息 `.build-info.json`（由 `BUILD_COMMIT` 构建参数写入）。没传就看不出自己是谁 → 第一次点更新会按「有更新」处理，落位后即以 sha 精确比对；
+- **不降级**：远端那次提交的时间比本地还早（远端被 reset 回旧提交）→ 不动，避免把线上打回去；
+- 远端 API 拿不到 commit 时，才退回语义化版本比较；
+- **版本号只用于展示，不参与判定**——所以「改了代码忘了改版本号」不会卡住更新，页面在看板上仍照实显示两侧的版本与提交号；「版本号相同但提交不同」时，提示里会带上短 sha，不会看着像没变化。
 
 ### 代理：只有一个入口
 

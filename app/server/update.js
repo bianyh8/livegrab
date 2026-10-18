@@ -767,6 +767,9 @@ export class UpdateManager {
     } catch { /* 忽略 */ }
 
     let commit = '', branch = '', commitAt = null, tag = '';
+    // 本地代码那次提交的「提交时间」：只来自标记里的 commitAt（远端 API 给的时间）。
+    // 不能拿标记的 at（落位时间）顶替——那样远端提交永远比本地「旧」，会把所有更新都挡掉。
+    let commitDate = '';
     const env = this.state.env || await this.detectEnv();
     // 快照标记优先：走快照通道更新过的工作区，其真实代码 = 标记里的 commit，
     // 而 .git 索引还停在旧提交（下次成功 fetch 时会自动对齐），不能拿旧 index 冒充本地版本。
@@ -793,7 +796,9 @@ export class UpdateManager {
         if (marker.version) version = String(marker.version);
         if (marker.commit) commit = String(marker.commit).slice(0, 12);
         if (marker.tag) tag = String(marker.tag);
-        if (marker.at) commitAt = new Date(marker.at).toISOString();
+        // commitAt 优先用「那次提交的时间」（v0.1.44 起写入），老标记只有 at（落位时间）就只用于显示
+        if (marker.commitAt) { commitDate = new Date(marker.commitAt).toISOString(); commitAt = commitDate; }
+        else if (marker.at) commitAt = new Date(marker.at).toISOString();
       } else {
         const buildCommit = (process.env.LIVEGRAB_BUILD_COMMIT || '').trim()
           || (await this._readBuildCommit().catch(() => ''));
@@ -808,7 +813,7 @@ export class UpdateManager {
       if (snap.at) commitAt = new Date(snap.at).toISOString();
       branch = branch || this._branch();
     }
-    this.state.local = { version, commit, branch: branch || this._branch(), commitAt, tag: tag || `v${version}` };
+    this.state.local = { version, commit, branch: branch || this._branch(), commitAt, commitDate, tag: tag || `v${version}` };
     return this.state.local;
   }
 
@@ -820,9 +825,9 @@ export class UpdateManager {
     } catch { return ''; }
   }
 
-  /** 读取「页面立即更新」落位时写入的版本标记（<appDir>/.livegrab-version.json）。
-   *  容器里没有 .git，这份标记就是「当前跑的到底是哪个版本」的权威来源：
-   *  版本号取 GitHub 标签（而不是归档里的 package.json），避免「改了代码忘改版本号」时反复提示有更新。 */
+  /** 读取「页面立即更新」落位时写入的标记（<appDir>/.livegrab-version.json）。
+   *  容器里没有 .git，这份标记就是「当前跑的到底是哪一次提交」的权威来源：
+   *  commit / commitAt 是判据，version 只是给人看的（取自归档内 package.json 的真实版本）。 */
   _readVersionMarker(dir = this.appDir) {
     try {
       const raw = JSON.parse(fs.readFileSync(path.join(dir, '.livegrab-version.json'), 'utf8'));
@@ -888,9 +893,11 @@ export class UpdateManager {
     for (const t of (tags || [])) if (t && t.name) candidates.push(t.name);
     const tagName = pickLatestTag(candidates) || (rel && rel.tag_name) || (tags && tags.length && tags[0] && tags[0].name) || '';
     const version = String(tagName || '').replace(/^v/i, '');
-    // 权威「最新代码」以分支 HEAD 的 commit sha 为准：release 的 target_commitish 通常只是分支/标签名，
-    // 不能用于精确比对（例如 v0.1.0 标签可能指向旧提交，而 main 最新提交才是真正要去比对的）。
-    const commit = (main && main.sha) ? main.sha.slice(0, 12) : (rel && rel.target_commitish) || '';
+    // 权威「最新代码」= 分支 HEAD 的 commit sha（完整 40 位，下载归档要用）。
+    // release 的 target_commitish 通常只是分支/标签名，绝不能当 sha 用：那会让 commit 比对比到
+    // 「分支名 vs sha」这种永远不等的组合。取不到就留空，比对自动退回版本号。
+    const commitFull = (main && main.sha) ? String(main.sha) : '';
+    const commit = commitFull.slice(0, 12);
     const commitAt = (main && main.commit && main.commit.committer && main.commit.committer.date) || (rel && rel.published_at) || '';
     const commitMsg = (main && main.commit && main.commit.message || '').split('\n')[0] || '';
     const notes = (rel && rel.body) || '';
@@ -902,6 +909,7 @@ export class UpdateManager {
       version: version || '0.0.0',
       tag: tagName || `v${version || '0.0.0'}`,
       commit,
+      commitFull,
       commitAt,
       commitMsg,
       publishedAt: (rel && rel.published_at) || commitAt || '',
@@ -936,7 +944,11 @@ export class UpdateManager {
           this._log('WARN', '检查更新：无法获取远程版本信息（仓库不可见或网络异常）');
         } else {
           const hasNew = this._computeHasUpdate(local, latest);
-          this._log('INFO', `检查更新：本地 v${local?.version || '?'}${local?.commit ? ` (${local.commit})` : ''} → 远程 ${latest?.tag || '?'}${latest?.commit ? ` (${latest.commit})` : ''}（${hasNew ? '有更新' : '已是最新'}）`);
+          this._log('INFO', `检查更新：本地 v${local?.version || '?'}${local?.commit ? ` (${local.commit})` : ' (无 commit 记录)'} → 远程 ${latest?.tag || '?'}${latest?.commit ? ` (${latest.commit})` : ''}（${hasNew ? '有更新' : '已是最新'}）`);
+          // 容器里判据是 commit：本地没有 commit 记录时无法精确比对，明说原因，别让人猜
+          if (this._mode() === 'archive' && !(local && local.commit) && latest && latest.commit) {
+            this._log('WARN', '本地未记录 commit（镜像构建时未传 BUILD_COMMIT）：按「有更新」处理，更新一次后即以 commit 精确比对');
+          }
         }
       }
     } catch (e) {
@@ -1169,6 +1181,29 @@ export class UpdateManager {
     return `https://codeload.github.com/${repo}/tar.gz/refs/tags/${encodeURIComponent(t)}`;
   }
 
+  /** 某个提交的源码归档地址——版本判定改成「比 commit」后，这里才是主路径：
+   *  标签只是可读的名字，同一个标签可能被挪动、也可能比 main HEAD 旧，只有 sha 指向确定的代码。
+   *  取不到 sha（远端 API 没返回 commit）时才退回标签归档（见 _archiveUrlFor）。 */
+  _commitArchiveUrl(sha) {
+    let repo = this._repo();
+    if (!repo) repo = parseOwnerRepoFromGitHubUrl(this._gitUrl());
+    if (!repo || !/^[\w.-]+\/[\w.-]+$/.test(repo)) return '';
+    const s = String(sha || '').trim();
+    if (!/^[0-9a-f]{7,40}$/i.test(s)) return '';
+    return `https://codeload.github.com/${repo}/tar.gz/${encodeURIComponent(s)}`;
+  }
+
+  /** 优先按 commit 取归档，退化才用标签。返回 { url, label, ref }。 */
+  _archiveUrlFor(latest) {
+    const sha = String((latest && (latest.commitFull || latest.commit)) || '').trim();
+    const byCommit = this._commitArchiveUrl(sha);
+    if (byCommit) return { url: byCommit, label: `提交 ${sha.slice(0, 8)}`, ref: sha };
+    const tag = String((latest && latest.tag) || '').trim();
+    const byTag = this._tagArchiveUrl(tag);
+    if (byTag) return { url: byTag, label: `标签 ${tag}`, ref: tag };
+    return { url: '', label: '', ref: '' };
+  }
+
   /** 依赖声明签名（只比 dependencies 的键与版本要求）：相同就能直接复用镜像的 node_modules。 */
   _depSignature(pkg) {
     const d = (pkg && pkg.dependencies) || {};
@@ -1219,14 +1254,14 @@ export class UpdateManager {
     return run('npm', ['install', '--omit=dev', '--no-audit', '--no-fund'], { cwd: dir, timeout: 300000, env });
   }
 
-  /** 下载标签归档（tar.gz）。私有仓库带 token；走代理失败会自动直连（见 _fetch）。 */
-  async _downloadTagArchive(url, tag) {
+  /** 下载源码归档（tar.gz，按 commit 或标签）。私有仓库带 token；走代理失败会自动直连（见 _fetch）。 */
+  async _downloadArchive(url, label) {
     const headers = { 'User-Agent': UA };
     const t = this._token();
     if (t) headers['Authorization'] = `Bearer ${t}`;
-    const r = await this._fetch(url, { headers, timeoutMs: 300000, retries: 1, label: `GitHub 归档 ${tag}`, binary: true });
+    const r = await this._fetch(url, { headers, timeoutMs: 300000, retries: 1, label: `GitHub 归档 ${label}`, binary: true });
     if (!r.ok) {
-      throw new Error(`归档下载失败 HTTP ${r.status}${r.status === 404 ? '（标签不存在，或私有仓库未配 Token）' : ''}`);
+      throw new Error(`归档下载失败 HTTP ${r.status}${r.status === 404 ? '（提交/标签不存在，或私有仓库未配 Token）' : ''}`);
     }
     const buf = Buffer.from(await r.arrayBuffer());
     if (!buf.length) throw new Error('归档内容为空');
@@ -1253,8 +1288,8 @@ export class UpdateManager {
     return cur;
   }
 
-  /** 容器内更新：查版本 →（远端更高才）下载归档 → 解包校验 → 组装 → 原子切换 → 自重启。
-   *  版本不高于本地时什么都不下载、不重启，日志写一条「已是最新」。 */
+  /** 容器内更新：查远端 HEAD →（commit 不同才）下载该提交的归档 → 解包校验 → 组装 → 原子切换 → 自重启。
+   *  commit 相同则什么都不下载、不重启，日志写一条「已是最新代码」。 */
   async _runArchiveUpdate(env, local) {
     const root = env.srcRoot || this._srcRoot(true);
     if (!root) throw new Error('无法确定新版本落位目录（LIVEGRAB_SRC_DIR / CONFIG_DIR 均缺失）');
@@ -1270,16 +1305,16 @@ export class UpdateManager {
     }
     if (!this._computeHasUpdate(local, latest)) {
       this._phase('done', 100, '');
-      this._log('OK', `已是最新版本 v${local.version}（远端 ${latest.tag}），无需更新`);
+      this._log('OK', `已是最新代码${latest.commit ? `（${latest.commit}）` : ` v${local.version}`}，无需更新`);
       return;
     }
 
-    const tag = latest.tag;
-    const url = this._tagArchiveUrl(tag);
+    const { url, label, ref } = this._archiveUrlFor(latest);
     if (!url) throw new Error('更新源不是 GitHub 仓库，无法下载源码归档');
-    this._log('INFO', `发现新版本 ${tag}（本地 v${local.version}），下载源码归档…`);
-    this._phase('fetch', 20, `下载 ${tag}`);
-    const buf = await this._downloadTagArchive(url, tag);
+    const from = `v${local.version || '?'}${local.commit ? ` / ${local.commit}` : ' · 未记录 commit'}`;
+    this._log('INFO', `发现新代码 ${label}（远端标签 ${latest.tag}，本地 ${from}），开始下载源码归档…`);
+    this._phase('fetch', 20, `下载 ${label}`);
+    const buf = await this._downloadArchive(url, label);
     const mb = buf.length / 1048576;
     this._log('OK', `归档下载完成（${mb >= 1 ? `${mb.toFixed(1)} MB` : `${Math.max(1, Math.round(buf.length / 1024))} KB`}）`);
 
@@ -1300,11 +1335,10 @@ export class UpdateManager {
       let pkg = {};
       try { pkg = JSON.parse(fs.readFileSync(path.join(stageApp, 'package.json'), 'utf8')); } catch { /* 忽略 */ }
       const pkgVersion = String(pkg.version || '');
+      if (pkgVersion) this._log('INFO', `归档内 package.json 版本 v${pkgVersion}`);
+      // 版本号只用于展示，不参与判定（判据是 commit）：落后只提示一句，不拦更新
       if (pkgVersion && parseVersion(pkgVersion) && compareVersions(pkgVersion, local.version) < 0) {
-        throw new Error(`归档内版本 v${pkgVersion} 低于本地 v${local.version}，已放弃（不做降级）`);
-      }
-      if (pkgVersion && latest.version && compareVersions(pkgVersion, latest.version) !== 0) {
-        this._log('WARN', `归档内 package.json 版本为 v${pkgVersion || '?'}，与标签 ${tag} 不一致：以标签版本为准记录本地版本`);
+        this._log('WARN', `归档内版本 v${pkgVersion} 低于本地 v${local.version}：按提交判定继续更新（版本号可能只是忘了改）`);
       }
 
       // 依赖：声明没变就复用镜像基线（这是绝大多数版本的情况，更新全程只访问 GitHub，不碰 npm registry）
@@ -1325,20 +1359,25 @@ export class UpdateManager {
           : '依赖复用镜像基线（文件系统不支持软链，已复制一份）');
       }
 
-      // 版本标记：容器里没有 .git，这份标记就是「当前版本」的权威来源
+      // 版本标记：容器里没有 .git，这份标记就是「当前跑的是哪一次提交」的唯一权威来源。
+      // commit 记录本次实际下载的 ref（sha），下次点更新就按它和远端 HEAD 比——不再依赖版本号。
+      const isSha = /^[0-9a-f]{7,40}$/i.test(String(ref || ''));
       fs.writeFileSync(path.join(stageApp, '.livegrab-version.json'), JSON.stringify({
-        version: latest.version || pkgVersion,
-        tag,
-        commit: latest.commit || '',
+        version: pkgVersion || latest.version,
+        tag: pkgVersion ? `v${pkgVersion}` : latest.tag,
+        commit: isSha ? String(ref).slice(0, 12) : '',
+        commitFull: isSha ? String(ref) : '',
+        commitAt: latest.commitAt || '',
+        remoteTag: latest.tag,
         pkgVersion,
         depsInstalled,
         at: Date.now(),
         from: local.version || '',
       }, null, 2));
 
-      this._phase('switch', 82, `切换到 ${tag}`);
+      this._phase('switch', 82, `切换到 ${label}`);
       const newApp = this._swapIn(stageApp, root);
-      this._log('OK', `代码已切换到 ${tag}（${newApp}）`);
+      this._log('OK', `代码已切换到 ${label}（${newApp}）`);
     } catch (e) {
       // 失败：整个暂存区丢掉，旧版本目录没被动过，服务继续正常录制
       try { fs.rmSync(stage, { recursive: true, force: true }); } catch { /* 忽略 */ }
@@ -1348,7 +1387,7 @@ export class UpdateManager {
 
     this.state.progress = 90;
     if (typeof this.restartHook !== 'function') {
-      this._phase('done', 100, `更新完成 ${tag}`);
+      this._phase('done', 100, `更新完成 ${label}`);
       this._log('OK', '更新完成。请重启容器使新版本生效。');
       return;
     }
@@ -1357,34 +1396,45 @@ export class UpdateManager {
     await sleep(1200);
     try {
       // 关键：新进程必须以新目录为 cwd 启动，否则跑的还是旧代码
-      await this.restartHook({ from: local.version, to: tag, cwd: path.join(root, 'app') });
+      await this.restartHook({ from: local.version, to: label, cwd: path.join(root, 'app') });
     } catch (e) {
       this._log('WARN', `自动重启失败（${e?.message || e}），请手动重启容器使新版本生效`);
     }
-    this._phase('done', 100, `更新完成 ${tag}`);
-    this._log('OK', `更新完成：v${local.version} → ${tag}`);
+    this._phase('done', 100, `更新完成 ${label}`);
+    this._log('OK', `更新完成：${from} → ${label}`);
   }
 
   /* ---------- 状态输出 ---------- */
 
-  /** 计算是否真的有更新。判据按优先级：
-      ① 版本号可比时以语义化版本为准——只有远端「严格更新」才算有更新，
-         远端更旧（本地已更新到更高版本）或版本相同一律不算，避免误报「可用更新」；
-      ② 版本号相同（或不可解析）时再看 commit：两端 commit 都可得且不同才算有更新
-         （覆盖「同版本号但有新提交」的分支 HEAD 领先场景）；
-      ③ 都没有则退回原始字符串不等比较（旧镜像无构建信息的兜底）。 */
+  /** 计算是否真的有更新。容器（归档通道）以 commit 为准：
+      ① 两端 commit 都可得 → 不同即更新（同版本号但分支有新提交也会更）；
+         另加一条「不降级」保护：远端那次提交的时间早于本地 → 不动（远端被 reset 回旧提交时不跟着退）；
+      ② 本地 commit 不可知（镜像没传 BUILD_COMMIT 且从没页面更新过）→ 按「有更新」处理，
+         点一次即写入标记、此后精确；否则这条新逻辑对老镜像永远不生效；
+      ③ 远端取不到 commit（API 异常）→ 退回语义化版本比较。
+      版本号在容器通道里**不参与判定**，只用于展示：改代码忘了改版本号也能更新。
+      git 形态保持原语义：先版本后 commit（真正的比对发生在 fetch 之后 HEAD vs FETCH_HEAD）。 */
   _computeHasUpdate(local, latest) {
     if (!latest || latest.unavailable) return false;
     const lv = parseVersion(local && local.version);
     const rv = parseVersion(latest && latest.version);
-    const lc = local && local.commit ? String(local.commit).slice(0, 12) : '';
-    const rc = latest && latest.commit ? String(latest.commit).slice(0, 12) : '';
-    // 容器（归档通道）：只比语义化版本。版本相同就是最新——不再比 commit，
-    // 否则「main 上有新提交但还没发版」会让每次点按钮都重新下载一份同版本归档。
+    const lc = local && local.commit ? String(local.commit).toLowerCase().slice(0, 12) : '';
+    const rc = latest && latest.commit ? String(latest.commit).toLowerCase().slice(0, 12) : '';
+
     if (this._mode() === 'archive') {
-      if (lv && rv) return cmpParsedVersion(rv, lv) > 0;
+      if (lc && rc) {
+        if (lc === rc) return false;
+        // 不降级：远端提交比本地还旧 → 不动（保护线上不被回退；时间不可知时放行）
+        const lt = local && local.commitDate ? Date.parse(local.commitDate) : NaN;
+        const rt = latest && latest.commitAt ? Date.parse(latest.commitAt) : NaN;
+        if (Number.isFinite(lt) && Number.isFinite(rt) && rt < lt) return false;
+        return true;
+      }
+      if (rc && !lc) return true;   // ② 本地无 commit 记录：先按有更新处理一次
+      if (lv && rv) return cmpParsedVersion(rv, lv) > 0;  // ③ 远端无 commit：退回版本号
       return !!(latest.version && local && local.version && latest.version !== local.version);
     }
+
     if (lv && rv) {
       const cmp = cmpParsedVersion(rv, lv);
       if (cmp > 0) return true;   // 远端版本严格更高 → 有更新
