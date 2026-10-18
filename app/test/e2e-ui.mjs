@@ -66,8 +66,8 @@ check(tC.data?.segmentMode === 'size', '分段方式（大小）写入任务');
 check(tD.data?.monitorOnly === true, '仅监控（monitorOnly）写入任务');
 const st = (await (await fetch(`${BASE}/api/status`)).json()).data;
 check(st.tasks.length === 4 && st.engine.ffmpegAvailable === false && !!st.recordRoot, '/api/status 字段完整（含 engine.ffmpegAvailable / recordRoot）');
-const tree = (await (await fetch(`${BASE}/api/files/tree?view=platform`)).json()).data;
-check(Array.isArray(tree.children), '/api/files/tree 返回 children 数组');
+const treeRes = await fetch(`${BASE}/api/files/tree?view=platform`);
+check(treeRes.status === 404, '死端点 /api/files/tree 已移除（404）');
 
 // 4) CDP：真实等待后读页面渲染文本
 const edge = spawn(EDGE, ['--headless=new', '--disable-gpu', '--no-first-run', '--no-default-browser-check', `--remote-debugging-port=${CDP}`, `--user-data-dir=${path.join(TMP, 'edge')}`, '--window-size=1600,1100', 'about:blank'], { stdio: 'ignore' });

@@ -109,6 +109,7 @@ export const PLATFORMS = {
   cc: { cls: 'cc', letter: 'CC', name: t('plat.cc') },
   yy: { cls: 'yy', letter: 'YY', name: 'YY' },
   wechat: { cls: 'wx', letter: '视', name: t('plat.wechat') },
+  direct: { cls: 'link', letter: '链', name: t('plat.direct') || '直链' },
   more: { cls: 'more', letter: '＋', name: t('plat.more') },
 };
 

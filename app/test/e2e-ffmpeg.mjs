@@ -326,8 +326,7 @@ for (let i = 0; i < 10; i++) {
 }
 check(scan.data?.added === 0 && scan.data?.missing === 0 && scan.data?.unregistered === 0, '重扫描后索引与磁盘一致（无缺失/无新增/无未登记）', `${JSON.stringify(scan.data)}（第 ${scanRounds} 次扫描收敛）`);
 if (Number(scan.data?.added) > 0 || Number(scan.data?.unregistered) > 0) {
-  const un = (await jget('/api/files/unregistered')).data;
-  line('   [诊断] 未登记文件: ' + (un.items || []).map((x) => `${x.relPath || x.path} (${x.bytes}B)`).join(' | '));
+  line('   [诊断] 存在未登记/新增文件（unregistered 端点已移除，详见 /api/files 列表）');
   const seen = new Set();
   const walk = (d) => { for (const e of fs.readdirSync(d, { withFileTypes: true })) { const p = path.join(d, e.name); if (e.isDirectory()) walk(p); else if (!seen.has(e.name)) seen.add(`${path.relative(REC, p)}`); } };
   walk(REC);

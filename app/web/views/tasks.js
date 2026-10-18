@@ -12,8 +12,6 @@ import {
 const state = {
   tasks: [],
   platforms: [],
-  enabledSet: {},
-  enabledInit: false,
   q: '',
   platform: '',
   status: '',
@@ -85,13 +83,6 @@ async function tick(ctx, full) {
         const p = await api.platforms();
         state.platforms = (p && p.items) || [];
       } catch { state.platforms = []; }
-    }
-    if (!state.enabledInit) {
-      try {
-        const st = await api.settings();
-        state.enabledSet = (st && st.platformEnabled) || {};
-      } catch { state.enabledSet = {}; }
-      state.enabledInit = true;
     }
     const r = await api.tasks({
       page: state.page, pageSize: PAGE_SIZE, sort: state.sort, sortDir: state.sortDir,
@@ -231,7 +222,7 @@ function paint(ctx, force) {
         <input class="input" id="tkQ" style="width:170px" placeholder="${t('tasks.searchPh')}" value="${esc(state.q)}" />
         <select class="select" id="tkPlat" style="width:108px">
           <option value="">${t('common.allPlatforms')}</option>
-          ${state.platforms.filter((p) => state.enabledSet[p.id] !== false || state.platform === p.id).map((p) => `<option value="${esc(p.id)}"${state.platform === p.id ? ' selected' : ''}>${esc(p.name)}</option>`).join('')}
+          ${state.platforms.filter((p) => p.enabled || state.platform === p.id).map((p) => `<option value="${esc(p.id)}"${state.platform === p.id ? ' selected' : ''}>${esc(p.name)}</option>`).join('')}
         </select>
         <select class="select" id="tkLive" style="width:118px">
           ${[['', t('tasks.allLiveStatus')], ['live', t('tasks.live')], ['offline', t('tasks.notLive')]]
@@ -367,7 +358,7 @@ function liveStatusCell(item) {
 }
 
 function recStatusCell(item) {
-  const recording = ['recording', 'stopping', 'merging'].includes(item.status);
+  const recording = ['recording', 'stopping'].includes(item.status);
   if (recording) return '<span class="pulse"><b></b>' + t('common.recording') + '</span>';
   if (item.sessionHold) return '<span class="chip bili" title="' + t('tasks.sessionHeldTip') + '"><i class="dot"></i>' + t('tasks.sessionHeld') + '</span>';
   if (item.monitorOnly) return '<span class="chip bili" title="' + t('tasks.monitorOnlyTip') + '"><i class="dot"></i>' + t('common.monitorOnly') + '</span>';
@@ -378,7 +369,7 @@ function recStatusCell(item) {
 
 /** 是否正在录制（含收尾/合并中，此刻都该给「停止本场」而不是「录制本场」） */
 function isRecording(item) {
-  return ['recording', 'stopping', 'merging'].includes(item.status);
+  return ['recording', 'stopping'].includes(item.status);
 }
 
 /**
@@ -738,7 +729,7 @@ async function openTaskDialog(ctx, id) {
     monitorOnly: task ? !!task.monitorOnly : !!((settings && settings.defaultMonitorOnly)),
     recording: !!(task && (task.status === 'recording' || task.status === 'stopping')),
     // 平台列表（编辑已有任务时保留其平台；列表未加载时兜底当前平台）
-    platforms: state.platforms.filter((p) => ((settings && settings.platformEnabled) || {})[p.id] !== false || (task && task.platform === p.id))
+    platforms: state.platforms.filter((p) => p.enabled || (task && task.platform === p.id))
       .concat(task && !state.platforms.some((p) => p.id === task.platform) ? [{ id: task.platform, name: task.platformName || task.platform, tier: '' }] : []),
   };
 
@@ -1088,7 +1079,6 @@ async function submit(d, dialog, btn, ctx) {
   if (d.segmentMode && d.segmentMode !== curSeg && d.segmentMode !== (curSeg || d.segmentGlobal)) payload.overrides.segmentMode = d.segmentMode;
   const curNaming = (d.task && d.task.overrides && d.task.overrides.namingProfileId) || '';
   if (d.namingProfileId && d.namingProfileId !== curNaming && d.namingProfileId !== (curNaming || d.namingGlobal)) payload.overrides.namingProfileId = d.namingProfileId;
-  payload.overrides.customText = null;
   payload.container = null;
   payload.remuxToMp4 = null;
   if (d.segmentMode === 'time') payload.segmentMinutes = d.segmentMinutes;

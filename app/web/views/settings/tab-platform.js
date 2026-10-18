@@ -165,7 +165,7 @@ function row(p, kit) {
   const cookie = p.cookie || {};
   const has = cookie.has != null ? cookie.has : !!p.cookieSet;
   const valid = cookie.valid;
-  const enabled = (kit.state.settings.platformEnabled || {})[p.id] !== false;
+  const enabled = p.enabled;
   const useProxy = (kit.state.settings.platformUseProxy || {})[p.id] === true;
   const cap = (kit.state.settings.platformCaps || {})[p.id] != null
     ? (kit.state.settings.platformCaps || {})[p.id]

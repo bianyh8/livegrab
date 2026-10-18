@@ -1194,10 +1194,9 @@ async function testHttp() {
     '总览统计含 今日时长/今日文件数/并发（口径字段齐全）');
   const files = await j(fetch(`${base}/api/files`, { headers: H }));
   ok(files.data.summary && Array.isArray(files.data.items), 'GET /api/files 返回场次与汇总');
-  ok(files.data.tree && Array.isArray(files.data.tree.children), 'GET /api/files 自带嵌套树');
-  const tree = await j(fetch(`${base}/api/files/tree?view=platform`, { headers: H }));
-  ok(Array.isArray(tree.data.children) && tree.data.view === 'platform', 'GET /api/files/tree 返回 children');
-  ok(tree.data.summary && typeof tree.data.summary.files === 'number', '树接口带汇总计数');
+  ok(!('tree' in files.data) && !('jobs' in files.data), 'GET /api/files 已移除冗余 tree/jobs（死字段清理）');
+  const treeRes = await fetch(`${base}/api/files/tree`, { headers: H });
+  ok(treeRes.status === 404, '死端点 /api/files/tree 已移除（404）');
   const trash = await j(fetch(`${base}/api/trash`, { headers: H }));
   ok(trash.data.count === 0, 'GET /api/trash 初始为空');
   const logs = await j(fetch(`${base}/api/logs`, { headers: H, body: undefined }));
@@ -1222,8 +1221,8 @@ async function testHttp() {
 
   const scan = await j(fetch(`${base}/api/files/scan`, { method: 'POST', headers: H, body: '{}' }));
   ok(typeof scan.data.added === 'number' && typeof scan.data.missing === 'number' && typeof scan.data.unregistered === 'number', 'POST /api/files/scan 返回扫描统计', JSON.stringify(scan.data));
-  const unreg = await j(fetch(`${base}/api/files/unregistered`, { headers: H }));
-  ok(Array.isArray(unreg.data.items), 'GET /api/files/unregistered 返回数组');
+  const unregRes = await fetch(`${base}/api/files/unregistered`, { headers: H });
+  ok(unregRes.status === 404, '死端点 /api/files/unregistered 已移除（404）');
 
   const batch = await j(fetch(`${base}/api/tasks/batch`, { method: 'POST', headers: H, body: JSON.stringify({ action: 'delete', ids: [taskId] }) }));  ok(batch.data.okIds.length === 1, 'POST /api/tasks/batch 批量删除');
   const del = await fetch(`${base}/api/tasks/${taskId}`, { method: 'DELETE', headers: H });
@@ -1344,6 +1343,41 @@ function testUpdateGuards() {
   ok(/GIT_TERMINAL_PROMPT=0/.test(ep), '容器克隆禁用交互式凭据提示（否则私库无 token 时启动卡死）');
 }
 
+// ============ 12. 审计遗留死代码清理 ============
+async function testDeadCodeRemainder() {
+  suite('审计遗留死代码清理');
+  const APP = APP_DIR;
+  const srv = fs.readFileSync(path.join(APP, 'server', 'server.js'), 'utf8');
+  const storage = fs.readFileSync(path.join(APP, 'server', 'storage.js'), 'utf8');
+  const tasks = fs.readFileSync(path.join(APP, 'web', 'views', 'tasks.js'), 'utf8');
+  const api = fs.readFileSync(path.join(APP, 'web', 'api.js'), 'utf8');
+  const pfTab = fs.readFileSync(path.join(APP, 'web', 'views', 'settings', 'tab-platform.js'), 'utf8');
+
+  // 死端点 / 死字段已移除
+  ok(!/route\(\s*'GET',\s*'\/api\/files\/tree'/.test(srv), '死端点 /api/files/tree 已从 server.js 移除');
+  ok(!/route\(\s*'GET',\s*'\/api\/files\/unregistered'/.test(srv), '死端点 /api/files/unregistered 已从 server.js 移除');
+  ok(!/route\(\s*'POST',\s*'\/api\/files\/import'/.test(srv), '死端点 /api/files/import 已从 server.js 移除');
+  ok(!/function treeFor/.test(srv) && !/treeFor\(/.test(srv), 'treeFor 辅助函数已移除（/api/files 不再返回 tree/jobs）');
+  ok(!/async importExternal/.test(storage), 'storage.importExternal 死方法已移除');
+  ok(!/filesTree/.test(api) && !/unregistered:/.test(api) && !/importFiles/.test(api), 'api.js 死包装 filesTree/unregistered/importFiles 已移除');
+
+  // customText 不再被保存时无条件清空
+  ok(!/payload\.overrides\.customText\s*=\s*null/.test(tasks), '保存任务不再无条件清空 customText（老任务的自定义文本得以保留）');
+  ok(!/\[\s*'recording',\s*'stopping',\s*'merging'\s*\]/.test(tasks), "任务状态 'merging' 永不产生，录制判定已剔除死状态");
+
+  // 平台默认启用口径统一：后端 platformList 以 tier 为准，前端改用 p.enabled
+  const list = resolvers.platformList({ platformEnabled: {}, platformCaps: {} });
+  const acfun = list.find((p) => p.id === 'acfun');
+  const douyin = list.find((p) => p.id === 'douyin');
+  const direct = list.find((p) => p.id === 'direct');
+  ok(acfun && acfun.enabled === false, "planned 平台（acfun）默认 disabled（与前端 p.enabled 一致）");
+  ok(douyin && douyin.enabled === true, 'stable 平台（douyin）默认 enabled');
+  ok(direct && direct.enabled === true, 'direct（直链）默认 enabled（前端映射已补全）');
+  ok(!/enabledSet\[p\.id\]\s*!==\s*false/.test(tasks), '前端平台下拉不再用不一致的 !== false 表达式');
+  ok(!/platformEnabled\)\s*\|\|\s*\{\}\)\s*\[p\.id\]/.test(tasks), '前端编辑态平台过滤改用 p.enabled（与后端 platformList 一致）');
+  ok(!/\(kit\.state\.settings\.platformEnabled \|\| \{\}\)\[p\.id\]/.test(pfTab), '平台设置页开关改用 p.enabled（与后端口径一致）');
+}
+
 // ============ 11. 代理（按平台 / 系统更新） ============
 async function testProxy() {
   suite('代理（按平台 / 系统更新）');
@@ -1394,7 +1428,7 @@ async function testProxy() {
   console.log(`LiveGrab 测试开始（临时目录 ${tmpRoot}）`);
   await rmrf(tmpRoot);
   await fsp.mkdir(tmpRoot, { recursive: true });
-  const suites = [testUtil, testNaming, testStore, testResolvers, testAuth, testRecordChain, testRemuxFollowGlobal, testPullBlockedBackoff, testConcurrentStart, testRepeatSessionNaming, testTodayStats, testQueue, testHttp, testViewGuards, testUpdateGuards, testProxy, testSegmentEndReason, testSegmentGuards, testFfmpegGuards, testFileScanGuards, testFileOrder, testRecorderLiveProxy, testAuditConsistency, testAuditRemainder];
+  const suites = [testUtil, testNaming, testStore, testResolvers, testAuth, testRecordChain, testRemuxFollowGlobal, testPullBlockedBackoff, testConcurrentStart, testRepeatSessionNaming, testTodayStats, testQueue, testHttp, testViewGuards, testUpdateGuards, testProxy, testSegmentEndReason, testSegmentGuards, testFfmpegGuards, testFileScanGuards, testFileOrder, testRecorderLiveProxy, testAuditConsistency, testAuditRemainder, testDeadCodeRemainder];
   for (const s of suites) {
     try { await s(); } catch (e) {
       failed++;

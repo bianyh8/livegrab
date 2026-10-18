@@ -90,38 +90,6 @@ function sessionView(s) {
   };
 }
 
-/** 左侧树：按平台/日期/任务两种分组层级（view 决定顶层键） */
-function treeFor(sessions, view = 'platform') {
-  const platformName = (s) => s.platformName || s.platform || '未知平台';
-  const dateOf = (s) => (s.startedAt ? dateKey(new Date(s.startedAt)) : '') || '未知日期';
-  const topOf = (s) => (view === 'date' ? dateOf(s) : view === 'task' ? (s.streamer || s.taskId || '未知任务') : platformName(s));
-  const subOf = (s) => (view === 'date' ? platformName(s) : view === 'task' ? null : dateOf(s));
-  const map = new Map();
-  for (const s of sessions) {
-    const files = (s.segments || []).length + (s.extras || []).length;
-    const tk = topOf(s);
-    const top = map.get(tk) || { key: tk, name: tk, count: 0, bytes: 0, children: [], childrenMap: new Map() };
-    top.count += files;
-    top.bytes += sessionFileBytes(s);
-    const sk = subOf(s);
-    if (sk) {
-      const sub = top.childrenMap.get(sk) || { key: sk, name: sk, date: sk, count: 0, bytes: 0, children: [] };
-      sub.count += files;
-      sub.bytes += sessionFileBytes(s); // 父子口径一致（子级不再用可能未同步的 s.bytes）
-      top.childrenMap.set(sk, sub);
-    }
-    map.set(tk, top);
-  }
-  return [...map.values()].map((n) => {
-    const children = [...n.childrenMap.values()]
-      .map((c) => ({ ...c, platform: view === 'date' ? c.key : undefined }))
-      .sort((a, b) => String(b.key).localeCompare(String(a.key)));
-    const { childrenMap, ...rest } = n;
-    void childrenMap;
-    return { ...rest, platform: view === 'platform' ? n.key : undefined, children };
-  }).sort((a, b) => b.count - a.count);
-}
-
 // ---------- 主流程 ----------
 /** 读取并转写容器启动引导事件（deploy/entrypoint.sh 写入的 ${configDir}/.bootstrap-events，
     格式为「LEVEL 消息」逐行）：克隆/回退/预热/依赖检查原本只进 Docker stdout，转写后
@@ -494,34 +462,7 @@ async function main() {
         trashCount: trash.count, trashBytes: trash.bytes,
         sessions: store.sessions.length,
       },
-      tree: { view: q.view || 'platform', children: treeFor(store.sessions, q.view || 'platform'), total: store.sessions.length },
-      jobs: [...storage.jobs.values()].slice(-5),
     };
-  });
-  route('GET', '/api/files/tree', async (req) => {
-    const view = req.query.view || 'platform';
-    const children = treeFor(store.sessions, view);
-    return {
-      view, children, total: store.sessions.length,
-      summary: {
-        sessions: store.sessions.length,
-        files: store.allFiles().length,
-        bytes: store.sessions.reduce((a, b) => a + sessionFileBytes(b), 0),
-        missing: store.allFiles().filter((f) => f.status === 'missing').length,
-        unregistered: store.external.length,
-      },
-    };
-  });
-  route('GET', '/api/files/unregistered', async () => ({
-    items: store.external.map(fileView), total: store.external.length,
-    bytes: store.external.reduce((a, b) => a + (b.bytes || 0), 0),
-    hint: '这些文件在 /data 里但不在索引中，可导入为独立记录，或直接删除',
-  }));
-  route('POST', '/api/files/import', async (req) => {
-    const body = await readBody(req);
-    const paths = body.paths || [];
-    logger.info(`导入未注册文件 ${paths.length} 条`);
-    return storage.importExternal(paths);
   });
   route('POST', '/api/files/scan', async () => { logger.info('手动扫描录制目录'); return storage.scan(); });
   route('POST', '/api/files/merge', async (req) => {

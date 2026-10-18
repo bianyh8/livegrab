@@ -139,16 +139,7 @@ export const api = {
   notifyTest: () => request('POST', '/api/notify/test', {}),
 
   files: (params) => request('GET', '/api/files' + qs(params)),
-  filesTree: async (params) => {
-    try { return await request('GET', '/api/files/tree' + qs(params)); }
-    catch (e) {
-      if (e && e.code === 'HTTP_404' && params && Object.keys(params).length) return request('GET', '/api/files/tree');
-      throw e;
-    }
-  },
   filesScan: () => request('POST', '/api/files/scan', {}),
-  unregistered: () => request('GET', '/api/files/unregistered'),
-  importFiles: (paths) => request('POST', '/api/files/import', { paths }),
   remux: (fileId) => request('POST', `/api/files/${encodeURIComponent(fileId)}/remux`, {}),
   merge: (sessionId) => request('POST', '/api/files/merge', { sessionId }),
   filesDelete: (payload) => request('POST', '/api/files/delete', payload),

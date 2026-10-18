@@ -146,8 +146,12 @@ pushExt('fx2', '2026-02-10-08-00-00-001.ts', fx2Path, '哔哩哔哩/央视网快
 pushExt('fx3', '2026-01-01-00-00-00-001.mp4', path.join(tmp, '不存在.mp4'), '抖音/幽灵/2026-01-01-00-00-00-001.mp4', 'mp4', 1); // 磁盘不存在 → 应跳过
 const { Storage } = await import('../server/storage.js');
 const storage = new Storage({ store: store2, logger: { info() {}, warn() {}, error() {} } });
-const r = await storage.importExternal();
-check('importExternal 只导入磁盘存在的文件（跳过 f9/fx3）', r.imported === 2);
+// 现由扫描自动登记（storage._registerUnregistered），不再有 importExternal 死方法
+let imported = 0;
+for (const rec of [...store2.external]) {
+  if (await storage._registerUnregistered(rec)) imported++;
+}
+check('未登记文件只导入磁盘存在的（跳过不存在的 f9/fx3）', imported === 2);
 const sx1 = store2.sessions.find((s) => s.segments[0]?.id === 'fx1');
 const sx2 = store2.sessions.find((s) => s.segments[0]?.id === 'fx2');
 check('导入后外部区移除', store2.external.filter((f) => f.id === 'fx1' || f.id === 'fx2').length === 0);

@@ -254,25 +254,6 @@ export class Storage {
     return session.id;
   }
 
-  /** 兜底入口：把当前未登记列表（或指定路径）注册为独立场次。
-   *  正常情况下扫描已自动注册，此处仅用于恢复回收站后的补登记或人工触发。
-   *  paths 为空 = 全部未登记；传路径 = 只处理匹配项（绝对路径或相对路径均可）。 */
-  async importExternal(paths = []) {
-    const list = Array.isArray(paths) && paths.length ? paths : this.store.external.map((f) => f.path);
-    let done = 0;
-    for (const p of list) {
-      const rec = this.store.external.find((f) => f.path === p || f.relPath === p);
-      if (!rec) continue;
-      if (await this._registerUnregistered(rec)) done++;
-    }
-    if (done) {
-      await this.store.persist(); // 兜底对账：清掉同 path 的外部行残留并归一
-      this.onEvent({ type: 'files' });
-      this.logger.info(`未登记文件补登记 ${done} 条（生成场次 ${done} 个）`);
-    }
-    return { imported: done };
-  }
-
   // ---------- 回收站（D10） ----------
 
   // 向上清理空目录（直到遇到非空目录或存储根目录）

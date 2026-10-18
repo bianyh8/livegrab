@@ -105,10 +105,9 @@ Settings = {
 | POST | `/api/naming/preview` | body `{fnTemplate,dirTemplate,options?,samples?}` → `{lines:[{dir,file,fullPath,length}], warnings:[]}` |
 | GET | `/api/settings` | Settings（cookie.value 脱敏为 `''` + `hasCookie:true`） |
 | PUT | `/api/settings` | 局部合并 |
-| GET | `/api/files` | query: `dir platform q ext status limit=100 offset=0` → `{total, items:[FileRecord]}` |
-| GET | `/api/files/tree` | `{root, children:[{name,path,count,bytes,children?}]}` 按平台/日期两级 |
-| POST | `/api/files/scan` | 重新扫描 RECORD_ROOT 并入库（返回 `{added,updated}`） |
-| POST | `/api/files/merge` | body `{ids:[...]}` → 合并任务（返回新 FileRecord，异步；用 `status:'merging'` 占位再到 `merged`） |
+| GET | `/api/files` | query: `dir platform q ext status limit=100 offset=0` → `{total, items:[FileRecord], summary:{missing,unregistered,trashCount,trashBytes,sessions}}`（不再带 `tree`/`jobs`） |
+| POST | `/api/files/scan` | 重新扫描 RECORD_ROOT 并入库（返回 `{added,updated,missing,unregistered,cleaned}`） |
+| POST | `/api/files/merge` | body `{sessionId}` → 同步合并整场分段为 MP4，返回新 FileRecord（无 `merging` 占位态） |
 | POST | `/api/files/:id/remux` | 转封装 MP4 |
 | DELETE | `/api/files` | body `{ids:[...]}` 删除文件与记录 |
 | GET | `/api/files/:id/stream` | **支持 Range**，`Accept-Ranges: bytes`，`206` 分片，`Content-Type: video/mp2t|video/mp4|audio/*`；用于浏览器内播放 |
@@ -251,9 +250,8 @@ ffmpeg -hide_banner -loglevel info -nostats
 | POST | `/api/settings/cookie` | `{platform,cookie}`；DELETE 同路径 `?platform=` |
 | GET | `/api/settings/env` | `{tz,recordRoot,configDir,port,ffmpegAvailable,ffmpegVersion,version}` |
 | GET | `/api/files` | `?view=platform\|date\|task&platform=&date=&taskId=&status=&q=&limit=&offset=` → `{total,items:[Session],summary:{missing,unregistered,trashCount,trashBytes}}` |
-| POST | `/api/files/scan` | `{added,updated,missing,unregistered}` |
-| GET | `/api/files/unregistered` / POST `/api/files/import` | `{paths:[]}` |
-| POST | `/api/files/:id/remux` / POST `/api/files/merge` | `{fileId}` / `{sessionId}` → `{jobId}`（异步，进度走 SSE `files`） |
+| POST | `/api/files/scan` | `{added,updated,missing,unregistered,cleaned}` |
+| POST | `/api/files/:id/remux` / POST `/api/files/merge` | `{fileId}` / `{sessionId}` → 转封装 / 同步合并（merge 返回新 FileRecord，无 async job） |
 | POST | `/api/files/delete` | `{sessionIds?,fileIds?}` → `{movedToTrash,bytes}` |
 | GET | `/api/files/:id/stream` / `/api/files/:id/download` | Range 支持 / `attachment` |
 | POST | `/api/play` | `{fileId}` → `{playId,mode:'direct'\|'remux',url}`；忙时 429 `PLAY_BUSY` |
@@ -348,9 +346,8 @@ app/test/    run.js fake-ffmpeg.mjs fake-media.mjs e2e-ui.mjs e2e-ffmpeg.mjs e2e
 | `GET /api/auth/me` | `{username,user,authenticated,lastLoginAt,lastLoginIp,sessionExpiresAt}`（**必须叫 `username`**，前端鉴权门依赖它） |
 | `POST/PATCH /api/tasks` | 接受 `overrides:{quality,segmentMode,namingProfileId,customText}` 与扁平字段两种写法；**`null`/`''` 表示恢复「跟随全局」**；录制中改这四项 → `409 RECORDING_LOCKED` 但 overrides 已保存、下一场生效 |
 | `GET /api/tasks` | 每项含 `name`、`overrides`、`live:{bytes,elapsedSec,currentFile,segmentIndex}` |
-| `POST /api/files/merge` | body `{sessionId}`（不是 `{ids}`），异步占位 `merging` → `merged` |
+| `POST /api/files/merge` | body `{sessionId}`（不是 `{ids}`），同步合并 → 返回新 FileRecord（无 `merging` 占位态） |
 | `POST /api/files/delete` | body `{sessionIds?,fileIds?}` → `{movedToTrash,bytes}`；录制中返回 409 |
-| `GET /api/files/unregistered` | `{items:[...]}` |
 | `POST /api/settings/cookie` / `DELETE ?platform=` | 整条替换 / 删除键（走 `store.setCookie/clearCookie`，**不能**用 `updateSettings`——deepMerge 无法删键） |
 | `GET /api/settings/env` | `{tz,recordRoot,configDir,port,ffmpegAvailable,ffmpegVersion,version}` |
 | `GET /api/events` | SSE，`event: log\|task\|files\|status\|settings`，15s `:ping` |
