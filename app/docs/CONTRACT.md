@@ -74,7 +74,7 @@ Settings = {
   container:'ts', remuxToMp4:true, keepSource:true, autoMerge:false, reconnectMax:5,
   pollIntervalSec:60, startDelaySec:5, stopDelaySec:30,
   diskLimitGB:20, retentionDays:30, deleteToTrash:false,
-  notify:{ webhook:'', onStart:true, onError:true, onDisk:true, onCookie:false },
+  notify:{ webhook:'', onStart:true, onEnd:true, onLive:true, onError:true, onDisk:true, onCookie:false, dedupeSec:60, dedupe:true },
   cookie:{ douyin:{ value:'', valid:false, updatedAt:null }, bilibili:{ value:'', valid:false, updatedAt:null } },
   proxy:'', userAgent:''
 }
@@ -282,10 +282,10 @@ FileItem = { id, sessionId, kind:'segment'|'mp4'|'m4a'|'merged'|'unregistered',
 ```js
 Settings += {
   trashRetentionDays:7, deleteToTrash:true, logRetentionDays:14, logLevel:'INFO',
-  playConcurrency:2, mergeOnStop:false, recordContainer:'ts',
+  playConcurrency:2, mergeOnStop:false, recordContainer:'ts', defaultMonitorOnly:false,
   platformCaps:{douyin:4,bilibili:4,kuaishou:3,huya:3,douyu:3,xiaohongshu:2,weibo:2},
   platformEnabled:{...}, pollIntervalSec:60, startDelaySec:5, stopDelaySec:30,
-  notify:{webhook,onStart,onEnd,onError,onDisk,onCookie,dedupeSec:60},
+  notify:{webhook,onStart,onEnd,onLive,onError,onDisk,onCookie,dedupeSec:60,dedupe:true},
   naming:{activeId,profiles:[]}, customize:{}
 }
 ```

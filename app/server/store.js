@@ -35,6 +35,7 @@ export const DEFAULT_SETTINGS = {
   playConcurrency: 2,
   proxy: '',
   userAgent: '',
+  defaultMonitorOnly: false,
   platformCaps: {
     douyin: 4, bilibili: 4, kuaishou: 3, huya: 3, douyu: 3,
     xiaohongshu: 2, weibo: 2, acfun: 2, direct: 8,
@@ -46,7 +47,7 @@ export const DEFAULT_SETTINGS = {
   // 按平台「是否使用代理」开关：仅当该平台开启 且 全局 proxy 已配置时，该平台的解析/录制才走代理。
   // 缺省全部关闭（走直连），与「全局 proxy 为空则全直连」语义一致。
   platformUseProxy: {},
-  notify: { webhook: '', onStart: true, onEnd: true, onError: true, onDisk: true, onCookie: false, dedupeSec: 60, retry: true },
+  notify: { webhook: '', onStart: true, onEnd: true, onLive: true, onError: true, onDisk: true, onCookie: false, dedupeSec: 60, dedupe: true, retry: true },
   security: { sessionDays: 30, failLimit: 5, failLockMin: 10, trustLan: false },
   cookies: {},
   customize: {},
@@ -93,8 +94,9 @@ const SETTINGS_COLS = [
   'default_segment_size_mb', 'record_container', 'remux_to_mp4', 'keep_source', 'auto_merge', 'merge_on_stop',
   'reconnect_max', 'poll_interval_sec', 'start_delay_sec', 'stop_delay_sec', 'disk_limit_gb', 'retention_days',
   'delete_to_trash', 'trash_retention_days', 'log_retention_days', 'log_level', 'play_concurrency', 'proxy', 'user_agent',
+  'default_monitor_only',
 ];
-const NOTIFY_COLS = ['webhook', 'on_start', 'on_end', 'on_error', 'on_disk', 'on_cookie', 'dedupe_sec', 'retry'];
+const NOTIFY_COLS = ['webhook', 'on_start', 'on_end', 'on_live', 'on_error', 'on_disk', 'on_cookie', 'dedupe_sec', 'dedupe', 'retry'];
 const SECURITY_COLS = ['session_days', 'fail_limit', 'fail_lock_min', 'trust_lan'];
 const NAMING_PROFILE_COLS = [
   'name', 'fn_template', 'dir_template', 'options_date_format', 'options_seq_digits', 'options_time_format',
@@ -320,6 +322,7 @@ function settingsFromRow(r) {
     deleteToTrash: !!r.delete_to_trash, trashRetentionDays: r.trash_retention_days,
     logRetentionDays: r.log_retention_days, logLevel: r.log_level,
     playConcurrency: r.play_concurrency, proxy: r.proxy || '', userAgent: r.user_agent || '',
+    defaultMonitorOnly: !!r.default_monitor_only,
   };
 }
 
@@ -386,8 +389,8 @@ export class Store {
     const nrow = db.prepare('SELECT * FROM notify WHERE id = 1').get();
     if (nrow) {
       Object.assign(state.settings.notify, {
-        webhook: nrow.webhook || '', onStart: !!nrow.on_start, onEnd: !!nrow.on_end, onError: !!nrow.on_error,
-        onDisk: !!nrow.on_disk, onCookie: !!nrow.on_cookie, dedupeSec: nrow.dedupe_sec, retry: !!nrow.retry,
+        webhook: nrow.webhook || '', onStart: !!nrow.on_start, onEnd: !!nrow.on_end, onLive: !!nrow.on_live, onError: !!nrow.on_error,
+        onDisk: !!nrow.on_disk, onCookie: !!nrow.on_cookie, dedupeSec: nrow.dedupe_sec, dedupe: nrow.dedupe == null ? true : !!nrow.dedupe, retry: !!nrow.retry,
       });
     }
     const secrow = db.prepare('SELECT * FROM security WHERE id = 1').get();
@@ -670,6 +673,7 @@ export class Store {
       trash_retention_days: numOrNull(s.trashRetentionDays), log_retention_days: numOrNull(s.logRetentionDays),
       log_level: strOrNull(s.logLevel), play_concurrency: numOrNull(s.playConcurrency),
       proxy: strOrNull(s.proxy || ''), user_agent: strOrNull(s.userAgent || ''),
+      default_monitor_only: boolish(s.defaultMonitorOnly),
     });
     this._stmt('platform_caps_delete_all').run();
     const capIns = this._stmt('platform_caps_insert');
@@ -683,8 +687,8 @@ export class Store {
     const n = s.notify || {};
     this._stmt('notify_upsert').run({
       webhook: strOrNull(n.webhook || ''), on_start: boolish(n.onStart), on_end: boolish(n.onEnd),
-      on_error: boolish(n.onError), on_disk: boolish(n.onDisk), on_cookie: boolish(n.onCookie),
-      dedupe_sec: numOrNull(n.dedupeSec), retry: numOrNull(n.retry),
+      on_live: boolish(n.onLive), on_error: boolish(n.onError), on_disk: boolish(n.onDisk), on_cookie: boolish(n.onCookie),
+      dedupe_sec: numOrNull(n.dedupeSec), dedupe: boolish(n.dedupe !== false), retry: numOrNull(n.retry),
     });
     const sec = s.security || {};
     this._stmt('security_upsert').run({

@@ -26,6 +26,8 @@ export class Notifier {
   }
 
   shouldDedupe(event, taskId) {
+    // 去重总开关：前端「去重」关闭（notify.dedupe===false）时直接跳过去重
+    if (this.cfg.dedupe === false) return false;
     const sec = Number(this.cfg.dedupeSec ?? 60);
     if (!sec) return false;
     const key = `${taskId || 'global'}:${event}`;

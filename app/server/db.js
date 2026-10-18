@@ -46,7 +46,8 @@ CREATE TABLE IF NOT EXISTS settings (
   log_level              TEXT,
   play_concurrency       INTEGER,
   proxy                  TEXT,
-  user_agent             TEXT
+  user_agent             TEXT,
+  default_monitor_only   INTEGER            -- 新增直播间默认「仅监控」开关（v0.1.36）
 );
 CREATE TABLE IF NOT EXISTS platform_caps    (platform TEXT PRIMARY KEY, value INTEGER);
 CREATE TABLE IF NOT EXISTS platform_enabled (platform TEXT PRIMARY KEY, value INTEGER);
@@ -59,7 +60,9 @@ CREATE TABLE IF NOT EXISTS notify (
   on_error   INTEGER,
   on_disk    INTEGER,
   on_cookie  INTEGER,
+  on_live    INTEGER,                      -- 新增「开播通知」开关（v0.1.36）
   dedupe_sec INTEGER,
+  dedupe     INTEGER,                      -- 新增「去重总开关」：false 时跳过去重（v0.1.36）
   retry      INTEGER
 );
 CREATE TABLE IF NOT EXISTS security (
@@ -374,6 +377,11 @@ export function openDb(dbPath, onLog = null) {
     if (!taskCols.includes('session_hold')) db.exec('ALTER TABLE tasks ADD COLUMN session_hold INTEGER');
     const fileCols = db.prepare("SELECT name FROM pragma_table_info('files')").all().map((c) => c.name);
     if (!fileCols.includes('end_reason')) db.exec('ALTER TABLE files ADD COLUMN end_reason TEXT');
+    const setCols = db.prepare("SELECT name FROM pragma_table_info('settings')").all().map((c) => c.name);
+    if (!setCols.includes('default_monitor_only')) db.exec('ALTER TABLE settings ADD COLUMN default_monitor_only INTEGER');
+    const ntCols = db.prepare("SELECT name FROM pragma_table_info('notify')").all().map((c) => c.name);
+    if (!ntCols.includes('on_live')) db.exec('ALTER TABLE notify ADD COLUMN on_live INTEGER');
+    if (!ntCols.includes('dedupe')) db.exec('ALTER TABLE notify ADD COLUMN dedupe INTEGER');
   } catch { /* 幂等：这次没成功下次打开再补 */ }
   applyPragmas(db);
   if (isRebuild) {

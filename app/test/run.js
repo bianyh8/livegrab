@@ -782,6 +782,46 @@ async function testAuditConsistency() {
   await store.updateSettings({ customize: { updateToken: '••••••••' } });
   eq(store.settings.customize.updateToken, 'REAL_TOKEN', '行为：占位符 token 保存后真实 token 仍在');
 }
+
+// ============ 审计遗留 3 项（v0.1.36） ============
+// ① 默认仅监控 defaultMonitorOnly；② 通知 onLive / dedupe 真正持久化；③ 安全页签不再写 localStorage（落 settings.security.*）
+async function testAuditRemainder() {
+  suite('审计遗留 3 项（defaultMonitorOnly / 通知持久化 / 安全落库）');
+
+  // 行为：三个字段经 db 落盘与重载
+  const dir = p('audit-remainder');
+  const store = await openStore(dir);
+  await store.updateSettings({ defaultMonitorOnly: true });
+  await store.updateSettings({ notify: { onLive: false, dedupe: false, dedupeSec: 30 } });
+  await store.updateSettings({ security: { sessionDays: 7, failLimit: 3, failLockMin: 5, trustLan: true } });
+  const reloaded = await openStore(dir);
+  ok(reloaded.settings.defaultMonitorOnly === true, 'defaultMonitorOnly 落盘并可重载', String(reloaded.settings.defaultMonitorOnly));
+  ok(reloaded.settings.notify.onLive === false, 'notify.onLive=false 落盘并可重载', String(reloaded.settings.notify.onLive));
+  ok(reloaded.settings.notify.dedupe === false, 'notify.dedupe=false 落盘并可重载', String(reloaded.settings.notify.dedupe));
+  ok(reloaded.settings.notify.dedupeSec === 30, 'notify.dedupeSec 不变', String(reloaded.settings.notify.dedupeSec));
+  ok(reloaded.settings.security.sessionDays === 7 && reloaded.settings.security.failLimit === 3
+    && reloaded.settings.security.failLockMin === 5 && reloaded.settings.security.trustLan === true,
+    'security.* 落盘并可重载', JSON.stringify(reloaded.settings.security || {}));
+
+  // 行为：notify.dedupe=false 时 shouldDedupe 直接返回 false（去重总开关真正生效）
+  const notifier = new Notifier({ store: reloaded, logger: { debug() {}, warn() {}, info() {}, error() {} } });
+  ok(notifier.shouldDedupe('disk', 'taskX') === false, 'notify.dedupe=false → shouldDedupe 跳过');
+  const storeOn = await openStore(p('audit-remainder-on'));
+  await storeOn.updateSettings({ notify: { dedupe: true, dedupeSec: 30 } });
+  const notifierOn = new Notifier({ store: storeOn, logger: { debug() {}, warn() {}, info() {}, error() {} } });
+  ok(notifierOn.shouldDedupe('disk', 'taskY') === false, 'notify.dedupe=true → 首次发送不判重（记录时间戳）');
+  ok(notifierOn.shouldDedupe('disk', 'taskY') === true, 'notify.dedupe=true → 短时间内重复发送被去重（生效）');
+
+  // 契约：安全页签不再写 localStorage（之前是假开关），改为写 settings.security.*
+  const secView = fs.readFileSync(path.join(APP_DIR, 'web', 'views', 'settings', 'tab-security.js'), 'utf8');
+  ok(!/livegrab\.security\.prefs/.test(secView), '安全页签不再写 localStorage（假开关已修）');
+  ok(/kit\.set\('security\.trustLan'/.test(secView), '安全页签经 kit.set 写入 settings.security.trustLan');
+  ok(/kit\.set\('security\.sessionDays'/.test(secView), '安全页签经 kit.set 写入 settings.security.sessionDays');
+
+  // 契约：通知页签 onLive 开关落到 notify.onLive（此前无 DB 列、写不进库）
+  const ntView = fs.readFileSync(path.join(APP_DIR, 'web', 'views', 'settings', 'tab-notify.js'), 'utf8');
+  ok(/'notify\.onLive'/.test(ntView), '通知页签开播开关写到 notify.onLive');
+}
 // ============ 5. 并发排队（D16） ============
 // ============ 4b. 并发重复启动保护 ============
 async function testPullBlockedBackoff() {
@@ -1354,7 +1394,7 @@ async function testProxy() {
   console.log(`LiveGrab 测试开始（临时目录 ${tmpRoot}）`);
   await rmrf(tmpRoot);
   await fsp.mkdir(tmpRoot, { recursive: true });
-  const suites = [testUtil, testNaming, testStore, testResolvers, testAuth, testRecordChain, testRemuxFollowGlobal, testPullBlockedBackoff, testConcurrentStart, testRepeatSessionNaming, testTodayStats, testQueue, testHttp, testViewGuards, testUpdateGuards, testProxy, testSegmentEndReason, testSegmentGuards, testFfmpegGuards, testFileScanGuards, testFileOrder, testRecorderLiveProxy, testAuditConsistency];
+  const suites = [testUtil, testNaming, testStore, testResolvers, testAuth, testRecordChain, testRemuxFollowGlobal, testPullBlockedBackoff, testConcurrentStart, testRepeatSessionNaming, testTodayStats, testQueue, testHttp, testViewGuards, testUpdateGuards, testProxy, testSegmentEndReason, testSegmentGuards, testFfmpegGuards, testFileScanGuards, testFileOrder, testRecorderLiveProxy, testAuditConsistency, testAuditRemainder];
   for (const s of suites) {
     try { await s(); } catch (e) {
       failed++;
