@@ -5,6 +5,23 @@ import { StringDecoder } from 'node:string_decoder';
 export const FFMPEG = process.env.FFMPEG_PATH || 'ffmpeg';
 export const FFPROBE = process.env.FFPROBE_PATH || 'ffprobe';
 
+/* ffmpeg/ffprobe 子进程的干净环境：剥离代理环境变量。
+ *
+ * 为什么必须剥：ffmpeg 的 http 协议会读 HTTP_PROXY / http_proxy 环境变量（FFmpeg 8.x 实测对
+ * http 与 https 输入都生效，但不读 HTTPS_PROXY / ALL_PROXY）。容器若注入了 HTTP_PROXY，
+ * 所有 ffmpeg 拉流都会走代理——包括用户在页面上「关掉代理」的平台，开关形同失效。
+ *
+ * 录制/回放只认显式 -http_proxy 参数（由 buildRecordArgs 按 platformUseProxy 开关注入），
+ * 所以这里剥掉环境变量，让「按平台开关」成为唯一权威。代价是有意放弃「容器级全局兜底代理」。
+ * 每次 spawn 现算（复制几十个键约 10µs，相对 spawn 的毫秒级可忽略）：不做缓存，既避免
+ * 运行期改环境后拿到过期快照，也让这段逻辑可以被测试直接验证。 */
+const PROXY_ENV_KEYS = ['HTTP_PROXY', 'http_proxy', 'HTTPS_PROXY', 'https_proxy', 'ALL_PROXY', 'all_proxy'];
+export function ffmpegEnv() {
+  const env = { ...process.env };
+  for (const k of PROXY_ENV_KEYS) delete env[k];
+  return env;
+}
+
 const SEG_FORMAT = { ts: 'mpegts', flv: 'flv', mkv: 'matroska', mp4: 'mp4' };
 export const extOfContainer = (c) => (c === 'mkv' ? 'mkv' : c === 'flv' ? 'flv' : 'ts');
 
@@ -139,6 +156,7 @@ export function spawnFfmpeg({ ffmpegPath = FFMPEG, args, onStderr, onStdout, std
   const child = spawn(ffmpegPath, args, {
     stdio: stdio || ['pipe', 'pipe', 'pipe'],
     windowsHide: true,
+    env: ffmpegEnv(), // 剥掉代理环境变量，代理只由 -http_proxy 参数决定（见 ffmpegEnv 注释）
   });
   const dec = new StringDecoder('utf8');
   let buf = '';
@@ -174,7 +192,7 @@ export function runFfprobe({ ffprobePath = FFPROBE, args } = {}) {
     let out = '';
     let child;
     try {
-      child = spawn(ffprobePath, args, { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+      child = spawn(ffprobePath, args, { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, env: ffmpegEnv() });
     } catch (e) { resolve({ code: -1, out: '', error: e }); return; }
     child.stdout.on('data', (d) => { out += d.toString('utf8'); });
     child.on('error', (e) => resolve({ code: -1, out, error: e }));
@@ -193,7 +211,7 @@ export function grabFrame({ input, width = 320, at = 0, ffmpegPath = FFMPEG } = 
         '-ss', String(Number(at) || 0), '-i', input,
         '-frames:v', '1', '-vf', `scale=${width}:-2`, '-q:v', '5',
         '-f', 'image2pipe', '-vcodec', 'mjpeg', 'pipe:1',
-      ], { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+      ], { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, env: ffmpegEnv() });
     } catch (e) { resolve(null); return; }
     let done = false;
     const timer = setTimeout(() => { if (!done) { done = true; child.kill(); resolve(null); } }, 8000);
@@ -239,7 +257,7 @@ export async function ffmpegVersion(ffmpegPath = FFMPEG) {
   const { code, out } = await new Promise((resolve) => {
     let o = '';
     let child;
-    try { child = spawn(ffmpegPath, ['-version'], { stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true }); }
+    try { child = spawn(ffmpegPath, ['-version'], { stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true, env: ffmpegEnv() }); }
     catch (e) { resolve({ code: -1, out: '', error: e }); return; }
     child.stdout.on('data', (d) => { o += d.toString('utf8'); });
     child.on('error', () => resolve({ code: -1, out: o }));

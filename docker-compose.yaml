@@ -10,7 +10,7 @@ services:
         # 构建时注入 commit，供容器内「系统更新」精确比对版本；手动构建时可先 export BUILD_COMMIT=$(git rev-parse --short=12 HEAD)
         BUILD_COMMIT: "${BUILD_COMMIT:-}"
         # 镜像元数据版本号（与 app/package.json 对齐；发版时可用 .env 的 APP_VERSION 覆盖）
-        APP_VERSION: "${APP_VERSION:-0.1.41}"
+        APP_VERSION: "${APP_VERSION:-0.1.42}"
     image: bianyh8/livegrab:latest
     container_name: livegrab
     restart: unless-stopped
@@ -43,19 +43,19 @@ services:
       LIVEGRAB_GITHUB_TOKEN: "${LIVEGRAB_GITHUB_TOKEN:-}"
       # ---- 代理 ----
       # 项目里有「两个互相独立」的代理入口，只配一个会出现「首次能拉、更新还是慢」：
-      #   ① 本文件的 LIVEGRAB_PROXY → 容器首次启动时的 git clone（deploy/entrypoint.sh）
-      #   ② 页面「系统设置 → 平台账号 → 网络代理」→ 页面「立即更新」的 git fetch（settings.proxy）
+      #   ① 本文件的 LIVEGRAB_PROXY → 容器首次启动时的 git clone 与 npm install（deploy/entrypoint.sh）
+      #   ② 页面「系统设置 → 平台账号 → 网络代理」→ 拉流/解析（按平台开关）+ 页面「立即更新」
       # 两处都必须填「容器能到达」的地址：容器内的 127.0.0.1 指向容器自身，不能当宿主机代理用。
       # 用法：在宿主机 .env 写一行 LIVEGRAB_PROXY=http://192.168.1.10:20171
       #   - 代理是独立容器且已映射端口 → 填 NAS 的局域网 IP:端口
       #   - 代理与 livegrab 在同一 compose 网络 → 填 http://代理服务名:容器内端口（更稳）
       #   - 纯 SOCKS 端口要写 socks5:// 前缀
-      HTTPS_PROXY: "${LIVEGRAB_PROXY:-}"
-      HTTP_PROXY: "${LIVEGRAB_PROXY:-}"
-      ALL_PROXY: "${LIVEGRAB_PROXY:-}"
-      # 回环与容器内部域名不经过代理（否则 healthcheck 等本地请求会被绕远）
-      NO_PROXY: "localhost,127.0.0.1,::1,host.docker.internal"
-      no_proxy: "localhost,127.0.0.1,::1,host.docker.internal"
+      #
+      # 为什么用自定义变量名而不直接注入 HTTP_PROXY/HTTPS_PROXY：
+      #   ffmpeg 会读 HTTP_PROXY（实测对 http/https 输入都生效），容器级注入会让所有平台
+      #   不论开关都走代理，且拉流失败时难以判断是平台问题还是代理问题。入口脚本只在
+      #   clone/npm 的命令行上显式带代理，录制链路则完全由页面「平台代理开关」决定。
+      LIVEGRAB_PROXY: "${LIVEGRAB_PROXY:-}"
       # 可选：分叉部署时改仓库地址（owner/repo 格式，同时作用于版本检测与容器内 clone；
       # 完整 URL 用 LIVEGRAB_GIT_URL，见 deploy/entrypoint.sh）
       # LIVEGRAB_REPO: "<你的账号>/livegrab"

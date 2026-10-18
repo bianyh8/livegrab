@@ -19,7 +19,7 @@ import { Auth, parseCookies } from '../server/auth.js';
 import { PlayManager } from '../server/play.js';
 import * as resolvers from '../server/resolvers/index.js';
 import * as proxyFetch from '../server/proxy-fetch.js';
-import { buildRecordArgs } from '../server/media.js';
+import { buildRecordArgs, ffmpegEnv, spawnFfmpeg } from '../server/media.js';
 import { isPullBlocked, reconnectDelay, Recorder } from '../server/recorder.js';
 import { sortFileRows } from '../server/file-order.js';
 import { byteLength, parseRange, safeJoin, formatBytes, formatDuration, HttpError, uid, VERSION, errText } from '../server/util.js';
@@ -729,7 +729,7 @@ function testFileOrder() {
 /* 代理开关全链路（用户要求：打开代理后抖音解析与录制都走代理）。
    关键点：Recorder 必须实时读取 store.settings——updateSettings 用 deepMerge 产出新对象替换，
    若启动时快照，运行中开关代理后重连/重新解析仍用旧值。 */
-function testRecorderLiveProxy() {
+async function testRecorderLiveProxy() {
   suite('代理开关：录制器实时读取 settings（打开后抖音即走代理）');
   const ff = { info() {}, warn() {}, error() {}, debug() {} };
   const task = { id: 't_liveproxy', platform: 'douyin', container: 'ts', segmentMode: 'time', quality: 'origin' };
@@ -755,6 +755,39 @@ function testRecorderLiveProxy() {
   const pi = withPx.indexOf('-http_proxy');
   ok(pi >= 0 && withPx[pi + 1] === 'http://127.0.0.1:7890', '开启代理时 ffmpeg 参数含 -http_proxy <代理地址>（录制拉流走代理）');
   ok(buildRecordArgs({ ...base, proxy: '' }).indexOf('-http_proxy') < 0, '未开代理时不含 -http_proxy（直连）');
+
+  /* ---- 代理环境隔离：ffmpeg 会读 HTTP_PROXY 环境变量（实测 8.x 对 http/https 输入都生效），
+     容器若注入该变量，用户在页面上「关掉代理」的平台也会走代理。故 spawn 时必须剥离。
+     这条断言防的是：以后有人图方便在 compose 里直接注入 HTTP_PROXY。 ---- */
+  const savedEnv = {};
+  for (const k of ['HTTP_PROXY', 'http_proxy', 'HTTPS_PROXY', 'https_proxy', 'ALL_PROXY', 'all_proxy']) savedEnv[k] = process.env[k];
+  process.env.HTTP_PROXY = 'http://127.0.0.1:7890';
+  process.env.http_proxy = 'http://127.0.0.1:7890';
+  process.env.HTTPS_PROXY = 'http://127.0.0.1:7890';
+  process.env.ALL_PROXY = 'socks5://127.0.0.1:1080';
+  const env = ffmpegEnv();
+  ok(!env.HTTP_PROXY && !env.http_proxy && !env.HTTPS_PROXY && !env.ALL_PROXY, 'ffmpegEnv 剥离全部代理变量（含大小写）');
+
+  // 真切 spawn 一次，验证「子进程实际拿到的环境」而不是只看函数返回值。
+  // 只检查 ffmpeg 真正会读的那 6 个键（用 /proxy/i 全量匹配会把 CODEBUDDY_SERVICE_PROXY_URL
+  // 这类仅名字含 proxy 的无关键也算进来，造成误报）。
+  const childEnv = await new Promise((resolve) => {
+    let buf = '';
+    const child = spawnFfmpeg({
+      ffmpegPath: process.execPath,
+      args: ['-e', "process.stdout.write([process.env.HTTP_PROXY,process.env.http_proxy,process.env.HTTPS_PROXY,process.env.https_proxy,process.env.ALL_PROXY,process.env.all_proxy].filter(Boolean).join(',')||'none')"],
+      onStdout: (c) => { buf += c.toString('utf8'); },
+    });
+    child.on('close', () => resolve(buf.trim()));
+  });
+  eq(childEnv, 'none', 'ffmpeg 子进程环境里没有任何代理变量（真实 spawn 验证）');
+
+  // 非代理变量必须原样保留，不能顺手把整个环境清空（否则 TZ/PATH 丢了会引发别的问题）
+  ok(env.PATH || env.Path, '剥离代理变量后其余环境（PATH）保持不变');
+  for (const k of Object.keys(savedEnv)) {
+    if (savedEnv[k] === undefined) delete process.env[k];
+    else process.env[k] = savedEnv[k];
+  }
 }
 
 /* 全局一致性审计守卫：把「前后端契约 / 多处口径不一致」的真实缺陷钉死，防止回退。 */

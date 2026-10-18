@@ -86,12 +86,21 @@ check(/TZ:\s*"\$\{TZ:-/.test(compose), 'compose 里的 TZ 可配置（D15）');
 check(/stop_grace_period/.test(compose), 'compose 设置 stop_grace_period（停止时给 ffmpeg 收尾时间）');
 const envKeys = [...compose.matchAll(/^\s{6}([A-Z_]+):/gm)].map((m) => m[1]);
 const serverSrc = walkFiles(path.join(APP, 'server')).filter((f) => f.endsWith('.js')).map((f) => fs.readFileSync(f, 'utf8')).join('\n');
-/* 代理类变量（HTTPS_PROXY/HTTP_PROXY/ALL_PROXY/NO_PROXY）由容器入口脚本消费——git clone
-   直接读环境变量，JS 侧不需要 process.env 读取。判定「有人消费」时必须把 entrypoint.sh
-   也算进来，否则会把这些变量误报成无人使用。 */
+/* 代理类变量由容器入口脚本消费——git clone / npm install 在各自命令行显式带代理。
+   判定「有人消费」时必须把 entrypoint.sh 也算进来，否则会把这些变量误报成无人使用。 */
 const entrySrc = fs.readFileSync(path.join(ROOT, 'deploy', 'entrypoint.sh'), 'utf8');
 const unread = envKeys.filter((k) => !serverSrc.includes(`process.env.${k}`) && !entrySrc.includes(k));
 check(unread.length === 0, 'compose 里的环境变量都被服务代码或入口脚本读取', unread.join(' ') || envKeys.join(' '));
+
+/* 代理绝不能以 HTTP_PROXY/HTTPS_PROXY/ALL_PROXY 注入容器环境：
+   ffmpeg 会读 HTTP_PROXY（实测对 http/https 输入都生效），一旦注入，用户在页面上关掉
+   「平台代理开关」的平台也会走代理，且拉流失败时无法判断是平台问题还是代理问题。
+   正确做法是 compose 只给 LIVEGRAB_PROXY，由入口脚本在 git/npm 命令行上显式使用。 */
+const leakedProxy = ['HTTP_PROXY', 'http_proxy', 'HTTPS_PROXY', 'https_proxy', 'ALL_PROXY', 'all_proxy']
+  .filter((k) => new RegExp(`^\\s{6}${k}:`, 'm').test(compose));
+check(leakedProxy.length === 0, 'compose 不直接注入代理环境变量（否则 ffmpeg 会绕过平台开关）', leakedProxy.join(' ') || 'LIVEGRAB_PROXY');
+check(/\$\{LIVEGRAB_PROXY:-\}/.test(compose), 'compose 通过 LIVEGRAB_PROXY 传入代理（作用域限定 git/npm）');
+check(/-c\s+"http\.proxy=\$PROXY_URL"/.test(entrySrc), '入口脚本用 git -c http.proxy 传代理（而非导出环境变量）');
 check(/route\('GET', '\/api\/health'/.test(serverSrc), '健康检查端点 /api/health 真实存在');
 check(/SIGTERM/.test(serverSrc) && /SIGINT/.test(serverSrc), '服务处理 SIGTERM/SIGINT 优雅退出');
 

@@ -294,9 +294,13 @@ export class UpdateManager {
 
   _api() { return `https://api.github.com/repos/${this._repo()}`; }
 
-  /** 系统更新代理地址：由 server.js 注入（读取 store.settings.proxy）。空表示不使用代理。 */
+  /** 系统更新代理地址。
+   *  优先级：页面「系统设置 → 平台账号 → 网络代理」（显式设置）> 容器环境变量 LIVEGRAB_PROXY
+   *  （compose 注入，与首启 clone 同一来源）。回退的意义：NAS 上只需在 .env 配一处，
+   *  首启 clone 与页面「立即更新」就都走代理，不必两处维护同一个地址。
+   *  不能用 HTTP_PROXY 环境变量做回退——ffmpeg 会读它，语义也不同（那条是给容器全局的）。 */
   _proxy() {
-    const v = (this.getProxy && this.getProxy()) || '';
+    const v = (this.getProxy && this.getProxy()) || process.env.LIVEGRAB_PROXY || '';
     return v ? normalizeProxy(v) : '';
   }
 

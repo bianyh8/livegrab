@@ -599,7 +599,7 @@
   "settings.pfProxyLabel": "网络代理（可选）",
   "settings.pfUaLabel": "User-Agent（可选）",
   "settings.pfUaPlaceholder": "留空则使用内置 UA",
-  "settings.pfProxyHint": "代理仅影响拉流与解析请求，不经过录制文件写入。海外平台必须走代理，否则会解析超时。",
+  "settings.pfProxyHint": "此地址只作用于拉流与解析：仅下方「代理」列开关打开的平台走它，未开启的平台一律直连（容器环境里的代理变量不会绕过开关）。它同时用于「立即更新」拉代码，留空则回退容器变量 LIVEGRAB_PROXY。不影响录制文件写入。",
   "settings.pfProxyLoopbackWarn": "当前运行在 Docker 容器内：127.0.0.1 指的是容器自己，代理连不通（表现为拉代码/解析一直卡到超时）。请改用宿主机的局域网地址，例如 http://192.168.1.10:20171；若代理在另一个容器里，也可用 http://容器名:端口。同时确认代理已开启 allow-lan。",
   "settings.pfMonitorTitle": "开播监控",
   "settings.pfMonitorHint": "全局参数，可被任务单独覆盖",

@@ -28,21 +28,27 @@ REPO_URL="${LIVEGRAB_GIT_URL:-https://github.com/${LIVEGRAB_REPO:-bianyh8/livegr
 BRANCH="${LIVEGRAB_BRANCH:-main}"
 EVT_FILE="${CONFIG_DIR:-/config}/.bootstrap-events"
 
-# compose 用 ${LIVEGRAB_PROXY:-} 注入代理：未配置时代理变量是空字符串。空值对 git/curl
-# 本身无害（它们按「未设置」处理），但部分库会判定为「已配置代理」而绕过直连。
-# 这里统一清掉空值，保证「没配代理 = 真直连」这一直觉成立。
-[ -z "${HTTPS_PROXY:-}" ] && unset HTTPS_PROXY
-[ -z "${HTTP_PROXY:-}" ] && unset HTTP_PROXY
-[ -z "${ALL_PROXY:-}" ] && unset ALL_PROXY
-[ -z "${https_proxy:-}" ] && unset https_proxy
-[ -z "${http_proxy:-}" ] && unset http_proxy
-[ -z "${all_proxy:-}" ] && unset all_proxy
-[ -z "${NO_PROXY:-}" ] && unset NO_PROXY
-[ -z "${no_proxy:-}" ] && unset no_proxy
+# ---- 代理 ----
+# 只在这里算出一个值，给 git / npm 的命令行显式使用；**不导出为 HTTP_PROXY**：
+# ffmpeg 会读 HTTP_PROXY（实测对 http/https 输入都生效），一旦导出，用户在页面上关掉
+# 「平台代理开关」的录制也会偷偷走代理，且拉流异常时无法区分是平台问题还是代理问题。
+# 来源：LIVEGRAB_PROXY（compose 注入）优先；兼容旧配置里手写的 HTTPS_PROXY/HTTP_PROXY。
+PROXY_URL="${LIVEGRAB_PROXY:-${HTTPS_PROXY:-${https_proxy:-${HTTP_PROXY:-${http_proxy:-}}}}}"
+# 空串一律视为「未配置」（旧 compose 会注入空字符串，部分是「已配置」误判的来源）
+[ -z "$PROXY_URL" ] && PROXY_URL=""
 
 log() { echo "[entrypoint] $*"; }
 # 启动引导事件 → marker 文件（服务启动后转写进日志文件）；写失败不影响启动
 evt() { printf '%s %s\n' "$1" "$2" >> "$EVT_FILE" 2>/dev/null || true; }
+
+# 带代理的 git：用 -c 传参而非环境变量，作用域仅限该次命令（与服务端 update.js 同一策略）
+gitx() {
+  if [ -n "$PROXY_URL" ]; then
+    git -c "http.proxy=$PROXY_URL" -c "https.proxy=$PROXY_URL" "$@"
+  else
+    git "$@"
+  fi
+}
 
 # 镜像内没有 git（旧镜像）：只能用内置代码
 if ! command -v git >/dev/null 2>&1; then
@@ -60,19 +66,18 @@ fi
 
 if [ ! -d "$SRC/.git" ]; then
   log "首次运行：克隆代码仓库 → $SRC"
-  # 代理只认容器环境变量（compose 的 LIVEGRAB_PROXY → HTTPS_PROXY）。页面里的代理设置存在
-  # /config 下、且克隆早于服务启动，此处不可用——这正是「页面配了代理、首次拉代码照样慢」的原因。
-  _pxy="${HTTPS_PROXY:-${https_proxy:-${ALL_PROXY:-${all_proxy:-}}}}"
-  if [ -n "$_pxy" ]; then
-    log "克隆将经代理：$_pxy"
-    case "$_pxy" in
+  # 代理来源：compose 的 LIVEGRAB_PROXY（页面里的设置存在 /config 下、且克隆早于服务启动，
+  # 此处不可用——这正是「页面配了代理、首次拉代码照样慢」的原因）。
+  if [ -n "$PROXY_URL" ]; then
+    log "克隆将经代理：$PROXY_URL"
+    case "$PROXY_URL" in
       *127.0.0.1*|*localhost*|*0.0.0.0*)
-        log "警告：代理用了回环地址（$_pxy）。容器内的 127.0.0.1 指向容器自身，通常连不通；请改用 NAS 局域网 IP 或代理容器名"
-        evt WARN "代理地址为回环地址（容器内指向容器自身，通常连不通）：$_pxy"
+        log "警告：代理用了回环地址（$PROXY_URL）。容器内的 127.0.0.1 指向容器自身，通常连不通；请改用 NAS 局域网 IP 或代理容器名"
+        evt WARN "代理地址为回环地址（容器内指向容器自身，通常连不通）：$PROXY_URL"
         ;;
     esac
   else
-    log "未设置 HTTPS_PROXY，克隆将直连 GitHub（私有仓库需 LIVEGRAB_GITHUB_TOKEN；网络受限时请配置代理）"
+    log "未设置 LIVEGRAB_PROXY，克隆将直连 GitHub（私有仓库需 LIVEGRAB_GITHUB_TOKEN；网络受限时请配置代理）"
     evt INFO "未设置代理，克隆直连 GitHub"
   fi
   # git 传输层抗抖动（与服务端 update.js 同一套策略）：
@@ -96,9 +101,9 @@ if [ ! -d "$SRC/.git" ]; then
     rm -rf "$SRC.tmp"
     if [ -n "${LIVEGRAB_GITHUB_TOKEN:-}" ]; then
       AUTH=$(printf 'x-access-token:%s' "$LIVEGRAB_GITHUB_TOKEN" | base64 | tr -d '\n')
-      git $GIT_FIX -c "http.extraheader=Authorization: Basic $AUTH" clone -b "$BRANCH" "$REPO_URL" "$SRC.tmp" && CLONE_OK=1
+      gitx $GIT_FIX -c "http.extraheader=Authorization: Basic $AUTH" clone -b "$BRANCH" "$REPO_URL" "$SRC.tmp" && CLONE_OK=1
     else
-      git $GIT_FIX clone -b "$BRANCH" "$REPO_URL" "$SRC.tmp" && CLONE_OK=1
+      gitx $GIT_FIX clone -b "$BRANCH" "$REPO_URL" "$SRC.tmp" && CLONE_OK=1
     fi
     CLONE_TRY=$((CLONE_TRY + 1))
   done
@@ -138,7 +143,7 @@ if [ ! -d "$SRC/.git" ]; then
   else
     rm -rf "$SRC.tmp"
     log "克隆失败（已重试 3 次：网络不通、私有仓库未配置 LIVEGRAB_GITHUB_TOKEN，或代理改写了 git 连接）"
-    log "排查代理：docker exec livegrab env | grep -i proxy（容器内 127.0.0.1 指向容器自身，应填 NAS 局域网 IP 或代理容器名）"
+    log "排查代理：确认 compose/.env 的 LIVEGRAB_PROXY 是「容器能到达」的地址（容器内 127.0.0.1 指向容器自身，应填 NAS 局域网 IP 或代理容器名）"
     log "本次使用镜像内置代码启动；网络/token 恢复后重启容器会重试克隆"
     evt ERROR "克隆失败（已重试 3 次；网络不通或未配置 LIVEGRAB_GITHUB_TOKEN），本次使用镜像内置代码；恢复后重启容器会重试"
   fi
@@ -166,6 +171,12 @@ fi
 cd "$APP_DIR" || { log "无法进入 $APP_DIR"; exit 1; }
 
 # 依赖校正：有网时补齐/升级依赖；失败（离线等）不阻断启动，继续使用现有 node_modules
+# npm 有自己的代理配置项（不读 HTTP_PROXY 也行），这里用 npm_config_* 命名，既让 npm 走代理，
+# 又不会被 ffmpeg 误读（它只认 HTTP_PROXY）。
+if [ -n "$PROXY_URL" ]; then
+  export npm_config_proxy="$PROXY_URL"
+  export npm_config_https_proxy="$PROXY_URL"
+fi
 if command -v npm >/dev/null 2>&1 && [ -f package.json ]; then
   if timeout 180 npm install --omit=dev --no-audit --no-fund --prefer-offline >/tmp/livegrab-npm-boot.log 2>&1; then
     log "依赖检查完成"
