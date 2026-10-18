@@ -28,6 +28,18 @@ REPO_URL="${LIVEGRAB_GIT_URL:-https://github.com/${LIVEGRAB_REPO:-bianyh8/livegr
 BRANCH="${LIVEGRAB_BRANCH:-main}"
 EVT_FILE="${CONFIG_DIR:-/config}/.bootstrap-events"
 
+# compose 用 ${LIVEGRAB_PROXY:-} 注入代理：未配置时代理变量是空字符串。空值对 git/curl
+# 本身无害（它们按「未设置」处理），但部分库会判定为「已配置代理」而绕过直连。
+# 这里统一清掉空值，保证「没配代理 = 真直连」这一直觉成立。
+[ -z "${HTTPS_PROXY:-}" ] && unset HTTPS_PROXY
+[ -z "${HTTP_PROXY:-}" ] && unset HTTP_PROXY
+[ -z "${ALL_PROXY:-}" ] && unset ALL_PROXY
+[ -z "${https_proxy:-}" ] && unset https_proxy
+[ -z "${http_proxy:-}" ] && unset http_proxy
+[ -z "${all_proxy:-}" ] && unset all_proxy
+[ -z "${NO_PROXY:-}" ] && unset NO_PROXY
+[ -z "${no_proxy:-}" ] && unset no_proxy
+
 log() { echo "[entrypoint] $*"; }
 # 启动引导事件 → marker 文件（服务启动后转写进日志文件）；写失败不影响启动
 evt() { printf '%s %s\n' "$1" "$2" >> "$EVT_FILE" 2>/dev/null || true; }
@@ -48,6 +60,21 @@ fi
 
 if [ ! -d "$SRC/.git" ]; then
   log "首次运行：克隆代码仓库 → $SRC"
+  # 代理只认容器环境变量（compose 的 LIVEGRAB_PROXY → HTTPS_PROXY）。页面里的代理设置存在
+  # /config 下、且克隆早于服务启动，此处不可用——这正是「页面配了代理、首次拉代码照样慢」的原因。
+  _pxy="${HTTPS_PROXY:-${https_proxy:-${ALL_PROXY:-${all_proxy:-}}}}"
+  if [ -n "$_pxy" ]; then
+    log "克隆将经代理：$_pxy"
+    case "$_pxy" in
+      *127.0.0.1*|*localhost*|*0.0.0.0*)
+        log "警告：代理用了回环地址（$_pxy）。容器内的 127.0.0.1 指向容器自身，通常连不通；请改用 NAS 局域网 IP 或代理容器名"
+        evt WARN "代理地址为回环地址（容器内指向容器自身，通常连不通）：$_pxy"
+        ;;
+    esac
+  else
+    log "未设置 HTTPS_PROXY，克隆将直连 GitHub（私有仓库需 LIVEGRAB_GITHUB_TOKEN；网络受限时请配置代理）"
+    evt INFO "未设置代理，克隆直连 GitHub"
+  fi
   # git 传输层抗抖动（与服务端 update.js 同一套策略）：
   #   「RPC failed; curl 16 Error in the HTTP2 framing layer」与「expected flush after ref listing」
   #   都出在 HTTP/2 / protocol v2 的 ref 通告协商被中间设备（代理、网关、科学上网工具）改写，
@@ -111,6 +138,7 @@ if [ ! -d "$SRC/.git" ]; then
   else
     rm -rf "$SRC.tmp"
     log "克隆失败（已重试 3 次：网络不通、私有仓库未配置 LIVEGRAB_GITHUB_TOKEN，或代理改写了 git 连接）"
+    log "排查代理：docker exec livegrab env | grep -i proxy（容器内 127.0.0.1 指向容器自身，应填 NAS 局域网 IP 或代理容器名）"
     log "本次使用镜像内置代码启动；网络/token 恢复后重启容器会重试克隆"
     evt ERROR "克隆失败（已重试 3 次；网络不通或未配置 LIVEGRAB_GITHUB_TOKEN），本次使用镜像内置代码；恢复后重启容器会重试"
   fi

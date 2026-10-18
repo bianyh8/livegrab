@@ -79,8 +79,16 @@ compose 相对 `livegrab/` 目录挂载：
 | `LIVEGRAB_REPO` | `bianyh8/livegrab` | 更新检查与 clone 的目标仓库（`owner/repo`），分叉部署时改这里 |
 | `LIVEGRAB_BRANCH` | `main` | 更新检查与 clone 的目标分支 |
 | `LIVEGRAB_GIT_URL` | 由 `LIVEGRAB_REPO` 推导 | 仓库完整 clone URL（非 GitHub 托管时才需要显式设置） |
+| `LIVEGRAB_PROXY` | （空） | 容器出网代理，如 `http://192.168.1.10:20171`。作用于**首次启动的 git clone** 与拉流/解析；页面「立即更新」用的是页面里配的代理 |
 
-> 需要走代理拉流时，在 compose 里给容器加 `HTTPS_PROXY`（参考文件内注释）。
+> **代理有两个入口，互不影响，两处都要配**（只配一个会出现「首次能拉、更新还是慢」或相反）：
+> - `LIVEGRAB_PROXY`（compose / `.env`）→ 容器首次启动 `git clone`、拉流与解析
+> - 页面「系统设置 → 平台账号 → 网络代理」→ 页面「立即更新」时的 `git fetch`
+>
+> 两处都必须填**容器能到达**的地址。容器内的 `127.0.0.1` 指向容器自身，不是 NAS：
+> 代理是独立容器且已映射端口 → 用 NAS 局域网 IP（`http://192.168.1.10:20171`）；
+> 与 livegrab 在同一 compose 网络 → 用服务名（`http://clash:7890`，更稳）；
+> 纯 SOCKS 端口要写 `socks5://` 前缀。另外确认代理容器已开启 `allow-lan`，否则局域网 IP 也连不上。
 
 ### 系统更新（公开 / 私有仓库）
 

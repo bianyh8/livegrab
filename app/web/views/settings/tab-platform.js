@@ -34,7 +34,7 @@ export async function render(root, ctx, kit) {
           <div class="row wrap">
             <div class="f1" style="min-width:260px">
               <label class="fl">${t('settings.pfProxyLabel')}</label>
-              <input class="input mono" id="pfProxy" placeholder="http://127.0.0.1:7890" value="${esc(s.proxy || '')}" />
+              <input class="input mono" id="pfProxy" placeholder="http://192.168.1.10:7890" value="${esc(s.proxy || '')}" />
             </div>
             <div class="f1" style="min-width:260px">
               <label class="fl">${t('settings.pfUaLabel')}</label>
@@ -42,6 +42,7 @@ export async function render(root, ctx, kit) {
             </div>
           </div>
           <div class="hintline">${t('settings.pfProxyHint')}</div>
+          <div class="hintline" id="pfProxyWarn" style="display:none;color:var(--warn)"></div>
         </div>
       </div>
 
@@ -74,6 +75,7 @@ export async function render(root, ctx, kit) {
   kit.bind(root.querySelector('#pfPoll'), 'pollIntervalSec', 'number');
   kit.bind(root.querySelector('#pfStartDelay'), 'startDelaySec', 'number');
   kit.bind(root.querySelector('#pfStopDelay'), 'stopDelaySec', 'number');
+  watchProxyLoopback(root, kit);
 
   bindSwitches(root, (sw) => {
     const penId = sw.dataset.pen;
@@ -157,6 +159,24 @@ export async function render(root, ctx, kit) {
       return [cancel, ok];
     },
   });
+}
+
+/* 容器内代理填回环地址必然连不通：127.0.0.1 指向容器自身，而非宿主机/代理容器。
+   仅当后端确认运行在 Docker 里时提示（本地直跑时 127.0.0.1 才是正确写法）。 */
+const LOOPBACK_RE = /^(?:(?:https?|socks4a?|socks5h?|socks):\/\/)?(?:127(?:\.\d{1,3}){3}|localhost|0\.0\.0\.0|\[::1\])(?::|\/|$)/i;
+
+function watchProxyLoopback(root, kit) {
+  const inp = root.querySelector('#pfProxy');
+  const warn = root.querySelector('#pfProxyWarn');
+  if (!inp || !warn) return;
+  const check = () => {
+    const inDocker = !!(kit.state.env && kit.state.env.inDocker);
+    const hit = inDocker && LOOPBACK_RE.test(String(inp.value || '').trim());
+    warn.style.display = hit ? '' : 'none';
+    warn.textContent = hit ? t('settings.pfProxyLoopbackWarn') : '';
+  };
+  inp.addEventListener('input', check);
+  check();
 }
 
 /* ---------- 行渲染 ---------- */

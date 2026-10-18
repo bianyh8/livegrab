@@ -600,6 +600,7 @@
   "settings.pfUaLabel": "User-Agent（可选）",
   "settings.pfUaPlaceholder": "留空则使用内置 UA",
   "settings.pfProxyHint": "代理仅影响拉流与解析请求，不经过录制文件写入。海外平台必须走代理，否则会解析超时。",
+  "settings.pfProxyLoopbackWarn": "当前运行在 Docker 容器内：127.0.0.1 指的是容器自己，代理连不通（表现为拉代码/解析一直卡到超时）。请改用宿主机的局域网地址，例如 http://192.168.1.10:20171；若代理在另一个容器里，也可用 http://容器名:端口。同时确认代理已开启 allow-lan。",
   "settings.pfMonitorTitle": "开播监控",
   "settings.pfMonitorHint": "全局参数，可被任务单独覆盖",
   "settings.pfPollLabel": "全局轮询检测",

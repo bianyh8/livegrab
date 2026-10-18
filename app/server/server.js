@@ -41,6 +41,16 @@ const RECORD_ROOT = process.env.RECORD_ROOT || '/data';
 const PORT = Number(process.env.PORT || 8080);
 const HOST = process.env.HOST || '0.0.0.0';
 
+/** 是否运行在容器内：容器里的 127.0.0.1 指向容器自身，代理填回环地址必然连不通。
+    设置页据此给出提示（仅 Docker 部署才有意义，本地直跑时 127.0.0.1 是正确的）。
+    判据：/.dockerenv 存在，或 PID 1 的 cgroup 含 docker/containerd/kubepods。 */
+const IN_DOCKER = (() => {
+  try {
+    if (fs.existsSync('/.dockerenv')) return true;
+    return /docker|containerd|kubepods/i.test(fs.readFileSync('/proc/1/cgroup', 'utf8'));
+  } catch { return false; }
+})();
+
 const server = http.createServer();
 const sseClients = new Set();
 
@@ -389,6 +399,7 @@ async function main() {
     tz: tzName(), recordRoot: RECORD_ROOT, configDir: CONFIG_DIR, port: PORT,
     ffmpegAvailable: scheduler.engine.available, ffmpegVersion: scheduler.engine.version,
     version, node: process.version, platforms: PLATFORMS.length,
+    inDocker: IN_DOCKER,
   }));
 
   // ---- 文件库 ----

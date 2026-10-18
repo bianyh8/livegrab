@@ -45,7 +45,9 @@ check(/ENV[\s\S]*RECORD_ROOT=\/data[\s\S]*CONFIG_DIR=\/config/.test(dockerfile),
 check(/HEALTHCHECK[\s\S]*?\/api\/health/.test(dockerfile), 'HEALTHCHECK 探活 /api/health');
 check(/STOPSIGNAL\s+SIGTERM/.test(dockerfile), 'STOPSIGNAL SIGTERM（配合 compose 的 stop_grace_period 收尾当前分段）');
 check(/CMD\s+\["node",\s*"server\/server\.js"\]/.test(dockerfile), 'CMD 与 WORKDIR 下的入口路径一致');
-check(/\bnpm ci --omit=dev\b/.test(dockerfile), '镜像内 npm ci --omit=dev 安装唯一生产依赖 better-sqlite3');
+/* package-lock.json 已移出版本控制（避免容器内自更新被锁文件卡死），故 Dockerfile 用
+   npm install 而非 npm ci（后者强制要求锁文件存在）。两种写法都合规。 */
+check(/\bnpm (?:ci|install) --omit=dev\b/.test(dockerfile), '镜像内只装生产依赖 better-sqlite3（无锁文件时用 npm install）');
 
 /* ---------- 3) COPY 源都在构建上下文里 + 没被 .dockerignore 排除 ---------- */
 const copySources = [];
@@ -84,8 +86,12 @@ check(/TZ:\s*"\$\{TZ:-/.test(compose), 'compose 里的 TZ 可配置（D15）');
 check(/stop_grace_period/.test(compose), 'compose 设置 stop_grace_period（停止时给 ffmpeg 收尾时间）');
 const envKeys = [...compose.matchAll(/^\s{6}([A-Z_]+):/gm)].map((m) => m[1]);
 const serverSrc = walkFiles(path.join(APP, 'server')).filter((f) => f.endsWith('.js')).map((f) => fs.readFileSync(f, 'utf8')).join('\n');
-const unread = envKeys.filter((k) => !serverSrc.includes(`process.env.${k}`));
-check(unread.length === 0, 'compose 里的环境变量都被代码读取', unread.join(' ') || envKeys.join(' '));
+/* 代理类变量（HTTPS_PROXY/HTTP_PROXY/ALL_PROXY/NO_PROXY）由容器入口脚本消费——git clone
+   直接读环境变量，JS 侧不需要 process.env 读取。判定「有人消费」时必须把 entrypoint.sh
+   也算进来，否则会把这些变量误报成无人使用。 */
+const entrySrc = fs.readFileSync(path.join(ROOT, 'deploy', 'entrypoint.sh'), 'utf8');
+const unread = envKeys.filter((k) => !serverSrc.includes(`process.env.${k}`) && !entrySrc.includes(k));
+check(unread.length === 0, 'compose 里的环境变量都被服务代码或入口脚本读取', unread.join(' ') || envKeys.join(' '));
 check(/route\('GET', '\/api\/health'/.test(serverSrc), '健康检查端点 /api/health 真实存在');
 check(/SIGTERM/.test(serverSrc) && /SIGINT/.test(serverSrc), '服务处理 SIGTERM/SIGINT 优雅退出');
 
