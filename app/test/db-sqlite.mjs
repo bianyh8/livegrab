@@ -184,8 +184,23 @@ check('导入的场次重开后恢复（含文件归属）', !!sx1b && sx1b.segm
 check('自动注册的场次重开后恢复', store3.sessions.some((s) => s.id === sa.id && s.platform === 'huya'));
 db3.close();
 
-// ---------- 旧 v1 库（data_json）作废重建 ----------
+// ---------- 老库升级：notify 表缺 on_live/dedupe 列（v0.1.36 迁移 bug：开播通知被静默关闭） ----------
 const { default: Database } = await import('better-sqlite3');
+const oldPath = path.join(tmp, 'old-notify.db');
+const oldDb = new Database(oldPath);
+oldDb.exec(`CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+  INSERT INTO meta(key,value) VALUES('schema_version','2');
+  CREATE TABLE notify (id INTEGER PRIMARY KEY CHECK (id = 1), webhook TEXT, on_start INTEGER, on_end INTEGER, on_error INTEGER, on_disk INTEGER, on_cookie INTEGER, dedupe_sec INTEGER, retry INTEGER);
+  INSERT INTO notify(id, webhook, on_start, on_end, on_error, on_disk, on_cookie, dedupe_sec, retry) VALUES(1, 'https://example.com/hook', 1,1,1,1,0,60,1);`);
+oldDb.close();
+const dbOld = openDb(oldPath);
+check('老库迁移补 on_live 列', dbOld.prepare("SELECT name FROM pragma_table_info('notify')").all().some((c) => c.name === 'on_live'));
+check('老库存量行 on_live 修正为 1（开播通知不丢失）', dbOld.prepare('SELECT on_live FROM notify WHERE id=1').get().on_live === 1);
+const storeOld = await new Store(tmp).init(dbOld);
+check('迁移后读取 onLive=true', storeOld.settings.notify.onLive === true);
+dbOld.close();
+
+// ---------- 旧 v1 库（data_json）作废重建 ----------
 const v1Path = path.join(tmp, 'v1.db');
 const v1 = new Database(v1Path);
 v1.exec("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL); INSERT INTO meta(key,value) VALUES('schema_version','1'); CREATE TABLE tasks (id TEXT PRIMARY KEY, data_json TEXT NOT NULL); INSERT INTO tasks VALUES('t_old','{}');");

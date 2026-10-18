@@ -39,8 +39,8 @@ export class Notifier {
 
   async send(event, title, message, meta = {}) {
     const webhook = this.cfg.webhook;
-    if (!webhook) return { skipped: 'no-webhook' };
-    if (!this.eventEnabled(event)) return { skipped: 'disabled' };
+    if (!webhook) { this.logger.debug(`通知跳过（${event}）：未配置 Webhook`); return { skipped: 'no-webhook' }; }
+    if (!this.eventEnabled(event)) { this.logger.debug(`通知跳过（${event}）：事件开关已关闭`); return { skipped: 'disabled' }; }
     if (meta.test !== true && this.shouldDedupe(event, meta.taskId)) {
       this.logger.debug(`通知去重（${event} / ${meta.taskId || 'global'}）`);
       return { skipped: 'deduped' };

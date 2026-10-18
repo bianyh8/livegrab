@@ -415,7 +415,8 @@ export class Store {
     const nrow = db.prepare('SELECT * FROM notify WHERE id = 1').get();
     if (nrow) {
       Object.assign(state.settings.notify, {
-        webhook: nrow.webhook || '', onStart: !!nrow.on_start, onEnd: !!nrow.on_end, onLive: !!nrow.on_live, onError: !!nrow.on_error,
+        webhook: nrow.webhook || '', onStart: !!nrow.on_start, onEnd: !!nrow.on_end,
+        onLive: nrow.on_live == null ? true : !!nrow.on_live, onError: !!nrow.on_error,
         onDisk: !!nrow.on_disk, onCookie: !!nrow.on_cookie, dedupeSec: nrow.dedupe_sec, dedupe: nrow.dedupe == null ? true : !!nrow.dedupe, retry: !!nrow.retry,
       });
     }

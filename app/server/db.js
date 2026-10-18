@@ -379,6 +379,9 @@ export function openDb(dbPath, onLog = null) {
     const ntCols = db.prepare("SELECT name FROM pragma_table_info('notify')").all().map((c) => c.name);
     if (!ntCols.includes('on_live')) db.exec('ALTER TABLE notify ADD COLUMN on_live INTEGER');
     if (!ntCols.includes('dedupe')) db.exec('ALTER TABLE notify ADD COLUMN dedupe INTEGER');
+    // 老库 ALTER 加列无 DEFAULT → 存量行 on_live 为 NULL，读取时 !!NULL=false 会把「开播通知」静默关掉（v0.1.36 bug）。
+    // 幂等修正：NULL 视为开启（默认值 onLive:true 的落库形态），每次打开都跑也无副作用。
+    db.exec('UPDATE notify SET on_live = 1 WHERE on_live IS NULL');
   } catch { /* 幂等：这次没成功下次打开再补 */ }
   applyPragmas(db);
   if (isRebuild) {
