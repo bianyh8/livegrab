@@ -20,7 +20,7 @@ import { PlayManager } from '../server/play.js';
 import * as resolvers from '../server/resolvers/index.js';
 import * as proxyFetch from '../server/proxy-fetch.js';
 import { buildRecordArgs, ffmpegEnv, spawnFfmpeg } from '../server/media.js';
-import { isPullBlocked, reconnectDelay, Recorder } from '../server/recorder.js';
+import { isPullBlocked, reconnectDelay, planReconnect, Recorder } from '../server/recorder.js';
 import { sortFileRows } from '../server/file-order.js';
 import { byteLength, parseRange, safeJoin, formatBytes, formatDuration, HttpError, uid, VERSION, errText } from '../server/util.js';
 import { seekRatio } from '../web/ui.js';
@@ -891,6 +891,20 @@ async function testPullBlockedBackoff() {
   eq(reconnectDelay({ blocked: true, attempt: 3 }), 60000, '被拒第 3 次冷却 60s');
   eq(reconnectDelay({ blocked: true, attempt: 5 }), 120000, '被拒第 5 次冷却 120s');
   eq(reconnectDelay({ blocked: true, attempt: 99 }), 120000, '被拒超出表长封顶 120s');
+  // 录到了数据就不算失败：这是「一场断 5 次就整场被停」的根因修复
+  const p1 = planReconnect({ attempt: 4, max: 5, bytesSinceSpawn: 30 * 1024 * 1024 });
+  eq(p1.stop, false, '本段录到 30MB → 不判停（即使已断 4 次）');
+  eq(p1.attempt, 1, '本段录到数据 → 重连计数归零');
+  eq(p1.delay, 1000, '有数据的断流用 1s 快速续上（少丢流）');
+  const p2 = planReconnect({ attempt: 4, max: 5, bytesSinceSpawn: 0 });
+  eq(p2.stop, false, '第 5 次「零数据」仍给一次机会');
+  const p3 = planReconnect({ attempt: 5, max: 5, bytesSinceSpawn: 0 });
+  eq(p3.stop, true, '连续 5 次都没录到数据 → 停（真死流才放弃）');
+  const p4 = planReconnect({ blocked: true, attempt: 1, max: 5, bytesSinceSpawn: 5 * 1024 * 1024 });
+  eq(p4.stop, false, '403 但本段有数据 → 不停，只走长冷却');
+  eq(p4.delay, 15000, '403 冷却 15s');
+  const p5 = planReconnect({ attempt: 1, max: 5, bytesSinceSpawn: 512 * 1024 });
+  eq(p5.attempt, 2, '不足 1MB 视为未录到（防「刚开就断」无限循环）');
 
   // 行为：403 后 3 秒内不得出现第二次拉取（普通断流 2s 就会重试；被拒则冷却 ≥15s）
   const e = await makeEngine('blocked', { FAKE_FAIL_HTTP: '403' });

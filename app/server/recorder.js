@@ -5,7 +5,7 @@ import fsp from 'node:fs/promises';
 import * as media from './media.js';
 import { buildOutputPattern, buildContext, pickProfile, renderName, reserveName, qualityLabel, seqText } from './naming.js';
 import { effectiveProxyForPlatform } from './proxy-fetch.js';
-import { nowIso, ensureDir, safeJoin, sleep, errText } from './util.js';
+import { nowIso, ensureDir, safeJoin, sleep, errText, formatBytes } from './util.js';
 
 const BACKOFF = [2000, 4000, 8000, 16000, 30000];
 // 403/401/429 是平台侧明确拒绝（风控/限流/签名失效），不是网络抖动。
@@ -24,6 +24,23 @@ export function isPullBlocked(tail) {
 export function reconnectDelay({ blocked = false, attempt = 1 } = {}) {
   const table = blocked ? BLOCKED_BACKOFF : BACKOFF;
   return table[Math.min(Math.max(1, Number(attempt) || 1) - 1, table.length - 1)];
+}
+
+/** 单次拉流录到这个量就算「这段是好的」：断在它之后不消耗重连额度（用户实测：每段录几十兆才断，累计 5 次就整场被杀） */
+export const PRODUCTIVE_BYTES = 1024 * 1024;
+
+/**
+ * 一次 ffmpeg 退出该怎么处理（纯函数，便于离线测试）。
+ * 关键语义：只有「这次一个字都没录到」才算一次失败；录到了数据就说明链路是通的，
+ * 计数归零、用最短延迟续上（1s），避免「断满 5 次整场停录」把好好的几个小时切成碎段。
+ */
+export function planReconnect({ blocked = false, attempt = 0, max = 5, bytesSinceSpawn = 0 } = {}) {
+  const productive = Number(bytesSinceSpawn) >= PRODUCTIVE_BYTES;
+  const next = productive ? 1 : Number(attempt) + 1;
+  if (!productive && next > max) return { stop: true, attempt: next, delay: 0, productive };
+  const delay = blocked ? reconnectDelay({ blocked: true, attempt: next })
+    : (productive ? 1000 : reconnectDelay({ blocked: false, attempt: next }));
+  return { stop: false, attempt: next, delay, productive };
 }
 
 export class Recorder extends EventEmitter {
@@ -51,6 +68,8 @@ export class Recorder extends EventEmitter {
     this.closed = new Set();
     this.reconnectAttempt = 0;
     this._stderrTail = [];
+    this._rawStderr = [];   // 最近若干行 ffmpeg stderr（不过滤）：断流时写进日志才能定性
+    this._bytesAtSpawn = 0; // 本次拉流启动时的落盘字节数（算「这次录到没有」）
     this.currentBytes = 0;
     this.currentSegment = null;
     this._rateBits = 0;       // 各任务实时下载速率（bit/s）
@@ -155,6 +174,7 @@ export class Recorder extends EventEmitter {
   async _spawn(startNumber) {
     const t = this.task;
     this.lastStderrError = null; // 每次拉取前清空：避免上一次的错误行误判本次的失败类型
+    this._rawStderr = [];        // 同理：只统计本次拉流的 stderr
     const outputPattern = path.join(this.dir, this.outputName);
     const args = this.media.buildRecordArgs({
       streamUrl: this.streamUrl,
@@ -173,6 +193,7 @@ export class Recorder extends EventEmitter {
     });
     this.logger.info(`启动 ffmpeg（第 ${startNumber} 段起 · ${this.qualityLabelText} · 流地址 ${this.streamUrl}）`, this._meta());
     this.child = this.media.spawnFfmpeg({ args, onStderr: (line) => this._onStderr(line) });
+    this._bytesAtSpawn = await this._bytesOnDisk();
     this.child.on('close', (code, signal) => this._onClose(code, signal));
     this.child.on('error', (e) => {
       // 带上最近一条 ffmpeg stderr（如有）：ENOENT 之外的「启动即失败」，stderr 往往是唯一线索
@@ -183,6 +204,8 @@ export class Recorder extends EventEmitter {
   }
 
   _onStderr(line) {
+    this._rawStderr.push(String(line).slice(0, 300));
+    if (this._rawStderr.length > 8) this._rawStderr.shift();
     if (/error|failed|invalid|refused|timed out|404|403|401/i.test(line)) this.lastStderrError = line;
     if (/Opening|Stream|Duration|Output/i.test(line)) {
       this._stderrTail.push(line);
@@ -264,6 +287,16 @@ export class Recorder extends EventEmitter {
     return out.sort((a, b) => a.index - b.index);
   }
 
+  /** 当前已落盘字节数（用于判断「这次拉流到底录到没有」） */
+  async _bytesOnDisk() {
+    let total = 0;
+    for (const s of await this.scanSegments()) {
+      const st = await fsp.stat(s.path).catch(() => null);
+      if (st) total += st.size;
+    }
+    return total;
+  }
+
   async _rotate() {
     this.rotating = true;
     const segs = await this.scanSegments();
@@ -316,21 +349,28 @@ export class Recorder extends EventEmitter {
       } catch { /* 探活失败按仍在直播处理，走重连 */ }
     }
     const max = Number(this.task.reconnectMax ?? this.settings.reconnectMax) || 5;
-    this.reconnectAttempt += 1;
-    if (this.reconnectAttempt > max) {
+    const grew = Math.max(0, (await this._bytesOnDisk()) - (this._bytesAtSpawn || 0));
+    const plan = planReconnect({ blocked, attempt: this.reconnectAttempt, max, bytesSinceSpawn: grew });
+    this.reconnectAttempt = plan.attempt;
+    if (plan.stop) {
       this.emit('error', {
         code: blocked ? 'PULL_BLOCKED' : 'RECONNECT_EXCEEDED',
-        message: `${blocked ? '拉流持续被平台拒绝（疑似风控/限流）' : `连续 ${max} 次断流`}，已停止重连（ffmpeg exit=${code}${signal ? ` signal=${signal}` : ''}）${tail ? `：${tail}` : ''}`,
+        message: `${blocked ? '拉流持续被平台拒绝（疑似风控/限流）' : `连续 ${max} 次断流且每次都没录到数据`}，已停止重连（ffmpeg exit=${code}${signal ? ` signal=${signal}` : ''}）${tail ? `：${tail}` : ''}`,
         retryable: false,
       });
       await this._finalize('error');
       return;
     }
-    const delay = reconnectDelay({ blocked, attempt: this.reconnectAttempt });
-    this.emit('reconnect', { attempt: this.reconnectAttempt, delayMs: delay, error: tail || `ffmpeg exit=${code}`, blocked });
-    this.logger.warn(blocked
-      ? `拉流被平台拒绝（疑似风控/限流），${Math.round(delay / 1000)} 秒后第 ${this.reconnectAttempt}/${max} 次重试（复用当前地址，不重新解析）`
-      : `断流，${Math.round(delay / 1000)} 秒后第 ${this.reconnectAttempt}/${max} 次重连`, this._meta());
+    const delay = plan.delay;
+    this.emit('reconnect', { attempt: this.reconnectAttempt, delayMs: delay, error: tail || `ffmpeg exit=${code}`, blocked, productive: plan.productive });
+    const raw = this._rawStderr.slice(-2).join(' | ');
+    const why = plan.productive
+      ? `本段已录 ${formatBytes(grew)}，重连计数归零`
+      : `本次未录到数据（连续第 ${this.reconnectAttempt}/${max} 次）`;
+    this.logger.warn(
+      `${blocked ? '拉流被平台拒绝（疑似风控/限流）' : '断流'}（ffmpeg exit=${code}${signal ? ` signal=${signal}` : ''}）｜${why}，${Math.round(delay / 1000)} 秒后重连${raw ? `｜stderr：${raw}` : ''}`,
+      this._meta(),
+    );
     await sleep(delay);
     if (this.stopping || this.paused) return;
     try {
