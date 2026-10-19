@@ -34,6 +34,8 @@ const state = {
 const PAGE_SIZE = 10;
 
 let boundRoot = null;
+let offFiles = null;   // SSE files 事件的退订函数
+let filesTimer = null; // 事件合并定时器（成串事件压成一次请求）
 
 /* 默认查询区间：近 7 天（7 天前 → 今天） */
 function defaultDateRange() {
@@ -77,10 +79,22 @@ export async function render(root, ctx) {
   if (!state.bound) state.bound = true;
   if (!state.defaultsSet) resetToDefaults(true);
   ctx.onRefresh(() => tick(ctx));
+  // 服务端 SSE 的 files 事件：新分段落地 / 删除 / 回放产物生成 / 缺失标记都会推。
+  // 收到就立即刷新，不必等下一次 2 秒轮询（轮询保留 —— SSE 断线重连期间靠它自愈）。
+  // 事件常成串到来（一次扫描可能连发几条），250ms 合并成一次请求。
+  if (offFiles) { offFiles(); offFiles = null; }
+  offFiles = ctx.on('files', () => {
+    if (filesTimer) clearTimeout(filesTimer);
+    filesTimer = setTimeout(() => { filesTimer = null; void tick(ctx); }, 250);
+  });
   await tick(ctx, true);
 }
 
-export function destroy() { boundRoot = null; }
+export function destroy() {
+  if (offFiles) { offFiles(); offFiles = null; }
+  if (filesTimer) { clearTimeout(filesTimer); filesTimer = null; }
+  boundRoot = null;
+}
 
 async function tick(ctx, initial) {
   if (state.pending) return;
@@ -98,10 +112,31 @@ async function tick(ctx, initial) {
     state.bytes = Number((r && r.bytes) || 0);
     if (r && Array.isArray(r.platforms)) state.platforms = r.platforms;
     paint(ctx, initial);
+    // 整表没重绘时（内容指纹未变），把「大小」这类会持续增长的数字单独补上：
+    // 指纹里不含字节数，录制中的分段在长大但总数不变 → 不补的话大小会停在旧值。
+    patchSizes();
   } catch (e) {
     if (initial && boundRoot) boundRoot.innerHTML = `<div class="card"><div class="empty">${t('files.loadFailed', esc(e.message || t('common.unknownError')))}</div></div>`;
   } finally {
     state.pending = false;
+  }
+}
+
+/* 只改「大小」这几个文本节点，不重建 DOM：不动搜索框焦点、不丢勾选、不跳滚动位置。 */
+function patchSizes() {
+  const root = boundRoot;
+  if (!root || !root.isConnected) return;
+  const head = root.querySelector('[data-files-bytes]');
+  if (head) {
+    const txt = `${t('files.videoCount', state.total)} · ${formatBytes(state.bytes)}`;
+    if (head.textContent !== txt) head.textContent = txt;
+  }
+  const byId = new Map(state.rows.map((row) => [String(row.f.id), row]));
+  for (const el of root.querySelectorAll('[data-file-size]')) {
+    const row = byId.get(String(el.dataset.fileSize));
+    if (!row) continue; // 这一行已不在当前页（翻页/筛选变了）：等下次整表重绘
+    const txt = formatBytes(row.f.bytes || 0);
+    if (el.textContent !== txt) el.textContent = txt;
   }
 }
 
@@ -133,7 +168,7 @@ function paint(ctx, force) {
     <div class="card">
       <div class="card-h">
         <h3>${t('files.libraryTitle')}</h3>
-        <span class="hint">${esc(t('files.videoCount', state.total))} · ${esc(formatBytes(state.bytes))}</span>
+        <span class="hint" data-files-bytes>${esc(t('files.videoCount', state.total))} · ${esc(formatBytes(state.bytes))}</span>
         <div class="spacer"></div>
         <button class="btn sm ghost" id="flRefresh">${t('common.refresh')}</button>
       </div>
@@ -193,7 +228,7 @@ function filenameRow({ f, s, tag }) {
           <span>${esc(s.streamer || t('common.unknownAnchor'))}</span>
           <span>${esc(formatDateTime(s.startedAt))}</span>
           <span>${esc(t('files.duration', esc(formatDuration(f.durationSec || s.durationSec || 0))))}</span>
-          <span>${esc(formatBytes(f.bytes || 0))}</span>
+          <span data-file-size="${esc(f.id)}">${esc(formatBytes(f.bytes || 0))}</span>
         </div>
       </div>
       <div class="acts">

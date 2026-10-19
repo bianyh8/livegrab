@@ -542,7 +542,6 @@ async function boot() {
   bindChrome();
   bindLogin();
   ctx.on('logout', () => { doLogout(); });
-  ctx.on('refresh-all', () => { ctx.invalidate(runtime.page); });
   window.addEventListener('hashchange', () => { handleRoute(false); });
   try {
     // 时区不在前台显示/修改（默认 Asia/Shanghai，Docker 里由 compose 的 environment: TZ 提供），

@@ -272,6 +272,7 @@ node test/update-git-flow.mjs  # 本地 git 工作区更新链路集成测试（
 node test/check-docker.mjs     # Docker 打包自检（无需装 Docker）：静态校验 + 容器形态冒烟 + 运行目录部署/启动冒烟 + 依赖校验
 node test/e2e-ffmpeg.mjs       # 录制链路端到端（假 ffmpeg：分段 / 收尾 / 转封装 / 合并）
 node test/e2e-ui.mjs           # 真实浏览器端到端（需本机 Edge/Chrome，找不到会自动跳过）
+node test/e2e-files-refresh.mjs # 文件库：大小自动跟新 / SSE 即时刷新 / 刷新按钮（需浏览器，找不到自动跳过）
 sh ../deploy/test-git-commit.sh # 提交号解析器 fixture（松散 ref / packed-refs / detached / 无 .git / 符号 ref）
 ```
 

@@ -32,7 +32,6 @@ const state = {
 
 let boundRoot = null;
 let offLog = null;
-let onRefreshAll = null;
 
 export async function render(root, ctx) {
   boundRoot = root;
@@ -64,9 +63,6 @@ export async function render(root, ctx) {
     }
   });
 
-  if (onRefreshAll) { onRefreshAll(); onRefreshAll = null; }
-  onRefreshAll = ctx.on('refresh-all', () => { if (boundRoot) { state.pending = false; refresh(ctx); } });
-
   // 全局 2s 轮询会调用这里的回调：暂停实时追加时跳过自动刷新，
   // 否则每 2 秒拉取重绘仍会把新日志刷出来，导致「暂停」形同虚设。
   // 注意：仅拦截自动轮询；筛选/翻页/清除等用户主动操作仍直接调用 refresh()，不受暂停影响。
@@ -76,7 +72,6 @@ export async function render(root, ctx) {
 
 export function destroy() {
   if (offLog) { offLog(); offLog = null; }
-  if (onRefreshAll) { onRefreshAll(); onRefreshAll = null; }
   state.bound = false;
   boundRoot = null;
 }
