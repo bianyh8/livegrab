@@ -7,9 +7,12 @@
 //
 // 这里给出一条稳定、可解释的默认顺序：
 //   1) 按录制开始时间倒序（最新的在最前）；
-//   2) 同一场次（session.id）的文件聚合在一起，且相对次序稳定；
-//   3) 同一场次内：分段按 segmentIndex 升序在前，派生文件（mp4/合并/m4a）排在分段之后；
-//   4) 兜底按文件名，保证任意初始顺序都得到唯一确定的结果。
+//   2) 同一目录（主播/场次目录）的文件聚合在一起，相对次序稳定；
+//      注意：不能按 session.id 排——扫描注册的独立场次（taskId=null）每段一个场次、
+//      id 是随机串，按 id 字典序会出现 002,004,001,003 这种「随机」顺序；
+//   3) 同一目录内：分段按 segmentIndex 升序在前，派生文件（mp4/合并/m4a）排在分段之后；
+//   4) 兜底按文件名（独立场次分段 segmentIndex 全为 0 时，001/002/003/004 天然按名排）。
+//   5) 跨目录时按目录名字典序（仅在同一 startedAt 内比较，不同时间已被 1) 分开）。
 
 const tsOf = (v) => {
   const t = new Date(v || 0).getTime();
@@ -37,9 +40,9 @@ export function compareFileRow(a, b) {
   const byTime = tsOf(sb.startedAt) - tsOf(sa.startedAt);
   if (byTime) return byTime;
 
-  // 2) 同一场次聚拢（id 唯一，保证同场次行相邻且顺序确定）
-  const bySession = String(sa.id || '').localeCompare(String(sb.id || ''));
-  if (bySession) return bySession;
+  // 2) 同目录聚拢（同主播同时间的一场多段连在一起；跨目录按目录名，避免随机 session id 打乱）
+  const byDir = String(sa.relDir || '').localeCompare(String(sb.relDir || ''));
+  if (byDir) return byDir;
 
   // 3) 分段在前、派生居中、合并最后
   const byKind = kindRank(A) - kindRank(B);
