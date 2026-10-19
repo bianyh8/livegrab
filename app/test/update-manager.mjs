@@ -782,5 +782,39 @@ console.log('== S. 容器归档通道：按 commit 比对 → 下载该提交 �
   }
 }
 
+// ⑤ 经代理下载「二进制归档」通道（回归：v0.1.56 漏 import httpGetBufferViaProxy，
+//    抛 ReferenceError 被当成「代理不可用」→ 静默改直连，用户以为代理坏了）
+{
+  const httpMod = await import('node:http');
+  const payload = Buffer.from('FAKE_TARGZ_'.repeat(500));
+  const proxySrv = httpMod.createServer((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'application/gzip', 'Content-Length': payload.length });
+    res.end(payload);
+  });
+  // 本项目代理客户端对 http 目标也走 CONNECT 隧道 → 假代理必须应答 CONNECT，再在隧道里回 HTTP 响应
+  proxySrv.on('connect', (req, socket) => {
+    socket.write('HTTP/1.1 200 Connection Established\r\n\r\n');
+    socket.once('data', () => {
+      socket.end(Buffer.concat([
+        Buffer.from(`HTTP/1.1 200 OK\r\nContent-Type: application/gzip\r\nContent-Length: ${payload.length}\r\nConnection: close\r\n\r\n`, 'latin1'),
+        payload,
+      ]));
+    });
+    socket.on('error', () => {});
+  });
+  await new Promise((r) => proxySrv.listen(0, '127.0.0.1', r));
+  const pport = proxySrv.address().port;
+  const m = new UpdateManager({ appDir: TMP, getProxy: () => `http://127.0.0.1:${pport}` });
+  m.logger = { info() {}, warn() {}, error() {}, debug() {} };
+  let err = ''; let got = null;
+  try {
+    const r = await m._fetchViaProxy('http://127.0.0.1:9/archive.tar.gz', `http://127.0.0.1:${pport}`, { binary: true, timeoutMs: 5000, retries: 0 });
+    got = Buffer.from(await r.arrayBuffer());
+  } catch (e) { err = (e && e.message) || String(e); }
+  check(!err, '经代理下载二进制归档不再抛错（import 齐全）', err);
+  check(!!got && got.length === payload.length, '经代理下载二进制拿到完整字节', got ? `${got.length}B` : 'null');
+  proxySrv.close();
+}
+
 console.log(bad === 0 ? '\n全部通过 ✅' : `\n${bad} 项失败 ❌`);
 process.exit(bad === 0 ? 0 : 1);

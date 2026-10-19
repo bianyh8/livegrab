@@ -19,7 +19,7 @@ import { Auth, parseCookies } from '../server/auth.js';
 import { PlayManager } from '../server/play.js';
 import * as resolvers from '../server/resolvers/index.js';
 import * as proxyFetch from '../server/proxy-fetch.js';
-import { buildRecordArgs, ffmpegEnv, spawnFfmpeg } from '../server/media.js';
+import { buildRecordArgs, buildPlayArgs, ffmpegEnv, spawnFfmpeg } from '../server/media.js';
 import { isPullBlocked, reconnectDelay, planReconnect, Recorder } from '../server/recorder.js';
 import { sortFileRows } from '../server/file-order.js';
 import { byteLength, parseRange, safeJoin, formatBytes, formatDuration, HttpError, uid, VERSION, errText } from '../server/util.js';
@@ -891,6 +891,11 @@ async function testPullBlockedBackoff() {
   eq(reconnectDelay({ blocked: true, attempt: 3 }), 60000, '被拒第 3 次冷却 60s');
   eq(reconnectDelay({ blocked: true, attempt: 5 }), 120000, '被拒第 5 次冷却 120s');
   eq(reconnectDelay({ blocked: true, attempt: 99 }), 120000, '被拒超出表长封顶 120s');
+  // 回放转封装：TS 的 ADTS AAC → MP4 必须带 aac_adtstoasc，否则 ffmpeg 报
+  // "Malformed AAC bitstream detected"、输出几十 KB 就断 → 已完成 ts 看起来「播不了」
+  const pa = buildPlayArgs({ input: '/tmp/x.ts' });
+  ok(pa.join(' ').includes('-bsf:a aac_adtstoasc'), '回放转封装带 aac_adtstoasc（TS→MP4 音频必需）');
+  ok(pa.join(' ').includes('frag_keyframe+empty_moov+default_base_moof'), '回放转封装输出可直接边下边播的 fMP4');
   // 录到了数据就不算失败：这是「一场断 5 次就整场被停」的根因修复
   const p1 = planReconnect({ attempt: 4, max: 5, bytesSinceSpawn: 30 * 1024 * 1024 });
   eq(p1.stop, false, '本段录到 30MB → 不判停（即使已断 4 次）');

@@ -20,7 +20,7 @@ import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import zlib from 'node:zlib';
-import { httpGetViaProxy, normalizeProxy } from './proxy-fetch.js';
+import { httpGetViaProxy, httpGetBufferViaProxy, normalizeProxy } from './proxy-fetch.js';
 
 const UA = 'LiveGrab-update-manager';
 const DEFAULT_REPO = process.env.LIVEGRAB_REPO || 'bianyh8/livegrab';
@@ -349,6 +349,14 @@ export class UpdateManager {
     try {
       return await this._fetchViaProxy(url, proxy, { headers, timeoutMs, retries, label, binary });
     } catch (e) {
+      // 代码错误（名字未定义 / 类型错误）不是「代理不可用」：别吞、别冷却、别把锅甩给代理。
+      // 反例：v0.1.56 更新页出现「代理不可用（httpGetBufferViaProxy is not defined）」——
+      // 真因是 update.js 漏了一个 import，被这里当成代理故障，用户只会以为代理坏了。
+      const msg = this._firstLine(e.message || e);
+      if (/is not defined|is not a function|Cannot read propert/i.test(msg)) {
+        this._log('ERROR', `更新请求代码错误（不是代理问题）：${msg}`);
+        throw e;
+      }
       // 代理挂了（连不上/被拒/隧道失败）：不是错误，只是这条路不通——改直连并冷静一会儿，
       // 否则每次检查都要先卡满一次代理超时，页面表现为「检查更新特别慢」。
       this._proxyCooldownUntil = Date.now() + PROXY_COOLDOWN_MS;

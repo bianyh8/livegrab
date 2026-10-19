@@ -143,7 +143,7 @@ export function buildPlayArgs({ input, audioOnly = false, fallbackAudio = false 
   const args = ['-hide_banner', '-loglevel', 'error', '-nostats', '-fflags', '+genpts', '-i', input];
   if (audioOnly) args.push('-vn', '-c:a', 'aac', '-b:a', '160k');
   else if (fallbackAudio) args.push('-c:v', 'copy', '-c:a', 'aac', '-b:a', '160k');
-  else args.push('-c', 'copy');
+  else args.push('-c', 'copy', '-bsf:a', 'aac_adtstoasc'); // TS 的 ADTS AAC → MP4 必须转 ASC，否则 ffmpeg 报 Malformed AAC bitstream、输出几十 KB 就断
   args.push('-movflags', 'frag_keyframe+empty_moov+default_base_moof', '-f', 'mp4', 'pipe:1');
   return args;
 }
