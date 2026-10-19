@@ -7,7 +7,7 @@
    （前缀 [更新]，与「运行日志」页同一套 logger）；检查结果相同不重复记，避免刷屏。
    设计约定（v0.1.43 起）：
      · 部署不联网——镜像里已有完整源码，首启直接用 /app 启动，不 clone、不装依赖、不涉及 git；
-     · 容器内更新 = 下载该版本标签的 tar.gz 归档 → 解包到 /config/src → 原子切换 → 自重启，
+     · 容器内更新 = 下载该提交的 tar.gz 归档 → 解包到运行目录旁的暂存区 → 整目录原子替换运行目录 → 自重启，
        全程不需要 git，也就不存在「首次必须联网拿到 .git」这个前提；
      · 只有远端语义化版本严格更高才更新，版本相同一律不动（不重复下载同版本归档）；
      · 代理只有一个入口（页面「系统设置 → 平台账号 → 网络代理」）：配了先走代理，代理失败立刻
@@ -241,9 +241,15 @@ export class UpdateManager {
     // 这样「配一处、两处生效」的歧义消失，日志也能明确说出走的是哪条路。
     this.getProxy = (typeof getProxy === 'function') ? getProxy : null;
     // 容器内新版本的落位目录（entrypoint 注入 LIVEGRAB_SRC_DIR，默认 ${CONFIG_DIR}/src）
+    // v0.1.52 起这里只用于「还在跑镜像内置代码」的老形态兜底，正常运行走下面 runDir
     this.srcRoot = String(srcRoot || process.env.LIVEGRAB_SRC_DIR || '').trim();
     // 镜像内置代码目录（依赖基线与「未更新过」时的运行目录）
     this.imageApp = String(imageApp || process.env.LIVEGRAB_IMAGE_APP || '').trim();
+    // 运行目录 = 进程 cwd（entrypoint 先 cd 到这里再 exec）：更新就是替换「正在跑的这一份」
+    this.runDir = path.resolve(this.appDir);
+    // 依赖基线目录（entrypoint 注入 LIVEGRAB_DEPS_DIR，默认 /opt/node_modules）：
+    // 代码目录里只放软链，更新时整目录替换也不会碰到依赖（见 _baselineNodeModules/_linkNodeModules）
+    this.depsDir = String(process.env.LIVEGRAB_DEPS_DIR || '').trim();
     // 兜底 token：显式传入 > 环境变量 LIVEGRAB_GITHUB_TOKEN > 本地 ~/.git-credentials
     this.envToken = token || process.env.LIVEGRAB_GITHUB_TOKEN || readGitCredentialsToken() || '';
     this.state = {
@@ -713,6 +719,23 @@ export class UpdateManager {
     return cfg ? path.join(cfg, 'src') : '';
   }
 
+  /** 更新落位目标：替换「正在跑的那一份」代码目录（进程 cwd 自身——entrypoint 保证 cd 到运行目录再 exec）。
+   *  落位位置永远等于运行位置，所以不会出现「宿主上更新、容器里跑的却是另一份」。
+   *
+   *  唯一例外：当前跑的正是镜像内置代码（老镜像还没部署运行目录就点了更新）——
+   *  镜像层目录不能整目录改名（挂载点 EBUSY / overlayfs EXDEV），而且写进去会随容器重建蒸发，
+   *  故退回历史位置 ${CONFIG_DIR}/src/app；用新镜像重建容器后由运行目录（默认 /opt/.run）接管。 */
+  _runTarget() {
+    const runDir = this.runDir;
+    const imageApp = path.resolve(this.imageApp || '/app');
+    if (runDir === imageApp) {
+      const legacyRoot = this.srcRoot || this._srcRoot(true);
+      if (!legacyRoot) throw new Error('无法确定新版本落位目录（LIVEGRAB_SRC_DIR / CONFIG_DIR 均缺失）');
+      return { runDir, target: path.join(legacyRoot, 'app'), root: legacyRoot, name: 'app', legacyImage: true };
+    }
+    return { runDir, target: runDir, root: path.dirname(runDir), name: path.basename(runDir), legacyImage: false };
+  }
+
   /** 运行形态：
    *    archive —— 容器部署：代码在 ${CONFIG_DIR}/src/app 或镜像 /app，更新靠 GitHub 归档解包，不需要 git；
    *    git     —— 本地开发：有 .git 工作区，走增量 fetch；
@@ -741,6 +764,8 @@ export class UpdateManager {
       inContainer,
       srcRoot: mode === 'archive' ? srcRoot : '',
       imageApp: this.imageApp || '',
+      runDir: this.runDir,
+      depsDir: this.depsDir || '',
     };
     // 环境自检结果记入日志（每次启动首次检测时一条）：排查「为什么不能在线更新」的第一手信息
     const sig = JSON.stringify(this.state.env);
@@ -748,7 +773,9 @@ export class UpdateManager {
       this._envSig = sig;
       const where = inContainer ? '运行于容器' : '本地运行';
       if (mode === 'archive') {
-        this._log('INFO', `更新环境自检：更新走 GitHub 归档（${where}，当前代码 ${this.appDir} → 新版本落位 ${srcRoot || '（未配置）'}），无需 git`);
+        let landing = `运行目录 ${this.runDir}`;
+        try { const t = this._runTarget(); if (t.legacyImage) landing = `${t.runDir}（镜像内置代码）→ 新版本落位 ${t.target}`; } catch { /* 无法确定时保持默认描述 */ }
+        this._log('INFO', `更新环境自检：更新走 GitHub 归档（${where}，${landing}），无需 git`);
       } else if (mode === 'git') {
         this._log('INFO', `更新环境自检：git 可用（仓库 ${gitRoot} · ${where}），支持增量更新`);
       } else {
@@ -1236,13 +1263,22 @@ export class UpdateManager {
     try { return JSON.parse(fs.readFileSync(path.join(this.appDir, 'package.json'), 'utf8')); } catch { return {}; }
   }
 
-  /** 可复用的 node_modules 基线：优先当前镜像的 /app/node_modules（ABI 永远跟镜像里的 Node 一致）。 */
+  /** 可复用的依赖基线（物理目录）：代码目录里只放软链，更新时整目录替换也不会碰到依赖。
+   *  优先级：正在用的那份（软链解析后的真实目录）→ LIVEGRAB_DEPS_DIR → /opt/node_modules
+   *          → 镜像 /app/node_modules → 运行目录自身。 */
   _baselineNodeModules() {
+    const used = path.join(this.runDir, 'node_modules');
     const cands = [];
+    try { cands.push(fs.realpathSync(used)); } catch { /* 还没装或软链悬空 */ }
+    if (this.depsDir) cands.push(this.depsDir);
+    cands.push('/opt/node_modules');
     if (this.imageApp) cands.push(path.join(this.imageApp, 'node_modules'));
     cands.push('/app/node_modules');
-    cands.push(path.join(this.appDir, 'node_modules'));
+    cands.push(used);
+    const seen = new Set();
     for (const p of cands) {
+      if (!p || seen.has(p)) continue;
+      seen.add(p);
       try {
         if (fs.statSync(p).isDirectory() && fs.existsSync(path.join(p, 'better-sqlite3'))) return p;
       } catch { /* 试下一个 */ }
@@ -1250,17 +1286,22 @@ export class UpdateManager {
     return '';
   }
 
-  /** 给新版本目录准备 node_modules：软链到镜像基线（零复制、零联网）。
-   *  极少数文件系统不支持软链时退回复制——都能保证「依赖不跟着代码走，永远以当前镜像为准」。 */
-  _linkNodeModules(appDir) {
+  /** 给新版本目录准备 node_modules：软链到依赖基线（零复制、零联网）。
+   *  极少数文件系统不支持软链时退回复制。avoidDir = 即将被替换掉的那个目录：
+   *  基线若落在它内部，软链在切换后会指向自己（成环），这种情况直接复制。 */
+  _linkNodeModules(appDir, avoidDir = '') {
     const target = this._baselineNodeModules();
-    if (!target) throw new Error('找不到可复用的 node_modules 基线（镜像 /app/node_modules 缺失）');
+    if (!target) throw new Error('找不到可复用的 node_modules 基线（依赖目录缺失）');
+    this._depsBaselineUsed = target;
     const link = path.join(appDir, 'node_modules');
     fs.rmSync(link, { recursive: true, force: true });
-    try {
-      fs.symlinkSync(target, link, process.platform === 'win32' ? 'junction' : 'dir');
-      return 'link';
-    } catch { /* 继续退回复制 */ }
+    const inside = !!avoidDir && (target === avoidDir || target.startsWith(avoidDir + path.sep));
+    if (!inside) {
+      try {
+        fs.symlinkSync(target, link, process.platform === 'win32' ? 'junction' : 'dir');
+        return 'link';
+      } catch { /* 继续退回复制 */ }
+    }
     fs.cpSync(target, link, { recursive: true, dereference: true });
     return 'copy';
   }
@@ -1291,30 +1332,65 @@ export class UpdateManager {
     return buf;
   }
 
-  /** 原子切换：cur(app) → app.old，newApp → cur；失败自动回滚，保证「更新失败 = 服务照常跑」。
-   *  成功后旧目录不立刻删：此刻进程的 cwd 还指着它，删掉会让「重启失败」失去退路；
-   *  留着当手动回滚点（`mv app.old app`），下次更新开头才会被替换掉。 */
-  _swapIn(newApp, root) {
-    const cur = path.join(root, 'app');
-    const old = path.join(root, 'app.old');
-    fs.mkdirSync(root, { recursive: true });
-    fs.rmSync(old, { recursive: true, force: true });
-    const hadCur = fs.existsSync(cur);
-    if (hadCur) fs.renameSync(cur, old);
+  /** 原子切换：cur → cur.old，newApp → cur；失败自动回滚，保证「更新失败 = 服务照常跑」。
+   *  成功后的旧目录不立刻删：此刻进程 cwd 还指着它，删掉会让「重启失败」失去退路；
+   *  留着当手动回滚点（`mv .run.old .run`），下次更新开头才会被替换掉。
+   *
+   *  个别环境不允许对目标整目录改名（运行目录被挂成宿主 bind mount → EBUSY，跨文件系统 → EXDEV）：
+   *  退回「备份 + 逐文件覆盖」，功能一致，只是切换不是原子操作。 */
+  _swapIn(newApp, target, oldDir) {
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.rmSync(oldDir, { recursive: true, force: true });
+    const hadCur = fs.existsSync(target);
+    let moved = false; // 旧目录是否已改名挪走（失败时要挪回来）
     try {
-      fs.renameSync(newApp, cur);
+      if (hadCur) { fs.renameSync(target, oldDir); moved = true; }
+      fs.renameSync(newApp, target);
+      return { target, how: 'rename' };
     } catch (e) {
-      if (hadCur) { try { fs.renameSync(old, cur); } catch { /* 回滚失败时旧目录仍留在 app.old */ } }
-      throw new Error(`切换新版本失败（已回滚到旧版本）：${e.message}`);
+      if (moved) {
+        try { fs.renameSync(oldDir, target); } catch { /* 挪不回来也没关系：旧目录还在 <target>.old */ }
+      }
+      if (!hadCur) throw new Error(`切换新版本失败：${e.message}`);
+      this._log('WARN', `运行目录不能整目录改名（${e.code || e.message}），改用「备份 + 覆盖」方式切换`);
     }
-    return cur;
+    // 覆盖式切换：先把旧目录整体备份（留着回滚），再把新版本逐项覆盖进去
+    fs.rmSync(oldDir, { recursive: true, force: true });
+    fs.cpSync(target, oldDir, { recursive: true, dereference: false });
+    const names = fs.readdirSync(newApp);
+    for (const n of names) {
+      const src = path.join(newApp, n);
+      const dst = path.join(target, n);
+      // 依赖由新版本目录说了算（通常是软链指向基线），旧的先删掉，避免新旧混在一起
+      if (n === 'node_modules') fs.rmSync(dst, { recursive: true, force: true });
+      fs.cpSync(src, dst, { recursive: true, force: true, dereference: false });
+    }
+    // 新版本里已不存在的旧文件也清掉（递归比对，含子目录里的残留），别把上一版留在运行目录
+    const relFiles = (base, sub = '', out = []) => {
+      for (const e of fs.readdirSync(path.join(base, sub), { withFileTypes: true })) {
+        const rel = sub ? `${sub}/${e.name}` : e.name;
+        if (e.isDirectory()) relFiles(base, rel, out);
+        else out.push(rel);
+      }
+      return out;
+    };
+    const fresh = new Set(relFiles(newApp));
+    for (const rel of relFiles(target)) {
+      if (rel === 'node_modules' || rel.startsWith('node_modules/')) continue; // 依赖与代码无关，保留
+      if (!fresh.has(rel)) fs.rmSync(path.join(target, rel), { recursive: true, force: true });
+    }
+    fs.rmSync(newApp, { recursive: true, force: true });
+    return { target, how: 'copy' };
   }
 
   /** 容器内更新：查远端 HEAD →（commit 不同才）下载该提交的归档 → 解包校验 → 组装 → 原子切换 → 自重启。
    *  commit 相同则什么都不下载、不重启，日志写一条「已是最新代码」。 */
   async _runArchiveUpdate(env, local) {
-    const root = env.srcRoot || this._srcRoot(true);
-    if (!root) throw new Error('无法确定新版本落位目录（LIVEGRAB_SRC_DIR / CONFIG_DIR 均缺失）');
+    // 落位目标 =「正在跑的那一份」目录（整目录替换，重启后仍是它）
+    const t = this._runTarget();
+    if (t.legacyImage) {
+      this._log('WARN', `当前跑的是镜像内置代码（${t.runDir}）：镜像层目录不能整目录替换，新版本落位到 ${t.target}，重启后运行它；用新镜像重建容器后会自动改用运行目录`);
+    }
 
     await this.fetchRemote();
     const latest = this.state.latest;
@@ -1340,8 +1416,8 @@ export class UpdateManager {
     const mb = buf.length / 1048576;
     this._log('OK', `归档下载完成（${mb >= 1 ? `${mb.toFixed(1)} MB` : `${Math.max(1, Math.round(buf.length / 1024))} KB`}）`);
 
-    // 解包到落位目录下的暂存区：与最终目录同一文件系统，后面才能用 rename 原子切换
-    const stage = path.join(root, '.update-stage');
+    // 解包到落位目标旁的暂存区：与之同一盘、同一层，后面才能用 rename 原子切换
+    const stage = `${t.target}.stage`;
     const stageApp = path.join(stage, 'app');
     this._phase('pull', 45, '解包并校验');
     fs.rmSync(stage, { recursive: true, force: true });
@@ -1374,11 +1450,24 @@ export class UpdateManager {
         }
         depsInstalled = true;
         this._log('OK', '依赖安装完成');
+        // 装好的依赖挪进基线目录、运行目录里只留软链：维持「依赖独立于代码」——
+        // 之后每次更新都是整目录替换，永远不必重复下载依赖，也不会把依赖卷进切换目标。
+        try {
+          const base = this.depsDir || '/opt/node_modules';
+          const prevBase = `${base}.prev`;
+          fs.rmSync(prevBase, { recursive: true, force: true });
+          if (fs.existsSync(base)) fs.renameSync(base, prevBase);
+          fs.renameSync(path.join(stageApp, 'node_modules'), base);
+          fs.symlinkSync(base, path.join(stageApp, 'node_modules'), process.platform === 'win32' ? 'junction' : 'dir');
+          this._log('OK', `依赖已成为新的基线 ${base}（上一份留在 ${prevBase}，下次容器启动时清掉）`);
+        } catch (e) {
+          this._log('WARN', `依赖没能挪进基线目录（${e.message}）：本次依赖随代码留在运行目录，功能不受影响`);
+        }
       } else {
-        const how = this._linkNodeModules(stageApp);
+        const how = this._linkNodeModules(stageApp, t.target);
         this._log('OK', how === 'link'
-          ? '依赖复用镜像基线（软链 /app/node_modules，无需联网安装）'
-          : '依赖复用镜像基线（文件系统不支持软链，已复制一份）');
+          ? `依赖复用现有基线（软链 ${this._depsBaselineUsed || '?'}，无需联网安装）`
+          : '依赖复用现有基线（文件系统不支持软链，已复制一份）');
       }
 
       // 版本标记：容器里没有 .git，这份标记就是「当前跑的是哪一次提交」的唯一权威来源。
@@ -1398,8 +1487,8 @@ export class UpdateManager {
       }, null, 2));
 
       this._phase('switch', 82, `切换到 ${label}`);
-      const newApp = this._swapIn(stageApp, root);
-      this._log('OK', `代码已切换到 ${label}（${newApp}）`);
+      const sw = this._swapIn(stageApp, t.target, `${t.target}.old`);
+      this._log('OK', `代码已切换到 ${label}（${sw.target}${sw.how === 'copy' ? '，覆盖式' : ''}）`);
     } catch (e) {
       // 失败：整个暂存区丢掉，旧版本目录没被动过，服务继续正常录制
       try { fs.rmSync(stage, { recursive: true, force: true }); } catch { /* 忽略 */ }
@@ -1418,7 +1507,7 @@ export class UpdateManager {
     await sleep(1200);
     try {
       // 关键：新进程必须以新目录为 cwd 启动，否则跑的还是旧代码
-      await this.restartHook({ from: local.version, to: label, cwd: path.join(root, 'app') });
+      await this.restartHook({ from: local.version, to: label, cwd: t.target });
     } catch (e) {
       this._log('WARN', `自动重启失败（${e?.message || e}），请手动重启容器使新版本生效`);
     }
@@ -1477,6 +1566,9 @@ export class UpdateManager {
       // 能否在线自更新：容器（归档通道）与本地 git 仓库都能，本地无 git 只能给手动步骤
       canSelfUpdate: mode !== 'none',
       appDir: this.appDir,
+      runDir: this.runDir,
+      // 更新会落到哪（正常就是 runDir 自己；跑镜像内置代码时才退回 ${CONFIG_DIR}/src/app）
+      target: (() => { try { return this._runTarget().target; } catch { return ''; } })(),
       srcRoot: (s.env && s.env.srcRoot) || '',
       local: s.local || null,
       latest: s.latest || null,

@@ -171,12 +171,13 @@ async function bootstrap() {
     logger,
     getRepoConfig: () => (store.settings.customize || {}),
     getProxy: () => (store.settings.proxy || ''),
-    // 容器内：新版本落位目录（entrypoint 注入）与镜像内置代码目录（依赖基线来源）
+    // 容器内：运行目录 = 进程 cwd（entrypoint 部署 /opt/.run 后 cd 过去）；
+    // srcRoot 只留给「老镜像还在跑 /app」的兜底，imageApp 供依赖基线兜底与版本展示
     srcRoot: process.env.LIVEGRAB_SRC_DIR || '',
     imageApp: process.env.LIVEGRAB_IMAGE_APP || '',
   });
   // 更新完成后自重启：优雅停止录制器/持久化/关服务，再 re-exec 自身加载新版本。
-  // 容器内「立即更新」会把新版本切到 ${CONFIG_DIR}/src/app，必须用该目录作为新进程的 cwd，
+  // 容器内「立即更新」是整目录替换运行目录，必须用该目录作为新进程的 cwd，
   // 否则 re-exec 起来的还是旧代码（本地 git 模式不传 cwd，行为不变）。
   update.restartHook = async (info) => {
     const trans = info && info.to ? `（${info.from ? `v${info.from} → ` : ''}${info.to}）` : '';

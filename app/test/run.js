@@ -1392,8 +1392,9 @@ function testUpdateGuards() {
   const ep = fs.readFileSync(path.join(APP_DIR, '..', 'deploy', 'entrypoint.sh'), 'utf8');
   ok(!/\bgit\s+(?:-c\s+\S+\s+)?clone\b/.test(ep), '入口脚本不再 clone（首次部署零网络，直接用镜像代码）');
   ok(!/\bnpm\s+(?:install|ci)\b/.test(ep), '入口脚本不再装依赖（node_modules 由镜像提供）');
-  ok(/\$SRC\/app\/server\/server\.js/.test(ep) && /IMAGE_APP/.test(ep), '入口脚本优先用「页面更新落位」的代码，否则用镜像内置代码');
-  ok(/export LIVEGRAB_SRC_DIR/.test(ep), '入口脚本把更新落位目录交给服务进程（更新链路要知道往哪写）');
+  ok(/RUN_DIR/.test(ep) && /IMAGE_APP/.test(ep), '入口脚本把镜像源码部署成运行目录（默认 /opt/.run）再运行');
+  ok(/export LIVEGRAB_RUN_DIR/.test(ep) && /export LIVEGRAB_DEPS_DIR/.test(ep), '入口脚本把「运行目录 / 依赖基线」交给服务进程');
+  ok(!/vercmp/.test(ep), '入口脚本不做镜像/落位的版本仲裁（启动就跑当前装的这一版）');
 }
 
 // ============ 12. 审计遗留死代码清理 ============

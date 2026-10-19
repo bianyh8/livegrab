@@ -51,7 +51,9 @@ cd livegrab
 docker compose up -d --build
 ```
 > 镜像里已包含完整源码，**首次启动零网络**：不 clone、不装依赖、不联网，秒起。
-> 启动日志只有一行 `[entrypoint] 启动服务：/app`（首次）或 `/config/src/app`（更新过的实例）。
+> 启动时入口脚本把镜像源码部署成**运行目录** `/opt/.run`（日志：`首次部署运行目录：/app → /opt/.run` + `启动服务：/opt/.run`）。
+> **启动永远只跑当前装的那一版**：不查远端、不做版本比较、不自动升级；只有你在页面点「立即更新」才会下载新版。
+> 重建容器（`docker compose up -d --build` / 删容器重建）= **重新安装** → 回到镜像版本（就像本地安装包是 1.0，过几个月再装一次，装的还是 1.0）。
 
 > 想让镜像从第一次启动就「知道自己是哪个提交」（版本判定精确，页面不误报），构建时把提交号传进去：
 > ```bash
@@ -72,7 +74,24 @@ compose 相对 `livegrab/` 目录挂载：
 |---|---|---|
 | `./data` → `/data` | 录制成品与分段 | 占空间最大，挂到大容量磁盘 |
 | `./config` → `/config` | 账号哈希、Cookie、任务、场次索引、日志、SQLite 库（livegrab.db） | 长期保留 |
-| `./config/src/app` | 页面「立即更新」落位的新版本代码（更新过之后才存在） | 由容器管理，勿手改；删掉即回到镜像内置版本 |
+
+容器内部（不在挂载卷里 —— 属于「装好的这一版代码」）：
+
+| 路径 | 内容 | 说明 |
+|---|---|---|
+| `/app` | 镜像内源码 | 你的「安装包」：只被读取，运行时永不修改 |
+| `/opt/.run` | **运行目录**：当前实际跑的代码 | 首启从 `/app` 部署；页面「立即更新」替换的就是它（`/opt/.run.old` = 上一版，手动回滚点） |
+| `/opt/node_modules` | 依赖基线 | 代码目录里只有指向它的软链，换代码永不碰依赖 |
+| `/opt/.run.stage` | 更新暂存（只在更新过程中存在） | 启动时自动清掉未激活的暂存 |
+
+> **想让页面更新的结果跨容器重建保留**：给运行目录挂一个宿主目录即可 ——
+> ```yaml
+> volumes:
+>   - ./data:/data
+>   - ./config:/config
+>   - ./run:/opt/.run
+> ```
+> 不挂也行：代价是每次 `up -d --build` 都回到镜像版本（就是「重新安装装回安装包」的语义）。
 
 ### 环境变量（`docker-compose.yaml` 可调）
 
@@ -98,20 +117,21 @@ compose 里都有默认值，通常只有端口、时区、Token 需要改：
 1. **查提交**：只读 GitHub API，取当前分支 HEAD 的 commit（不下载代码）；
 2. **比提交**：远端 commit 与本地记录的一致 → 日志写一条「已是最新代码」，结束，不下载、不重启；
 3. **下载**：不同 → 下载**该提交**的源码归档 `codeload.github.com/<repo>/tar.gz/<commit>`（按 sha 而不是按标签，标签只是可读的名字，可能被挪动）；
-4. **解包校验**：解到 `/config/src/.update-stage`，确认 `app/server/server.js` 与 `app/package.json` 存在；
-5. **准备依赖**：`package.json` 的 `dependencies` 没变 → 软链镜像里的 `/app/node_modules`（零联网，原生模块 ABI 永远跟当前镜像的 Node 一致）；只有变了才 `npm install`；
-6. **原子切换**：`.update-stage/app` → `/config/src/app` 用 `rename` 切换，失败自动回滚；旧目录留成 `app.old`（手动回滚点，下次更新时才替换）；
-7. **自重启**：优雅停掉录制器与 HTTP，再以新目录为 `cwd` 重新拉起进程，页面自动刷新。
+4. **解包校验**：解到 `<运行目录>.stage`（默认 `/opt/.run.stage`），确认 `app/server/server.js` 与 `app/package.json` 存在；
+5. **准备依赖**：`package.json` 的 `dependencies` 没变 → 新版本目录里放一条指向**依赖基线**（默认 `/opt/node_modules`）的软链（零联网，原生模块 ABI 永远跟镜像里的 Node 一致）；只有变了才 `npm install`，装完成为新的基线；
+6. **切换**：`<运行目录>.stage/app` → 运行目录，同一盘同一层用 `rename` **整目录原子替换**，失败自动回滚；旧目录留成 `<运行目录>.old`（手动回滚点，下次更新时才替换）。个别环境不允许整目录改名（如运行目录挂了宿主目录 → `EBUSY`）时，自动退回「备份 + 覆盖」，功能一致；
+7. **自重启**：优雅停掉录制器与 HTTP，再以运行目录为 `cwd` 重新拉起进程，页面自动刷新。
 
 任何一步失败都**不会改动正在运行的代码**，服务继续录制，按钮变「重试更新」，直接再点一次即可。
 
-为什么落在 `/config`：镜像层 `/app` 会被 `docker compose up -d --build` 重置，挂载卷里的代码不会。
-所以**重建容器不会把版本打回去**，这也正是「更新结果能长期保留」的原因。
+为什么要有独立的运行目录：镜像层 `/app` 会被 `docker compose up -d --build` 重置，而 `/opt/.run` 在容器可写层——
+普通重启、宿主重启都保留更新；只有**重建容器**才会清空（那时重新部署回镜像版本）。这样运行路径永远只有一条，
+不会出现「宿主上看到的代码」和「容器里实际跑的不是同一份」的困惑。
 
 ### 版本判定规则：比 commit，不比版本号
 
 - **commit 不同就算有更新**：往 main 推了新提交，哪怕 `package.json` 的 `version` 忘了改，点「立即更新」照样会拉下来；
-- 本地 commit 来自 `/config/src/app/.livegrab-version.json`——每次落位时写入的、**实际下载的那个 sha**；
+- 本地 commit 来自 `<运行目录>/.livegrab-version.json`（默认 `/opt/.run/.livegrab-version.json`）——首启部署时按镜像版本写入、每次页面更新时改写，记的是**实际下载的那个 sha**；
 - 从没点过更新的实例，本地 commit 取自镜像构建信息 `.build-info.json`（由 `BUILD_COMMIT` 构建参数写入）。没传就看不出自己是谁 → 第一次点更新会按「有更新」处理，落位后即以 sha 精确比对；
 - **不降级**：远端那次提交的时间比本地还早（远端被 reset 回旧提交）→ 不动，避免把线上打回去；
 - 远端 API 拿不到 commit 时，才退回语义化版本比较；
@@ -169,32 +189,39 @@ docker compose up -d          # 重启使环境变量生效
 | 业务代码（绝大多数版本） | 页面「系统设置 → 系统更新 → 立即更新」，约 10~60 秒，不动容器 |
 | 换 ffmpeg / Node、改 Dockerfile、改入口脚本 | 宿主机 `git pull && docker compose up -d --build` |
 
-重建后入口脚本按版本取新的那份：`/config/src/app`（上次更新落位）比镜像新就用它，镜像更新就用镜像。
-所以**重建不会把版本打回去**；想彻底回到镜像内置版本：`rm -rf ./config/src && docker compose restart livegrab`。
+**重建容器 = 重新安装**：可写层清空 → 首启把镜像源码重新部署成运行目录 → 跑的就是镜像里那一版
+（哪怕版本号和之前一样，也**不会自动跳到最新**——启动不与远端比较）。
+想让上次页面更新的结果跨重建保留，就把宿主目录挂到 `/opt/.run`（见上文「数据落盘位置」）。
 
-`./config/src` 等于**可执行代码**：能写这个目录 ≈ 能在容器里执行任意代码，请按配置目录的密级对待。
+**手动回滚**（上一版就在旁边）：
+```bash
+docker compose exec livegrab sh -c 'mv /opt/.run /opt/.run.bad && mv /opt/.run.old /opt/.run'
+docker compose restart livegrab
+```
+
+`/opt/.run` 等于**容器内的可执行代码**：能写这个目录 ≈ 能在容器里执行任意代码，按配置目录的密级对待。
 
 ### 常见问题
 
 - **页面提示「无法获取远程版本信息」**：网络不通或私有仓库没配 Token。先看日志里那行「更新网络路径」，确认走的是代理还是直连。
 - **更新到一半网络断了**：代码没被改动，服务照常录制，直接再点「重试更新」。
-- **更新后打不开页面**：`docker compose logs --tail=100 livegrab` 看新版本是否启动报错；`rm -rf ./config/src && docker compose restart livegrab` 可回到镜像版本。
+- **更新后打不开页面**：`docker compose logs --tail=100 livegrab` 看新版本是否启动报错；`docker compose exec livegrab rm -rf /opt/.run && docker compose restart livegrab` 可回到镜像版本（首启会重新部署一份）。
 - **本地免 Docker 运行**（见下文）时，更新走 git 语义：`git fetch` 失败会自动降级 HTTP/1.1 + `protocol.version=0` 重试，仍失败则改用归档覆盖工作区（不动 `.git` 索引，下次联网自动对齐）。
 
 ### 容器里到底跑的是哪份代码
 
-镜像里**已经包含完整源码**（`/app/server`、`/app/web`、`/app/package.json`、预编译好的 `node_modules`），
-入口脚本只做一件事——选目录：
+镜像里**已经包含完整源码**（`/app/server`、`/app/web`、`/app/package.json`）与**预编译好的依赖**（`/opt/node_modules`），
+入口脚本只做一件事——把镜像源码部署成运行目录，再 `cd` 过去执行：
 
-| 情况 | 运行目录 | 启动耗时 |
+| 情况 | 运行目录 | 说明 |
 |---|---|---|
-| 从没更新过（首次部署） | 镜像 `/app` | 秒级，零网络 |
-| 页面更新过 | `/config/src/app`（挂载卷，跨容器重建保留） | 秒级 |
-| `/config/src/app` 损坏（缺 `server/server.js`） | 回退镜像 `/app`，并在日志里 WARN | 秒级 |
+| 首次启动 / 重建容器后 | 入口脚本把 `/app` 部署到 `/opt/.run` | 秒级、零网络；同时写 `.livegrab-version.json`（版本取自镜像构建信息） |
+| 页面更新过 | `/opt/.run` 就地整体换新 | 上一版留在 `/opt/.run.old`，随时可手动换回 |
+| 运行目录不完整（缺 `server/server.js`） | 重新部署一份 | 日志里有 `首次部署运行目录` |
 
-依赖不随代码走：更新落位的新版本里 `node_modules` 是一条指向镜像 `/app/node_modules` 的软链，
+依赖不随代码走：运行目录里 `node_modules` 是一条指向 `/opt/node_modules` 的软链，
 所以原生模块（`better-sqlite3`）的 ABI 永远和当前镜像的 Node 一致；镜像重建后软链悬空，入口脚本会自动修好。
-只有新版本真的改了 `dependencies`，才会在更新时 `npm install`（装失败则放弃本次更新，旧版本照常用）。
+只有新版本真的改了 `dependencies`，才会在更新时 `npm install`（装完成为新的基线；装失败则放弃本次更新，旧版本照常用）。
 
 ### 不想克隆仓库也能构建
 
@@ -240,7 +267,7 @@ node test/load.mjs              # 大数据量测试：2000 任务 + 1.2 万文�
                                 #   LOAD_SCALE=2 放大一倍，=0.2 快速冒烟
 node test/update-manager.mjs   # 更新管理器单元测试（mock GitHub，离线；含容器归档通道：只升不降 / 解包 / 切换 / 回滚）
 node test/update-git-flow.mjs  # 本地 git 工作区更新链路集成测试（离线自建 git 场景，无 git 自动跳过）
-node test/check-docker.mjs     # Docker 打包自检（无需装 Docker）：静态校验 + 容器形态冒烟 + 更新落位目录启动冒烟 + 依赖校验
+node test/check-docker.mjs     # Docker 打包自检（无需装 Docker）：静态校验 + 容器形态冒烟 + 运行目录部署/启动冒烟 + 依赖校验
 node test/e2e-ffmpeg.mjs       # 录制链路端到端（假 ffmpeg：分段 / 收尾 / 转封装 / 合并）
 node test/e2e-ui.mjs           # 真实浏览器端到端（需本机 Edge/Chrome，找不到会自动跳过）
 ```

@@ -19,7 +19,8 @@ const runCmd = (cmd, args, opts = {}) => new Promise((resolve) => {
 
 // 用原生临时目录 + 正斜杠：Windows 下也能把同一路径交给系统 tar（MSYS 会把 /tmp 映射到别处）
 const TMP = path.join(os.tmpdir(), 'lg-update-unit').split(path.sep).join('/');
-import { mkdirSync, rmSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
+import { mkdirSync, rmSync, writeFileSync, readFileSync, existsSync, symlinkSync, lstatSync, cpSync, readdirSync } from 'node:fs';
+import fs from 'node:fs';
 import { execFile } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
@@ -508,7 +509,7 @@ console.log('== S. 容器归档通道：按 commit 比对 → 下载该提交 �
 
     let restarted = null;
     const mk = (appDir) => new UpdateManager({
-      appDir, srcRoot,
+      appDir, srcRoot, imageApp: imgApp,
       getRepoConfig: () => ({ updateRepo: 'bianyh8/livegrab', updateBranch: 'main' }),
       restart: async (info) => { restarted = info; },
     });
@@ -576,7 +577,7 @@ console.log('== S. 容器归档通道：按 commit 比对 → 下载该提交 �
     check(marker.commit === 'deadbeef0001' && marker.commitFull === 'deadbeef0001',
       '标记记录本次下载的 commit（下次据此精确比对）', JSON.stringify(marker));
     check(marker.commitAt === '2026-10-01T00:00:00Z', '标记记录该提交的时间（用于「不降级」保护）', String(marker.commitAt));
-    check(!fsExists(path.join(srcRoot, '.update-stage')), '暂存目录已清理');
+    check(!fsExists(path.join(srcRoot, 'app.stage')), '暂存目录已清理');
     check(!!restarted && restarted.cwd === path.join(srcRoot, 'app'), '重启钩子拿到新目录作为 cwd', JSON.stringify(restarted));
     const m2 = mk(path.join(srcRoot, 'app'));
     const loc2 = await m2.localInfo();
@@ -605,7 +606,90 @@ console.log('== S. 容器归档通道：按 commit 比对 → 下载该提交 �
     check(markerAfter.commit === 'deadbeef0001', '失败后版本标记未变（下次仍会重试该提交）', JSON.stringify(markerAfter));
     check(m3.status().phase === 'error', '失败进入 error 状态（页面显示「重试更新」）', m3.status().phase);
     check(m3.state.log.some((l) => /归档结构异常/.test(l.msg)), '日志给出失败原因', m3.state.log.map((l) => l.msg).slice(-2).join(' | '));
-    check(!fsExists(path.join(srcRoot, '.update-stage')), '失败后暂存目录也被清理');
+    check(!fsExists(path.join(srcRoot, 'app.stage')), '失败后暂存目录也被清理');
+
+    /* ③-b 运行目录形态（v0.1.52 起容器里的常态）：跑的就是运行目录本身 → 更新就地替换它 */
+    remoteTag = 'v0.2.0';
+    remoteSha = 'deadbeef0001';
+    archiveBody = good;
+    {
+      const OPT = path.join(ARCH, 'opt');
+      const RUN = path.join(OPT, '.run');
+      const img2 = path.join(ARCH, 'image2');
+      mkdirSync(path.join(img2, 'server'), { recursive: true });
+      mkdirSync(path.join(img2, 'node_modules', 'better-sqlite3'), { recursive: true });
+      writeFileSync(path.join(img2, 'package.json'), JSON.stringify({ name: 'livegrab', version: '0.1.0', dependencies: { 'better-sqlite3': '^13.0.0' } }));
+      // 运行目录：entrypoint 部署出来的形态（镜像源码副本 + 依赖软链）
+      mkdirSync(path.join(RUN, 'server'), { recursive: true });
+      writeFileSync(path.join(RUN, 'package.json'), JSON.stringify({ name: 'livegrab', version: '0.1.0', dependencies: { 'better-sqlite3': '^13.0.0' } }));
+      writeFileSync(path.join(RUN, 'server', 'server.js'), '// old code 0.1.0\n');
+      try { symlinkSync(path.join(img2, 'node_modules'), path.join(RUN, 'node_modules'), 'dir'); } catch { /* 不支持软链就跳过 */ }
+
+      const m4 = new UpdateManager({
+        appDir: RUN, imageApp: img2,
+        getRepoConfig: () => ({ updateRepo: 'bianyh8/livegrab', updateBranch: 'main' }),
+        restart: async (info) => { restarted = info; },
+      });
+      await m4.detectEnv();
+      await m4.localInfo();
+      await m4.apply();
+      await new Promise((r) => setTimeout(r, 2000));
+      check(readFileSync(path.join(RUN, 'server', 'server.js'), 'utf8').includes('0.2.0'), '运行目录形态：新版本就地替换运行目录（不再另开一份代码目录）');
+      check(readFileSync(path.join(OPT, '.run.old', 'server', 'server.js'), 'utf8').includes('0.1.0'), '替换后上一版留在 <运行目录>.old（可手动回滚）');
+      check(!fsExists(path.join(OPT, '.run.stage')), '暂存目录 <运行目录>.stage 已清理');
+      check(!fsExists(path.join(ARCH, 'src', 'app.stage')), '不再往旧的 ${CONFIG_DIR}/src 落位');
+      check(!!restarted && restarted.cwd === RUN, '重启钩子拿到运行目录本身作为 cwd', JSON.stringify(restarted));
+      try { check(lstatSync(path.join(RUN, 'node_modules')).isSymbolicLink(), '运行目录里的依赖仍是软链（更新不碰依赖）'); } catch { check(false, '运行目录里的依赖仍是软链（更新不碰依赖）', '软链丢失'); }
+      const mk4 = new UpdateManager({ appDir: RUN, imageApp: img2, getRepoConfig: () => ({ updateRepo: 'bianyh8/livegrab', updateBranch: 'main' }) });
+      await mk4.detectEnv();
+      const loc4 = await mk4.localInfo();
+      check(loc4.version === '0.2.0' && loc4.commit === 'deadbeef0001', '重启后版本/提交读自运行目录里的标记', `${loc4.version}/${loc4.commit}`);
+    }
+
+    /* ③-c 运行目录被挂成宿主目录（不能整目录改名）→ 自动退回「备份 + 覆盖」，功能一致 */
+    {
+      const OPT2 = path.join(ARCH, 'opt2');
+      const RUN2 = path.join(OPT2, 'run2');
+      const img3 = path.join(ARCH, 'image3');
+      mkdirSync(path.join(img3, 'server'), { recursive: true });
+      mkdirSync(path.join(img3, 'node_modules', 'better-sqlite3'), { recursive: true });
+      writeFileSync(path.join(img3, 'package.json'), JSON.stringify({ name: 'livegrab', version: '0.1.0', dependencies: { 'better-sqlite3': '^13.0.0' } }));
+      mkdirSync(path.join(RUN2, 'server'), { recursive: true });
+      writeFileSync(path.join(RUN2, 'package.json'), JSON.stringify({ name: 'livegrab', version: '0.1.0', dependencies: { 'better-sqlite3': '^13.0.0' } }));
+      writeFileSync(path.join(RUN2, 'server', 'server.js'), '// old code 0.1.0\n');
+      writeFileSync(path.join(RUN2, 'server', 'stale-file.js'), '// 上一版才有，覆盖式切换后应被清掉\n');
+      try { symlinkSync(path.join(img3, 'node_modules'), path.join(RUN2, 'node_modules'), 'dir'); } catch { /* 忽略 */ }
+      const m5 = new UpdateManager({
+        appDir: RUN2, imageApp: img3,
+        getRepoConfig: () => ({ updateRepo: 'bianyh8/livegrab', updateBranch: 'main' }),
+        restart: async (info) => { restarted = info; },
+      });
+      // 模拟「运行目录是宿主 bind mount」：对它的整目录改名一律 EBUSY（rename(2) 对挂载点就是这样）
+      const origRename = fs.renameSync;
+      let blocked = 0;
+      fs.renameSync = (a, b) => {
+        if (String(a).includes('opt2') || String(b).includes('opt2')) {
+          blocked += 1;
+          const e = new Error('EBUSY: resource busy or locked');
+          e.code = 'EBUSY';
+          throw e;
+        }
+        return origRename(a, b);
+      };
+      try {
+        await m5.detectEnv();
+        await m5.localInfo();
+        await m5.apply();
+        await new Promise((r) => setTimeout(r, 2000));
+      } finally { fs.renameSync = origRename; }
+      check(blocked > 0, '用例真的走到了「不能整目录改名」的分支（EBUSY）', `拦截 ${blocked} 次`);
+      check(m5.state.log.some((l) => /覆盖/.test(String(l.msg))), '日志说明改用了「备份 + 覆盖」方式切换');
+      check(readFileSync(path.join(RUN2, 'server', 'server.js'), 'utf8').includes('0.2.0'), '不能整目录改名时，覆盖式切换照样把代码换成新版');
+      check(!fsExists(path.join(RUN2, 'server', 'stale-file.js')), '覆盖式切换会清掉新版里已不存在的旧文件');
+      check(readFileSync(path.join(OPT2, 'run2.old', 'server', 'server.js'), 'utf8').includes('0.1.0'), '覆盖式切换同样留了 <运行目录>.old 备份');
+      try { check(lstatSync(path.join(RUN2, 'node_modules')).isSymbolicLink(), '覆盖式切换不破坏依赖软链'); } catch { check(false, '覆盖式切换不破坏依赖软链', '软链丢失'); }
+      check(!!restarted && restarted.cwd === RUN2, '覆盖式切换后重启钩子仍拿到运行目录', JSON.stringify(restarted));
+    }
   }
 }
 

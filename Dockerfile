@@ -20,7 +20,7 @@ FROM node:22-bookworm-slim
 
 # 版本号由构建参数注入（compose 里从 .env 的 APP_VERSION 传），避免与 app/package.json
 # 长期漂移——此前这里写死 "0.1.35"，早已落后实际版本，镜像元数据因此不准。
-ARG APP_VERSION=0.1.51
+ARG APP_VERSION=0.1.52
 
 LABEL org.opencontainers.image.title="LiveGrab 直播录制台" \
       org.opencontainers.image.description="抖音/B站/快手/虎牙/斗鱼/小红书/微博 直播分段录制，带 Web 管理页面" \
@@ -30,6 +30,8 @@ ENV NODE_ENV=production \
     PORT=8080 \
     RECORD_ROOT=/data \
     CONFIG_DIR=/config \
+    LIVEGRAB_RUN_DIR=/opt/.run \
+    LIVEGRAB_DEPS_DIR=/opt/node_modules \
     TZ=Asia/Shanghai \
     LANG=C.UTF-8
 
@@ -44,8 +46,10 @@ RUN apt-get update \
 
 WORKDIR /app
 
-# 直接复用构建阶段编译好的 node_modules（含 better-sqlite3 原生 .node，两阶段同为 bookworm/glibc，可通用）
-COPY --from=build /app/node_modules ./node_modules
+# 直接复用构建阶段编译好的 node_modules（含 better-sqlite3 原生 .node，两阶段同为 bookworm/glibc，可通用），
+# 但**放在 /opt/node_modules**（依赖基线）而不是 /app：运行目录里只放一条指向它的软链，
+# 于是「点更新换代码」= 整目录替换，永远不会碰到依赖、也不必为每次更新重装 27MB。
+COPY --from=build /app/node_modules /opt/node_modules
 COPY app/server ./server
 COPY app/web ./web
 COPY app/test ./test
@@ -74,8 +78,9 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
 # 收到 SIGTERM 会优雅收尾正在录制的分段（compose 里留了 stop_grace_period）
 STOPSIGNAL SIGTERM
 
-# 入口脚本只选代码目录：有 ${CONFIG_DIR}/src/app（页面更新落位的新版本）就跑它，否则跑镜像内 /app。
-# 首启不 clone、不装依赖、不联网；更新在服务进程内完成（下载归档 → 原子切换 → 自重启）。
+# 入口脚本只做一件事：把镜像内源码 /app 部署成「运行目录」（默认 /opt/.run），再 cd 过去执行。
+#   首启不 clone、不装依赖、不联网；页面「立即更新」在服务进程内完成（下载归档 → 整目录原子切换 → 自重启）。
+#   重建容器 = 可写层清空 → 重新部署回镜像版本（安装包语义），不做任何版本比较与仲裁。
 COPY deploy/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]

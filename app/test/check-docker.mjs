@@ -7,7 +7,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import net from 'node:net';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -106,18 +106,21 @@ check(/SIGTERM/.test(serverSrc) && /SIGINT/.test(serverSrc), '服务处理 SIGTE
 check(!/\bgit\s+(?:-c\s+\S+\s+)?clone\b/.test(entrySrc), '入口脚本不 clone 仓库（首次部署零网络）');
 check(!/\bnpm\s+(?:install|ci)\b/.test(entrySrc), '入口脚本不装依赖（依赖由镜像内置基线提供）');
 check(!/HTTP_PROXY|HTTPS_PROXY|ALL_PROXY|LIVEGRAB_PROXY|npm_config_proxy/.test(entrySrc), '入口脚本不读写任何代理变量');
-check(/\$SRC\/app\/server\/server\.js/.test(entrySrc) && /IMAGE_APP/.test(entrySrc), '入口脚本按「更新落位目录优先、否则镜像代码」选目录');
+check(/RUN_DIR/.test(entrySrc) && /IMAGE_APP/.test(entrySrc), '入口脚本把镜像源码部署成运行目录（默认 /opt/.run），不做版本仲裁');
+check(!/\bvercmp\b/.test(entrySrc), '入口脚本不含版本比较逻辑（启动就跑当前装的这一版）');
 /* 更新通道：按 commit 下载 GitHub 归档 + 原地切换，全程不需要 git */
 check(/codeload\.github\.com/.test(serverSrc) && /_commitArchiveUrl/.test(serverSrc), '更新链路按 commit 下载源码归档（不依赖 git）');
 check(/commitFull/.test(serverSrc) && /_computeHasUpdate/.test(serverSrc), '版本判定以 commit 为准（commitFull 参与比对）');
-check(/LIVEGRAB_SRC_DIR/.test(serverSrc) && /LIVEGRAB_IMAGE_APP/.test(entrySrc), '入口脚本把「落位目录 / 镜像目录」交给服务进程');
+check(/LIVEGRAB_RUN_DIR/.test(entrySrc) && /LIVEGRAB_DEPS_DIR/.test(entrySrc) && /LIVEGRAB_IMAGE_APP/.test(entrySrc), '入口脚本把「运行目录 / 依赖基线 / 镜像源码」交给服务进程');
+check(/LIVEGRAB_DEPS_DIR/.test(serverSrc) && /_runTarget/.test(serverSrc), '更新落位到「正在跑的那一份」目录（runDir + 依赖基线可注入）');
 check(/\.livegrab-version\.json/.test(serverSrc), '更新落位后写版本标记（容器内无 .git 时的版本来源）');
 
 /* ---------- 5) 依赖：唯一第三方依赖 better-sqlite3，其余只允许 node: 内置模块与相对路径 ---------- */
 const pkg = JSON.parse(readIf(path.join(APP, 'package.json')) || '{}');
 const deps = Object.keys(pkg.dependencies || {});
 check(deps.length === 1 && deps[0] === 'better-sqlite3', 'package.json 唯一第三方依赖为 better-sqlite3', deps.join(',') || '无依赖');
-check(fs.existsSync(path.join(APP, 'package-lock.json')), '存在 package-lock.json（Dockerfile 里 npm ci 可复现构建）');
+check(!fs.existsSync(path.join(APP, 'package-lock.json')), 'package-lock.json 不在版本控制（避免自更新被锁文件卡死），改用 npm install');
+check(/npm install --omit=dev/.test(dockerfile), 'Dockerfile 用 npm install 装依赖（不依赖锁文件）');
 const srcFiles = [...walkFiles(path.join(APP, 'server')), ...walkFiles(path.join(APP, 'web')), ...walkFiles(path.join(APP, 'test'))].filter((f) => /\.(js|mjs)$/.test(f));
 const badImports = [];
 for (const f of srcFiles) {
@@ -178,15 +181,19 @@ if (srv.exitCode === null) srv.kill();
 await sleep(300);
 fs.rmSync(SIM, { recursive: true, force: true });
 
-/* ---------- 7) 更新落位形态：从 ${CONFIG_DIR}/src/app 启动（页面「立即更新」之后的状态） ---------- */
-// 入口脚本在容器里就是这么选目录的：/config/src/app 存在且完整就跑它。
-// 这里把「更新落位目录」造出来（代码 + 指向镜像基线的 node_modules），验证：
-//   ① 能真正启动；② 更新模式判定为 archive（不依赖 git）；③ 本地版本取自 .livegrab-version.json。
+/* ---------- 7) 运行目录形态：入口脚本把镜像源码部署成 /opt/.run，服务从那里启动 ---------- */
+// v0.1.52 起容器里只有一条运行路径：entrypoint 首启把镜像源码 /app 部署到运行目录（默认 /opt/.run）并 cd 过去；
+// 页面「立即更新」替换的就是这个目录（下次启动仍跑它）；重建容器 = 可写层清空 → 重新部署回镜像版本。
+// 这里跑真实的 deploy/entrypoint.sh（用环境变量把路径指到临时目录），验证：
+//   ① 首启完成部署（代码齐全 + 版本标记 + 依赖软链）；② 再启动不覆盖运行目录里已有的更新（启动不做版本比较）；
+//   ③ 服务能从运行目录真正启动：模式 archive、版本取自标记、落位目标 = 运行目录自身。
 {
-  const UPD = path.join(os.tmpdir(), `livegrab-updated-${Date.now()}`);
-  const UPD_SRC = path.join(UPD, 'src');
-  const UPD_APP = path.join(UPD_SRC, 'app');
-  fs.mkdirSync(UPD_APP, { recursive: true });
+  const UPD = path.join(os.tmpdir(), `livegrab-run-dir-${Date.now()}`);
+  const UPD_SRC = path.join(UPD, 'opt');
+  const UPD_APP = path.join(UPD_SRC, '.run');
+  const UPD_DEPS = path.join(UPD_SRC, 'node_modules');
+  const UPD_IMG = path.join(UPD, 'app-image');
+  fs.mkdirSync(UPD_IMG, { recursive: true });
   // 手工遍历复制（不依赖 fs.cpSync：个别环境的 fs 沙箱不支持递归复制）
   const copyTree = (src, dst) => {
     fs.mkdirSync(dst, { recursive: true });
@@ -197,17 +204,35 @@ fs.rmSync(SIM, { recursive: true, force: true });
       else fs.copyFileSync(s, d);
     }
   };
-  for (const d of ['server', 'web']) copyTree(path.join(APP, d), path.join(UPD_APP, d));
-  fs.copyFileSync(path.join(APP, 'package.json'), path.join(UPD_APP, 'package.json'));
-  let nmHow = 'link';
-  try { fs.symlinkSync(path.join(APP, 'node_modules'), path.join(UPD_APP, 'node_modules'), 'junction'); }
-  catch { copyTree(path.join(APP, 'node_modules'), path.join(UPD_APP, 'node_modules')); nmHow = 'copy'; }
-  fs.writeFileSync(path.join(UPD_APP, '.livegrab-version.json'), JSON.stringify({ version: '9.9.9', tag: 'v9.9.9', commit: 'abc123456789', at: Date.now() }));
+  // 镜像源码 + 依赖基线（容器里 /app 与 /opt/node_modules 就是这个形态）
+  for (const d of ['server', 'web', 'test', 'docs']) copyTree(path.join(APP, d), path.join(UPD_IMG, d));
+  fs.copyFileSync(path.join(APP, 'package.json'), path.join(UPD_IMG, 'package.json'));
+  fs.writeFileSync(path.join(UPD_IMG, '.build-info.json'), JSON.stringify({ version: '0.0.0', commit: 'imgcommit1234', builtAt: '2026-10-19T00:00:00Z' }));
+  copyTree(path.join(APP, 'node_modules'), UPD_DEPS);
+  const epEnv = {
+    ...process.env, LIVEGRAB_IMAGE_APP: UPD_IMG, LIVEGRAB_RUN_DIR: UPD_APP, LIVEGRAB_DEPS_DIR: UPD_DEPS,
+    CONFIG_DIR: path.join(UPD, 'config'), TZ: 'Asia/Shanghai',
+  };
+  const runEntry = () => spawnSync('/bin/sh', [path.join(ROOT, 'deploy', 'entrypoint.sh'), process.execPath, '-e', 'console.log("CWD=" + process.cwd())'], { env: epEnv, encoding: 'utf8', timeout: 120000 });
+  const ep1 = runEntry();
+  check(ep1.status === 0 && /CWD=.*\.run$/.test((ep1.stdout || '').trim()), '入口脚本首启部署运行目录并 cd 过去执行（不做版本仲裁）', (ep1.stdout || '').trim().split('\n').slice(-1)[0] || ep1.stderr);
+  check(fs.existsSync(path.join(UPD_APP, 'server', 'server.js')) && fs.existsSync(path.join(UPD_APP, 'web')), '运行目录里代码完整（server + web 都从镜像源码部署）');
+  const runMarker = JSON.parse(readIf(path.join(UPD_APP, '.livegrab-version.json')) || '{}');
+  check(!!runMarker.version && runMarker.from === 'image', '部署时写出版本标记（页面「已部署」读它）', JSON.stringify(runMarker).slice(0, 70));
+  let nmHow = 'missing';
+  try { nmHow = fs.lstatSync(path.join(UPD_APP, 'node_modules')).isSymbolicLink() ? 'link' : 'copy'; } catch { /* 缺失 */ }
+  check(nmHow === 'link', '运行目录里的依赖是软链（指向基线，代码替换永不碰它）', nmHow);
+  // 模拟「页面更新过」：改代码 + 换版本标记 → 再启动必须原样保留（安装包语义：启动不与远端/镜像比较）
+  fs.writeFileSync(path.join(UPD_APP, 'server', 'updated-by-page.txt'), 'x');
+  fs.writeFileSync(path.join(UPD_APP, '.livegrab-version.json'), JSON.stringify({ version: '9.9.9', tag: 'v9.9.9', commit: 'abc123456789', from: 'page', at: Date.now() }));
+  const ep2 = runEntry();
+  check(ep2.status === 0 && fs.existsSync(path.join(UPD_APP, 'server', 'updated-by-page.txt')), '再次启动不覆盖运行目录里的更新（启动只跑当前装的这一版）');
+  check(String(JSON.parse(readIf(path.join(UPD_APP, '.livegrab-version.json'))).version) === '9.9.9', '运行目录仍是更新后的版本 9.9.9');
 
   const PORT2 = PORT + 1;
   const env2 = {
     ...process.env, PORT: String(PORT2), RECORD_ROOT: path.join(UPD, 'data'), CONFIG_DIR: path.join(UPD, 'config'),
-    LIVEGRAB_SRC_DIR: UPD_SRC, LIVEGRAB_IMAGE_APP: APP, TZ: 'Asia/Shanghai',
+    LIVEGRAB_SRC_DIR: UPD_SRC, LIVEGRAB_RUN_DIR: UPD_APP, LIVEGRAB_DEPS_DIR: UPD_DEPS, LIVEGRAB_IMAGE_APP: UPD_IMG, TZ: 'Asia/Shanghai',
   };
   const srv2 = spawn(process.execPath, ['server/server.js'], { cwd: UPD_APP, env: env2, stdio: ['ignore', 'pipe', 'pipe'] });
   let up2 = false;
@@ -215,7 +240,7 @@ fs.rmSync(SIM, { recursive: true, force: true });
     try { up2 = (await fetch(`http://127.0.0.1:${PORT2}/api/health`)).ok; } catch { /* retry */ }
     if (!up2) await sleep(300);
   }
-  check(up2, '从「页面更新落位目录」启动成功（入口脚本选目录的最终形态）', `node_modules=${nmHow}`);
+  check(up2, '从「运行目录」启动成功（容器里唯一运行路径）', `node_modules=${nmHow}`);
   if (up2) {
     const init2 = await fetch(`http://127.0.0.1:${PORT2}/api/auth/init`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: 'admin', password: 'livegrab123' }) });
     const ck = (init2.headers.get('set-cookie') || '').split(';')[0];
@@ -223,7 +248,8 @@ fs.rmSync(SIM, { recursive: true, force: true });
     check(st.mode === 'archive', '更新模式判定为容器归档通道（不需要 git）', String(st.mode));
     check(st.canSelfUpdate === true, 'canSelfUpdate=true（页面据此显示自动重启提示）');
     check(String(st.local?.version || '') === '9.9.9' && String(st.local?.tag || '') === 'v9.9.9', '本地版本取自 .livegrab-version.json', JSON.stringify(st.local));
-    check(String(st.srcRoot || '').replace(/\\/g, '/').replace(/\/$/, '').endsWith('/src'), '新版本落位目录来自 LIVEGRAB_SRC_DIR', String(st.srcRoot));
+    check(String(st.runDir || '').replace(/\\/g, '/').endsWith('/.run'), '运行目录 = 进程 cwd（页面与更新链路据此知道在跑哪份代码）', String(st.runDir));
+    check(String(st.target || '').replace(/\\/g, '/') === String(st.runDir || '').replace(/\\/g, '/'), '更新落位目标就是运行目录自身（不再另存一份）', String(st.target));
     // 更新链路的自检信息写日志文件（logger 只落盘 + SSE，不打印到 stdout）
     await sleep(300);
     let fileLog = '';
@@ -244,6 +270,6 @@ fs.rmSync(SIM, { recursive: true, force: true });
 console.log(`\n==== 打包自检结果：${bad === 0 ? 'ALL PASS' : `${bad} 项失败`} ====`);
 console.log('提示：本脚本不执行 docker build（本机可能没装 Docker）。真正的镜像构建请在宿主机执行：');
 console.log('      docker compose up -d --build');
-console.log('      容器首次启动用镜像内 /app；页面「立即更新」后从 /config/src/app 运行。验证运行中代码：');
-console.log('      docker compose exec -w /config/src/app livegrab node test/e2e-ffmpeg.mjs');
+console.log('      容器首启把镜像源码部署到运行目录 /opt/.run 并运行它；页面「立即更新」替换的也是它（重建容器 = 回到镜像版本）。');
+console.log('      docker compose exec -w /opt/.run livegrab node test/e2e-ffmpeg.mjs');
 process.exit(bad ? 1 : 0);

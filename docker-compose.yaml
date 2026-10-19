@@ -7,7 +7,7 @@ services:
       context: .
       dockerfile: Dockerfile
       args:
-        APP_VERSION: "${APP_VERSION:-0.1.51}"
+        APP_VERSION: "${APP_VERSION:-0.1.52}"
         BUILD_COMMIT: "${BUILD_COMMIT:-}"
     image: bianyh8/livegrab:latest
     container_name: livegrab
@@ -23,6 +23,11 @@ services:
       RECORD_ROOT: "/data"
       CONFIG_DIR: "/config"
       LIVEGRAB_GITHUB_TOKEN: "${LIVEGRAB_GITHUB_TOKEN:-}"
+      # 运行目录（当前实际跑的代码）与依赖基线：默认就在容器可写层，
+      # 所以「重建容器 = 重新安装 = 回到镜像版本」。想跨容器重建保留页面更新结果，
+      # 就把宿主目录挂上来（如 /volume1/docker/livegrab/run:/opt/.run）——那样更新结果会持久保留。
+      LIVEGRAB_RUN_DIR: "/opt/.run"
+      LIVEGRAB_DEPS_DIR: "/opt/node_modules"
 
     volumes:
       - ./data:/data
