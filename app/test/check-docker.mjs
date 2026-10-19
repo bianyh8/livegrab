@@ -128,6 +128,7 @@ check(/\.livegrab-version\.json/.test(serverSrc), '更新落位后写版本标�
 /* 提交号来源：compose 不做 shell 展开，`BUILD_COMMIT=$(git rev-parse HEAD)` 传不进去，
    所以由 Dockerfile 的 gitinfo 阶段从构建上下文的 .git 指针文件里解析出来（BUILD_COMMIT 仍可显式覆盖）。 */
 check(/^FROM\s+\S+\s+AS\s+gitinfo$/m.test(dockerfile), 'Dockerfile 有独立的提交号解析阶段（构建时自动读 .git，零参数）');
+check(/\(node\s+[^)]*git-commit\.cjs[^)]*\|\|\s*true\)/.test(dockerfile), '解析失败不影响构建（退出码被 || true 兜住，文件仍然存在）');
 check(/COPY\s+--from=gitinfo\s+\/tmp\/commit\.txt/.test(dockerfile), '运行阶段只从解析阶段取一个文本文件（.git 历史不进镜像）');
 check(/\$\{BUILD_COMMIT:-/.test(dockerfile), '显式 BUILD_COMMIT 优先于自动解析（手动构建仍可覆盖）');
 check(!/^\.git\/$/m.test(ignore) && ignored('.git/objects/ab/cdef'), '.dockerignore 排除 .git 历史对象（构建上下文保持几 KB）');

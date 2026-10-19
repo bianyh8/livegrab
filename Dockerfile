@@ -23,15 +23,21 @@ RUN npm install --omit=dev && npm cache clean --force
 # 本阶段的结果只以一个几字节的文本文件交给运行阶段；源码包/CI 浅检出等没有 .git 的情况输出空串，构建照常成功。
 FROM node:22-bookworm-slim AS gitinfo
 COPY . /ctx/
-RUN node /ctx/deploy/git-commit.cjs /ctx/.git > /tmp/commit.txt \
- && echo "从构建上下文解析出的提交号: $(cat /tmp/commit.txt)"
+# 解析失败也绝不让构建失败：`|| true` 兜住退出码，重定向又保证 /tmp/commit.txt 一定存在
+# （没有 .git 的源码包、浅检出、甚至脚本本身读不到，都只记为「提交号未知」，后续 COPY --from 照常拿到文件）。
+RUN (node /ctx/deploy/git-commit.cjs /ctx/.git || true) > /tmp/commit.txt \
+ && if [ -s /tmp/commit.txt ]; then \
+      echo "从构建上下文解析出的提交号: $(cat /tmp/commit.txt)"; \
+    else \
+      echo "构建上下文里没有可用的 .git（源码包/浅检出/读取失败），提交号记为未知"; \
+    fi
 
 # ---------- 运行阶段 ----------
 FROM node:22-bookworm-slim
 
 # 版本号由构建参数注入（compose 里从 .env 的 APP_VERSION 传），避免与 app/package.json
 # 长期漂移——此前这里写死 "0.1.35"，早已落后实际版本，镜像元数据因此不准。
-ARG APP_VERSION=0.1.53
+ARG APP_VERSION=0.1.54
 
 LABEL org.opencontainers.image.title="LiveGrab 直播录制台" \
       org.opencontainers.image.description="抖音/B站/快手/虎牙/斗鱼/小红书/微博 直播分段录制，带 Web 管理页面" \
