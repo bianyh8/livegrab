@@ -49,9 +49,14 @@ function mockGitHub({ releases, tags, commits, repoPublic = true, repoPrivate = 
   };
 }
 
-async function fresh() {
+// 「本地宿主 + 无 git 仓库」形态：本机若本身跑在容器里，detectEnv() 会给出 archive（归档通道）语义，
+// 与这些用例想验证的本地语义不同 —— 显式固定形态，让结果不随宿主机变化（mode 缺省 → 由 gitAvailable 推导）。
+const HOST_ENV = { gitAvailable: false, gitRoot: '', gitBin: '', dockerAvailable: false, inContainer: false };
+
+async function fresh(hostShape = false) {
   const m = new UpdateManager({ appDir: TMP });
   await m.detectEnv();
+  if (hostShape) m.state.env = HOST_ENV;
   await m.localInfo();
   return m;
 }
@@ -142,7 +147,7 @@ console.log('== D. 远程无更新（版本一致） ==');
     commits: { sha: 'localcommit123', commit: { message: 'same', committer: { date: '2026-05-01T00:00:00Z' } } },
     repoPublic: true,
   });
-  const m = await fresh();
+  const m = await fresh(true);
   await m.fetchRemote();
   check(m.status().hasUpdate === false, 'v0.1.0 vs v0.1.0 → hasUpdate=false');
 }
@@ -159,7 +164,7 @@ console.log('== E. 只返回 tags（无 release） ==');
 console.log('== F. apply 在远程不可见时给出明确指引 ==');
 {
   mockGitHub({ releases: undefined, tags: undefined, commits: undefined });
-  const m = await fresh();
+  const m = await fresh(true);
   await m.check(true);
   const r = await m.apply();
   check(r.running === true, 'apply 返回 running（异步后台）');
@@ -193,7 +198,7 @@ console.log('== H. 更新日志统一写入 logger（环境自检/检查对比/�
   await m.detectEnv();
   const envLines = lines.filter(([, msg]) => /更新环境自检/.test(msg));
   check(envLines.length === 1, 'detectEnv 首次检测记录环境自检日志', JSON.stringify(envLines));
-  check(/git 可用|未检测到 git 仓库/.test(envLines[0]?.[1] || ''), '环境自检日志含 git 可用性判定');
+  check(/git 可用|未检测到 git 仓库|更新走 GitHub 归档/.test(envLines[0]?.[1] || ''), '环境自检日志说明了运行形态（git 可用性 / 归档通道）');
   // ② 重复 detectEnv（环境未变）不重复记
   await m.detectEnv();
   check(lines.filter(([, msg]) => /更新环境自检/.test(msg)).length === 1, '环境未变化时不重复记录自检日志');
@@ -314,6 +319,7 @@ console.log('== N. 远端版本取「最高标签」：只打 tag 未发 Release
   });
   const m = new UpdateManager({ appDir: TMP });
   await m.detectEnv();
+  m.state.env = HOST_ENV;   // 固定「本地无 git」形态，否则在容器里跑会走归档通道、语义不同
   await m.localInfo();
   // 模拟已部署 v0.1.19 的实例（无构建 commit 信息，只能按版本号比对）
   m.state.local = { version: '0.1.19', commit: '', branch: 'main', commitAt: null, tag: 'v0.1.19' };

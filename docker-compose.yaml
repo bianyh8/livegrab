@@ -7,7 +7,7 @@ services:
       context: .
       dockerfile: Dockerfile
       args:
-        APP_VERSION: "${APP_VERSION:-0.1.50}"
+        APP_VERSION: "${APP_VERSION:-0.1.51}"
         BUILD_COMMIT: "${BUILD_COMMIT:-}"
     image: bianyh8/livegrab:latest
     container_name: livegrab

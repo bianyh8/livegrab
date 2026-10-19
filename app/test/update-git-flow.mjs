@@ -182,6 +182,43 @@ console.log('== 拉取失败后的处理流程：降级重试参数 → 本地�
   check(dead.ok === false && dead.tried === 3, '远端不可达时跑满 3 档重试并如实失败', `tried=${dead.tried} code=${dead.code}`);
 }
 
+console.log('== 归档通道（容器）里残留的旧 .git 不得冒充本地版本 ==');
+{
+  // 现实场景：容器早期用 git 通道更新过（.git 停在旧提交），之后更新改走归档通道（只写落位标记、不碰 .git），
+  // 于是 .git HEAD 永久停在旧提交。若 localInfo 优先读 .git，「已部署」会永远显示旧 commit、反复提示「可用更新」，
+  // 点更新又什么都不做（自己和自己比，commit 永远不同）。
+  const headOld = (await run('git', ['rev-parse', '--short=12', 'HEAD'], { cwd: gitRoot })).out;
+  const markerCommit = (await run('git', ['rev-parse', '--short=12', 'v0.1.8'], { cwd: WORK })).out;
+  // 把残留 .git 的分支指回更早的 v0.1.6（只动 ref，不碰工作区——归档通道正是这样从不更新 .git 的）
+  const staleSha = (await run('git', ['rev-parse', '--short=12', 'v0.1.6'], { cwd: WORK })).out;
+  check((await run('git', ['update-ref', 'refs/heads/main', 'refs/tags/v0.1.6'], { cwd: gitRoot })).ok, '把残留 .git 的 HEAD 挪回 v0.1.6（模拟从不更新 .git）');
+  const headStale = (await run('git', ['rev-parse', '--short=12', 'HEAD'], { cwd: gitRoot })).out;
+  check(headStale === staleSha && headStale !== markerCommit, '构造出「.git HEAD 落后于落位标记」的形态', `HEAD ${headStale} / 标记 ${markerCommit}（对齐前 SRC HEAD ${headOld}）`);
+  // 归档落位：代码内容换成归档里的 + 写落位标记（.git 完全不动，与真实容器一致）
+  fs.writeFileSync(path.join(gitRoot, 'app', 'package.json'), JSON.stringify({ name: 'livegrab', version: '0.1.9' }, null, 2));
+  fs.writeFileSync(path.join(gitRoot, 'app', '.livegrab-version.json'), JSON.stringify({
+    version: '0.1.9', tag: 'v0.1.9', commit: markerCommit, commitFull: '', commitAt: '2026-10-19T02:00:00Z',
+    remoteTag: 'v0.1.9', pkgVersion: '0.1.9', depsInstalled: false, at: Date.now(), from: '0.1.8',
+  }, null, 2));
+  const envArchive = { mode: 'archive', gitAvailable: true, gitBin: 'git', gitRoot, dockerAvailable: false, inContainer: true, srcRoot: SRC };
+  const mArc = new UpdateManager({ appDir: APP });
+  mArc.state.env = envArchive;
+  const arcLocal = await mArc.localInfo();
+  check(arcLocal.version === '0.1.9', '归档模式本地版本取自落位标记', arcLocal.version);
+  check(arcLocal.commit === markerCommit && arcLocal.commit !== headStale,
+    '归档模式以落位标记的 commit 为准，不拿残留 .git 的 HEAD 冒充', `标记 ${markerCommit} / git HEAD ${headStale} / 实际 ${arcLocal.commit}`);
+  check(arcLocal.commitDate === '2026-10-19T02:00:00.000Z', 'commitDate 用标记里的 commitAt（降级保护才有依据）', arcLocal.commitDate);
+  const latestV19 = { version: '0.1.9', tag: 'v0.1.9', unavailable: false, commit: markerCommit, commitAt: '2026-10-19T02:00:00Z' };
+  check(mArc._computeHasUpdate(arcLocal, latestV19) === false, '落位后不再误报「可用更新」（同一 commit 不提示更新）');
+  check((mArc.status().log || []).some((l) => /以落位标记为准/.test(String((l && l.msg) || ''))), '归档模式发现残留 .git 时记一条诊断日志');
+  // 回归保护：没有落位标记（镜像首启、从没页面更新过）时，归档模式仍回退 .git/构建信息，不能变成空
+  fs.rmSync(path.join(gitRoot, 'app', '.livegrab-version.json'), { force: true });
+  const mNoMark = new UpdateManager({ appDir: APP });
+  mNoMark.state.env = envArchive;
+  const noMark = await mNoMark.localInfo();
+  check(!!noMark.commit, '无落位标记时仍能给出本地版本（回退 .git HEAD）', noMark.commit);
+}
+
 console.log('== npm install 的 cwd（update.js 用法） ==');
 const npmCwd = path.join(gitRoot, 'app');
 check(fs.existsSync(path.join(npmCwd, 'package.json')), 'npm install cwd 指向含 package.json 的 app 目录', npmCwd);

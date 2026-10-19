@@ -263,6 +263,7 @@ export class UpdateManager {
     this._lastCheckSig = ''; // 最近一次已记录检查结果的签名（相同则不重复记日志）
     this._proxyCooldownUntil = 0; // 代理失败后的直连冷却截止时间
     this._lastPathSig = '';  // 最近一次记录过的网络路径（代理地址 / direct），用于日志去重
+    this._staleGitSig = '';  // 最近一次记录过的「归档模式下残留旧 .git」日志签名（去重，避免刷屏）
   }
 
   /* ---------- 动态仓库配置（UI 可配置 > 环境变量 > 默认值） ---------- */
@@ -771,11 +772,20 @@ export class UpdateManager {
     // 不能拿标记的 at（落位时间）顶替——那样远端提交永远比本地「旧」，会把所有更新都挡掉。
     let commitDate = '';
     const env = this.state.env || await this.detectEnv();
+    // 落位标记：容器归档通道更新时写在 <appDir>/.livegrab-version.json，记录「本次真正落位的那次提交」。
+    // 先无脑读出来：归档模式下它比工作区里可能残留的 .git 更权威（原因见下面的 staleGit）。
+    const marker = this._readVersionMarker(this.appDir);
+    this.state.versionMarker = marker || null;
     // 快照标记优先：走快照通道更新过的工作区，其真实代码 = 标记里的 commit，
     // 而 .git 索引还停在旧提交（下次成功 fetch 时会自动对齐），不能拿旧 index 冒充本地版本。
     const snap = env.gitRoot ? this._readSnapshot(env) : null;
     this.state.snapshot = snap || null;
-    if (env.gitAvailable && env.gitRoot) {
+    // 归档通道（容器部署）同理，且更隐蔽：容器更新走 tar.gz 归档、从不碰 .git，所以容器里若残留一个
+    // 早先 clone 出来的工作区，它的 HEAD 会永远停在旧提交 → 「已部署」显示旧 commit、反复提示「可用更新」、
+    // 点更新却什么都不做（自己和自己比，commit 永远不同）。判据：归档模式 + 有落位标记 → 以标记为准。
+    const staleGit = !!(this._mode(env) === 'archive' && marker && env.gitAvailable && env.gitRoot);
+    if (staleGit) await this._logStaleGit(env, marker);
+    if (env.gitAvailable && env.gitRoot && !staleGit) {
       const [sha, br, at, tg] = await Promise.all([
         run('git', ['rev-parse', '--short=12', 'HEAD'], { cwd: env.gitRoot }),
         run('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: env.gitRoot }),
@@ -790,8 +800,6 @@ export class UpdateManager {
       // 容器/无 git：版本以「页面更新落位时写入的标记」为准（.livegrab-version.json，
       // 里面记的是 GitHub 标签版本，容器里没有 .git 时这就是唯一权威来源）；
       // 从没更新过（用的是镜像代码）则回退构建信息（.build-info.json / LIVEGRAB_BUILD_COMMIT）。
-      const marker = this._readVersionMarker(this.appDir);
-      this.state.versionMarker = marker || null;
       if (marker) {
         if (marker.version) version = String(marker.version);
         if (marker.commit) commit = String(marker.commit).slice(0, 12);
@@ -806,7 +814,7 @@ export class UpdateManager {
       }
       branch = this._branch();
     }
-    if (snap) {
+    if (snap && !staleGit) {
       if (snap.commit) commit = String(snap.commit).slice(0, 12);
       if (snap.tag) tag = snap.tag;
       if (snap.version) version = snap.version;
@@ -815,6 +823,20 @@ export class UpdateManager {
     }
     this.state.local = { version, commit, branch: branch || this._branch(), commitAt, commitDate, tag: tag || `v${version}` };
     return this.state.local;
+  }
+
+  /** 归档模式下发现「残留的旧 .git 工作区」时记一条日志（同一仓库+标记只记一次，避免刷屏）。
+      容器里的更新走 tar.gz 归档、不碰 .git，这种 .git 会永远停在旧提交，只能当诊断信息、不能当版本依据。 */
+  async _logStaleGit(env, marker) {
+    const key = `${env.gitRoot}|${(marker && marker.commit) || ''}`;
+    if (this._staleGitSig === key) return;
+    this._staleGitSig = key;
+    const head = await run('git', ['rev-parse', '--short=12', 'HEAD'], { cwd: env.gitRoot, env: this._gitEnv() });
+    const headSha = head.ok ? head.out.trim() : '';
+    this._log('INFO', `本地版本以落位标记为准（${(marker && (marker.tag || `v${marker.version}`)) || '?'}`
+      + `${marker && marker.commit ? ` / ${String(marker.commit).slice(0, 12)}` : ''}）；`
+      + `工作区里的 git 仓库（${env.gitRoot}）仍停在旧提交${headSha ? ` ${headSha}` : ''}`
+      + '——容器更新走归档通道、不维护 .git，故不拿它当版本依据');
   }
 
   /** 容器/无 git 环境下，从构建信息读取自身 commit（镜像构建时写入 <appDir>/.build-info.json 的 commit 字段）。 */
