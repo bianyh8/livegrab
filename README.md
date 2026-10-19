@@ -55,11 +55,12 @@ docker compose up -d --build
 > **启动永远只跑当前装的那一版**：不查远端、不做版本比较、不自动升级；只有你在页面点「立即更新」才会下载新版。
 > 重建容器（`docker compose up -d --build` / 删容器重建）= **重新安装** → 回到镜像版本（就像本地安装包是 1.0，过几个月再装一次，装的还是 1.0）。
 
-> 想让镜像从第一次启动就「知道自己是哪个提交」（版本判定精确，页面不误报），构建时把提交号传进去：
-> ```bash
-> BUILD_COMMIT=$(git rev-parse HEAD) docker compose up -d --build
-> ```
-> 不传也能用：本地没有提交记录时，第一次点「立即更新」会先按「有更新」处理一次，落位后即以提交号精确比对。
+> **提交号自动带上**：构建时 `Dockerfile` 的 `gitinfo` 阶段会从构建上下文的 `.git` 指针文件里解析出当前提交号，
+> 写进镜像的 `.build-info.json`（`.dockerignore` 只放行 `HEAD`/`refs`/`packed-refs` 这几个几 KB 的文件，
+> 历史对象、`.git/config` 一律不进上下文）。所以 `git pull && docker compose up -d --build` **不需要任何额外参数**，
+> 更新页「已部署」栏的提交号从第一天起就是准的。
+> 想显式指定（手动构建 / CI 无 `.git` 时）：`BUILD_COMMIT=<sha> docker compose up -d --build`，显式值优先。
+> 完全没有 `.git` 也能构建，只是 commit 记为空 —— 那时第一次点「立即更新」会先按「有更新」处理一次，落位后即以提交号精确比对。
 
 **③ 打开页面**
 ```
@@ -240,6 +241,7 @@ docker run -d --name livegrab -p 18080:8080 \
 - 停止：`docker compose stop`（已配置 `stop_grace_period: 30s`，会先把当前分段收尾再退出）；彻底移除：`docker compose down`。
 - 看日志：`docker compose logs -f --tail=200 livegrab`。
 - 运行日志页里，`[容器启动]` 前缀是入口脚本的引导记录（这次用的是哪份代码），`[更新]` 前缀是更新链路（版本对比、网络路径、下载、切换、重启）。
+- 更新的 commit 记在 `<运行目录>/.livegrab-version.json`（首启来自镜像的 `.build-info.json`，即构建时自动解析的提交号）。
 - 更新页出现「重试更新」：上次更新未完成、代码未被改动，直接再点一次即可。
 - 更新页提示「无法获取远程版本信息」：网络问题或私有仓库缺 Token，按上文「常见问题」处理。
 
@@ -261,8 +263,8 @@ start-local.cmd        # Windows：双击或命令行运行
 
 ```bash
 cd app
-node test/run.js                # 常规单元测试（含 API / 解析 / 存储），442 项
-node test/db-sqlite.mjs         # SQLite 持久层：建表 / 迁移 / 落库往返 / 旧库作废重建，82 项
+node test/run.js                # 常规单元测试（含 API / 解析 / 存储），445 项
+node test/db-sqlite.mjs         # SQLite 持久层：建表 / 迁移 / 落库往返 / 旧库作废重建，96 项
 node test/load.mjs              # 大数据量测试：2000 任务 + 1.2 万文件 + 20 万行日志（约 15s）
                                 #   LOAD_SCALE=2 放大一倍，=0.2 快速冒烟
 node test/update-manager.mjs   # 更新管理器单元测试（mock GitHub，离线；含容器归档通道：只升不降 / 解包 / 切换 / 回滚）
@@ -270,6 +272,7 @@ node test/update-git-flow.mjs  # 本地 git 工作区更新链路集成测试（
 node test/check-docker.mjs     # Docker 打包自检（无需装 Docker）：静态校验 + 容器形态冒烟 + 运行目录部署/启动冒烟 + 依赖校验
 node test/e2e-ffmpeg.mjs       # 录制链路端到端（假 ffmpeg：分段 / 收尾 / 转封装 / 合并）
 node test/e2e-ui.mjs           # 真实浏览器端到端（需本机 Edge/Chrome，找不到会自动跳过）
+sh ../deploy/test-git-commit.sh # 提交号解析器 fixture（松散 ref / packed-refs / detached / 无 .git / 符号 ref）
 ```
 
 `test/load.mjs` 用「尽可能多的数据」压测上一轮的性能优化：上万文件下 `findFile` 逐个与
@@ -287,7 +290,7 @@ app/
   docs/          # 接口契约等文档
 ui/              # UI 设计原型与说明（不进 Docker 镜像）
 Dockerfile / docker-compose.yaml / .dockerignore
-deploy/          # entrypoint.sh（容器入口：只选代码目录，不联网）
+deploy/          # 容器入口与构建辅助：entrypoint.sh（部署运行目录，不联网）、git-commit.cjs（构建时从 .git 解析提交号）
 start-local.cmd  # 本地一键启动
 ```
 

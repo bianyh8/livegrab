@@ -53,25 +53,35 @@ check(/\bnpm (?:ci|install) --omit=dev\b/.test(dockerfile), '镜像内只装生�
 const copySources = [];
 for (const line of dockerfile.split(/\r?\n/)) {
   const m = /^COPY\s+(?:--\S+\s+)*(\S+)\s+(\S+)\s*$/.exec(line.trim());
-  if (m) copySources.push({ src: m[1], dest: m[2] });
+  if (!m) continue;
+  if (/--from=/.test(line)) continue; // 跨阶段拷贝（如 COPY --from=gitinfo /tmp/commit.txt）不是构建上下文里的文件，不参与上下文校验
+  copySources.push({ src: m[1], dest: m[2] });
 }
 check(copySources.length >= 5, 'Dockerfile 通过 COPY 复制应用代码', copySources.map((c) => c.src).join(' '));
 const missing = copySources.filter((c) => !fs.existsSync(path.join(ROOT, c.src)));
 check(missing.length === 0, '所有 COPY 源在构建上下文存在', missing.map((c) => c.src).join(' ') || '全部存在');
 
 const patterns = ignore.split(/\r?\n/).map((l) => l.trim()).filter((l) => l && !l.startsWith('#'));
+// glob → 正则：`**/` 允许零层目录（与 Docker 的 patternmatcher 一致），`*` 不跨 `/`
+const globToRe = (p) => {
+  let out = '';
+  for (let i = 0; i < p.length; i++) {
+    const c = p[i];
+    if (c === '*' && p[i + 1] === '*') {
+      i++;
+      if (p[i + 1] === '/') { i++; out += '(?:.*/)?'; } else out += '.*';
+    } else if (c === '*') out += '[^/]*';
+    else if ('.+^${}()|[]\\'.includes(c)) out += '\\' + c;
+    else out += c;
+  }
+  return new RegExp('^' + out + '$');
+};
 const ignored = (rel) => {
   const norm = rel.split(path.sep).join('/');
-  const parts = norm.split('/');
   return patterns.some((pat) => {
     const p = pat.replace(/^\//, '');
-    if (p.endsWith('/')) return parts.includes(p.slice(0, -1));
-    if (p.includes('*')) {
-      const rx = new RegExp('^' + p.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '[^/]*') + '$');
-      return parts.some((seg) => rx.test(seg)) || rx.test(norm);
-    }
-    if (p.includes('/')) return norm === p || norm.startsWith(p + '/');
-    return parts.includes(p);
+    if (p.endsWith('/')) { const dir = p.slice(0, -1); return norm === dir || norm.startsWith(dir + '/'); }
+    return globToRe(p).test(norm) || globToRe(p + '/**').test(norm); // 目录规则也覆盖其下所有内容
   });
 };
 const hidden = copySources.filter((c) => ignored(c.src.split('/').join(path.sep)));
@@ -114,6 +124,25 @@ check(/commitFull/.test(serverSrc) && /_computeHasUpdate/.test(serverSrc), '版�
 check(/LIVEGRAB_RUN_DIR/.test(entrySrc) && /LIVEGRAB_DEPS_DIR/.test(entrySrc) && /LIVEGRAB_IMAGE_APP/.test(entrySrc), '入口脚本把「运行目录 / 依赖基线 / 镜像源码」交给服务进程');
 check(/LIVEGRAB_DEPS_DIR/.test(serverSrc) && /_runTarget/.test(serverSrc), '更新落位到「正在跑的那一份」目录（runDir + 依赖基线可注入）');
 check(/\.livegrab-version\.json/.test(serverSrc), '更新落位后写版本标记（容器内无 .git 时的版本来源）');
+
+/* 提交号来源：compose 不做 shell 展开，`BUILD_COMMIT=$(git rev-parse HEAD)` 传不进去，
+   所以由 Dockerfile 的 gitinfo 阶段从构建上下文的 .git 指针文件里解析出来（BUILD_COMMIT 仍可显式覆盖）。 */
+check(/^FROM\s+\S+\s+AS\s+gitinfo$/m.test(dockerfile), 'Dockerfile 有独立的提交号解析阶段（构建时自动读 .git，零参数）');
+check(/COPY\s+--from=gitinfo\s+\/tmp\/commit\.txt/.test(dockerfile), '运行阶段只从解析阶段取一个文本文件（.git 历史不进镜像）');
+check(/\$\{BUILD_COMMIT:-/.test(dockerfile), '显式 BUILD_COMMIT 优先于自动解析（手动构建仍可覆盖）');
+check(!/^\.git\/$/m.test(ignore) && ignored('.git/objects/ab/cdef'), '.dockerignore 排除 .git 历史对象（构建上下文保持几 KB）');
+check(ignored('.git/config') && ignored('.git/index') && ignored('.git/logs/HEAD'), '.dockerignore 排除 .git/config（可能含凭据）、索引与 reflog');
+check(!ignored('.git/HEAD') && !ignored('.git/refs/heads/main') && !ignored('.git/packed-refs'), '.dockerignore 放行 .git 指针文件（HEAD / refs / packed-refs）');
+const commitScript = path.join(ROOT, 'deploy', 'git-commit.cjs');
+check(fs.existsSync(commitScript), '提交号解析脚本存在：deploy/git-commit.cjs');
+const fixture = spawnSync('sh', [path.join(ROOT, 'deploy', 'test-git-commit.sh')], { encoding: 'utf8' });
+const fixtureTail = (fixture.stdout || '').trim().split('\n').pop() || (fixture.stderr || '').trim();
+check(fixture.status === 0, 'deploy/git-commit.cjs fixture 全过（松散 ref / packed-refs / detached / 无 .git / 符号 ref）', fixtureTail);
+const realCommit = spawnSync('sh', ['-c', `git -C '${ROOT}' rev-parse HEAD 2>/dev/null`], { encoding: 'utf8' }).stdout.trim();
+if (realCommit) {
+  const parsed = spawnSync('node', [commitScript, path.join(ROOT, '.git')], { encoding: 'utf8' }).stdout.trim();
+  check(parsed === realCommit, '本仓库 .git 解析结果与 git rev-parse HEAD 一致', parsed ? `${parsed.slice(0, 12)}` : '(空)');
+}
 
 /* ---------- 5) 依赖：唯一第三方依赖 better-sqlite3，其余只允许 node: 内置模块与相对路径 ---------- */
 const pkg = JSON.parse(readIf(path.join(APP, 'package.json')) || '{}');

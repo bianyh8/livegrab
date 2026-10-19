@@ -15,12 +15,23 @@ RUN apt-get update \
 COPY app/package.json ./package.json
 RUN npm install --omit=dev && npm cache clean --force
 
+# ---------- 提交号解析阶段 ----------
+# 构建上下文里带了 .git 的「指针文件」（.dockerignore 只放行 HEAD/refs/packed-refs，历史对象不进上下文），
+# 这里直接用 deploy/git-commit.cjs 解析出当前提交号。为什么要这一步：compose 只做 ${VAR:-默认} 插值、
+# 不做 shell 展开，`BUILD_COMMIT=$(git rev-parse HEAD)` 在 compose 里是死字符串，只能由用户在命令行传参；
+# 于是「git pull 之后直接 up -d --build」永远带不上 commit，更新页就会误报「可用更新」一次。
+# 本阶段的结果只以一个几字节的文本文件交给运行阶段；源码包/CI 浅检出等没有 .git 的情况输出空串，构建照常成功。
+FROM node:22-bookworm-slim AS gitinfo
+COPY . /ctx/
+RUN node /ctx/deploy/git-commit.cjs /ctx/.git > /tmp/commit.txt \
+ && echo "从构建上下文解析出的提交号: $(cat /tmp/commit.txt)"
+
 # ---------- 运行阶段 ----------
 FROM node:22-bookworm-slim
 
 # 版本号由构建参数注入（compose 里从 .env 的 APP_VERSION 传），避免与 app/package.json
 # 长期漂移——此前这里写死 "0.1.35"，早已落后实际版本，镜像元数据因此不准。
-ARG APP_VERSION=0.1.52
+ARG APP_VERSION=0.1.53
 
 LABEL org.opencontainers.image.title="LiveGrab 直播录制台" \
       org.opencontainers.image.description="抖音/B站/快手/虎牙/斗鱼/小红书/微博 直播分段录制，带 Web 管理页面" \
@@ -59,13 +70,18 @@ COPY README.md ./README.md
 # 漏掉这行会导致容器内版本显示 0.0.0、版本比对永远误报「可更新」。
 COPY app/package.json ./package.json
 
-# 构建时注入 commit（由 docker compose 的 build.args 传入，手动构建时 --build-arg BUILD_COMMIT=xxx），
-# 写入 .build-info.json。容器里没有 .git，更新判定就是「远端 HEAD 的 commit vs 本地记录的 commit」，
-# 传了才能从第一次点「立即更新」起就精确；没传则第一次按「有更新」处理一次，落位后即以 sha 精确比对
-# （见 update.js 的 _computeHasUpdate）。
+# 提交号写进 .build-info.json（容器里没有 .git，更新判定就是「远端 HEAD 的 commit vs 本地记录的 commit」）：
+#   ① BUILD_COMMIT 构建参数显式传了 → 以它为准（手动构建 / 特殊 CI 用）；
+#   ② 否则用 gitinfo 阶段从构建上下文 .git 解析出的提交号 → `docker compose up -d --build` 零参数即精确；
+#   ③ 都没有（源码包/浅检出）→ 记为空字符串，第一次点「立即更新」先按「有更新」处理一次，落位后即以 sha 精确比对
+#      （见 update.js 的 _computeHasUpdate）。
 ARG BUILD_COMMIT=""
+COPY --from=gitinfo /tmp/commit.txt /tmp/gitcommit.txt
 RUN VER=$(node -p "require('./package.json').version") \
- && echo "{\"version\":\"${VER}\",\"commit\":\"${BUILD_COMMIT}\",\"builtAt\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}" > /app/.build-info.json
+ && COMMIT="${BUILD_COMMIT:-$(cat /tmp/gitcommit.txt 2>/dev/null)}" \
+ && echo "{\"version\":\"${VER}\",\"commit\":\"${COMMIT}\",\"builtAt\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}" > /app/.build-info.json \
+ && rm -f /tmp/gitcommit.txt \
+ && echo "镜像构建信息: $(cat /app/.build-info.json)"
 
 RUN mkdir -p /data /config
 

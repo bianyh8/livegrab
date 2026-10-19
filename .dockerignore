@@ -8,7 +8,21 @@ data/
 config/
 
 # 各种临时/本地文件
-.git/
+# .git 只放行「几 KB 的指针文件」（HEAD / refs / packed-refs / 描述文件），
+# 供 Dockerfile 的 gitinfo 阶段解析出提交号 —— 于是 docker compose up -d --build 零参数就能带上准确 commit。
+# 历史对象、reflog、索引、hooks 以及可能含凭据的 .git/config 一律不进构建上下文。
+.git/objects/
+.git/logs/
+.git/modules/
+.git/hooks/
+.git/index
+.git/config
+.git/COMMIT_EDITMSG
+.git/FETCH_HEAD
+.git/ORIG_HEAD
+.git/MERGE_HEAD
+.git/MERGE_MSG
+.git/gc.log
 .gitignore
 **/.DS_Store
 **/Thumbs.db

@@ -1,6 +1,6 @@
 {
   "name": "livegrab",
-  "version": "0.1.52",
+  "version": "0.1.53",
   "private": true,
   "description": "LiveGrab · 直播录制台（抖音 / B站 / 快手 / 虎牙 / 斗鱼 等，Docker 单容器）",
   "type": "module",
