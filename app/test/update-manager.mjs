@@ -690,6 +690,95 @@ console.log('== S. 容器归档通道：按 commit 比对 → 下载该提交 �
       try { check(lstatSync(path.join(RUN2, 'node_modules')).isSymbolicLink(), '覆盖式切换不破坏依赖软链'); } catch { check(false, '覆盖式切换不破坏依赖软链', '软链丢失'); }
       check(!!restarted && restarted.cwd === RUN2, '覆盖式切换后重启钩子仍拿到运行目录', JSON.stringify(restarted));
     }
+
+    /* ③-d 下载成功才算更新：网络异常 / HTTP 错误 / 远端信息拿不到 → 运行目录一个字节都不动 */
+    {
+      const OPT3 = path.join(ARCH, 'opt3');
+      const RUN3 = path.join(OPT3, 'run3');
+      const img4 = path.join(ARCH, 'image4');
+      mkdirSync(path.join(img4, 'server'), { recursive: true });
+      mkdirSync(path.join(img4, 'node_modules', 'better-sqlite3'), { recursive: true });
+      writeFileSync(path.join(img4, 'package.json'), JSON.stringify({ name: 'livegrab', version: '0.1.0', dependencies: { 'better-sqlite3': '^13.0.0' } }));
+      mkdirSync(path.join(RUN3, 'server'), { recursive: true });
+      writeFileSync(path.join(RUN3, 'package.json'), JSON.stringify({ name: 'livegrab', version: '0.1.0', dependencies: { 'better-sqlite3': '^13.0.0' } }));
+      writeFileSync(path.join(RUN3, 'server', 'server.js'), '// old code 0.1.0\n');
+      writeFileSync(path.join(RUN3, '.livegrab-version.json'), JSON.stringify({ version: '0.1.0', tag: 'v0.1.0', commit: 'deadbeef0001', commitFull: 'deadbeef0001' }));
+      try { symlinkSync(path.join(img4, 'node_modules'), path.join(RUN3, 'node_modules'), 'dir'); } catch { /* 忽略 */ }
+
+      // 指纹：递归记录「路径 + 内容 + mtime」——「没被改动」要能被逐字节证明，不能只看某个文件
+      const fingerprint = (dir, rel = '') => {
+        const out = [];
+        for (const e of fs.readdirSync(path.join(dir, rel || '.'), { withFileTypes: true })) {
+          const r = rel ? `${rel}/${e.name}` : e.name;
+          if (e.name === 'node_modules') { out.push(`${r}:<symlink>`); continue; }
+          if (e.isDirectory()) out.push(`${r}/[${fingerprint(dir, r)}]`);
+          else { const st = fs.statSync(path.join(dir, r)); out.push(`${r}:${st.mtimeMs}:${readFileSync(path.join(dir, r), 'utf8')}`); }
+        }
+        return out.sort().join('|');
+      };
+      const before3 = fingerprint(RUN3);
+
+      const baseFetch = global.fetch;
+      const setFetchMode = (mode) => {
+        global.fetch = async (url, opts) => {
+          const u = String(url);
+          if (mode !== 'ok' && u.includes('codeload.github.com')) {
+            if (mode === 'http500') return { ok: false, status: 500, arrayBuffer: async () => Buffer.alloc(0), text: async () => 'server error' };
+            throw new Error('ECONNRESET: 连接被对端重置（模拟网络抖动）');
+          }
+          if (mode === 'remoteDown' && !u.includes('codeload.github.com')) throw new Error('ENOTFOUND api.github.com');
+          return baseFetch(url, opts);
+        };
+      };
+      remoteTag = 'v0.9.0';
+      remoteSha = 'feedface0003';
+      archiveBody = good;
+
+      const cases = [
+        ['归档下载 HTTP 500', 'http500', 'error', /更新失败/],
+        ['归档下载时网络抛错（ECONNRESET）', 'throw', 'error', /更新失败/],
+        ['远端版本信息全部拿不到（api 不可达）', 'remoteDown', 'done', /无法获取远程版本信息/],
+      ];
+      for (const [label, mode, wantPhase, wantLog] of cases) {
+        restarted = null;
+        setFetchMode(mode);
+        const hitsBefore = archiveHits;
+        const m6 = new UpdateManager({
+          appDir: RUN3, imageApp: img4,
+          getRepoConfig: () => ({ updateRepo: 'bianyh8/livegrab', updateBranch: 'main' }),
+          restart: async (info) => { restarted = info; },
+        });
+        await m6.detectEnv();
+        await m6.localInfo();
+        await m6.apply();
+        await new Promise((r) => setTimeout(r, 1200));
+        check(fingerprint(RUN3) === before3, `${label}：运行目录内容与修改时间逐文件比对无变化（没被改动过）`);
+        check(!fsExists(path.join(OPT3, 'run3.old')), `${label}：没有产生 .old（压根没走到切换那一步）`);
+        check(!fsExists(path.join(OPT3, 'run3.stage')), `${label}：没有暂存目录残留`);
+        check(restarted === null, `${label}：没有重启服务（旧版本继续跑，录制不受影响）`);
+        check(m6.status().phase === wantPhase, `${label}：状态为 ${wantPhase}（页面据此提示重试/原因）`, m6.status().phase);
+        check(m6.state.log.some((l) => wantLog.test(String(l.msg))), `${label}：日志写明原因`, m6.state.log.map((l) => l.msg).slice(-2).join(' | '));
+        if (mode === 'remoteDown') check(archiveHits === hitsBefore, `${label}：一次归档都不下载`, `hits=${archiveHits - hitsBefore}`);
+        if (mode === 'http500') check(m6.state.log.some((l) => /HTTP 500/.test(String(l.msg))), `${label}：日志带上 HTTP 状态码（便于判断是网络还是权限）`);
+      }
+      global.fetch = baseFetch;
+      // 反证：同一形态下下载成功时确实会更新（证明上面的「没变」不是因为走不到更新分支）
+      restarted = null;
+      setFetchMode('ok');
+      const m7 = new UpdateManager({
+        appDir: RUN3, imageApp: img4,
+        getRepoConfig: () => ({ updateRepo: 'bianyh8/livegrab', updateBranch: 'main' }),
+        restart: async (info) => { restarted = info; },
+      });
+      await m7.detectEnv();
+      await m7.localInfo();
+      await m7.apply();
+      await new Promise((r) => setTimeout(r, 2000));
+      check(fingerprint(RUN3) !== before3 && readFileSync(path.join(RUN3, 'server', 'server.js'), 'utf8').includes('0.2.0'),
+        '反证：同一个运行目录，下载成功时确实换成了新版本');
+      check(!!restarted && restarted.cwd === RUN3, '反证：下载成功才重启（拿运行目录作为 cwd）', JSON.stringify(restarted));
+      global.fetch = baseFetch;
+    }
   }
 }
 
