@@ -36,6 +36,20 @@ function inferStreamer(relDir) {
   return parts[1] || '';
 }
 
+/** 文件名尾部序号（命名模板把序号放最后是通行约定）：2026-10-18-18-43-26-003.mp4 → 3；
+ *  解析不到返回 0（用于「段号字段为 0」时的兜底定序/归位，不用于判定场次时间）。 */
+function trailingSeq(name) {
+  const m = /(\d+)(?=\.[^.]+$)/.exec(String(name || ''));
+  return m ? Number(m[1]) : 0;
+}
+
+/** 同场次「兄弟文件」判定键：去掉扩展名与尾部序号后的主名。
+ *  同一场次的分段/产物的键相同（2026-10-18-18-43-26-001.mp4 与 …-002.mp4 → 2026-10-18-18-43-26-）。
+ *  仅用于归位时的保守守卫：只在「名字确实是同一场次兄弟」时才并，宁可漏并也不乱并。 */
+function siblingKeyOf(name) {
+  return String(name || '').replace(/\.[^.]+$/, '').replace(/\d+$/, '');
+}
+
 /** 旧命名 YYYY-MM-DD[-HH[-MM[-SS]]] 前缀 → 开始时间；解析失败回退文件时间。
  *  文件名里的时间戳是「本地时间」（录制目录按本地时区命名），必须用本地时区构造再转 ISO——
  *  曾用 Date.UTC 解析，东八区存出的 ISO 比真实录制时间早 8 小时，前端本地化显示会变成次日凌晨。 */
@@ -167,6 +181,10 @@ export class Storage {
     for (const p of found) {
       seen.add(p);
       if (active.has(p)) continue;
+      // 正在转封装的输出：等 remux 自己登记归属，绝不能被扫描抢先注册成独立场次——
+      // 抢先注册会占住 files.path（UNIQUE），随后真实场次收编失败 → 文件永久掉队成「独立场次」
+      // （段号 0、时间按文件名推断），文件库里表现为同一场次被拆成多块、段号乱序（002,004,001,003）。
+      if (this._remuxInflight.has(p)) continue;
       const recs = indexed.get(p);
       const st = statOf.get(p);
       if (!st) continue;
@@ -254,6 +272,9 @@ export class Storage {
       // 时长恒 0。按文件名重新推断 startedAt（文件名为本地时间戳），并对视频补一次 ffprobe 时长。
       await this._healOrphanSession(s);
     }
+    // 归位「被时序竞争拆散的独立场次」：上面的清理只能处理「路径已被录制场次占用」的情形；
+    // 若路径从未被认领（收编失败），它就一直挂在独立场次里 → 同一场次在文件库被拆成多块、段号乱序。
+    const adopted = await this._adoptOrphanSessionsByDirSecond();
     // 清理"幽灵未登记条目"：① 文件已从磁盘消失；② 该路径已归属某个场次
     // （转封装/合并产物可能先被一次扫描当成"未登记"，随后又被登记为场次产物，旧条目若不清理会永久挂在文件库）
     const sessionPaths = new Set();
@@ -266,10 +287,10 @@ export class Storage {
     const beforeExternal = this.store.state.external.length;
     this.store.state.external = this.store.state.external.filter((f) => seen.has(f.path) && !sessionPaths.has(f.path));
     const cleaned = beforeExternal - this.store.state.external.length;
-    const changed = added || updated || missing || cleaned || ghosts || duplicateOrphans;
+    const changed = added || updated || missing || cleaned || ghosts || duplicateOrphans || adopted;
     if (changed) {
       await this.store.persist();
-      this.logger.info(`扫描完成：新增场次 ${added}，更新 ${updated}，缺失 ${missing}${cleaned ? `，清理幽灵条目 ${cleaned}` : ''}${ghosts ? `，清理幽灵会话 ${ghosts}` : ''}${duplicateOrphans ? `，清理重复独立场次 ${duplicateOrphans}` : ''}`);
+      this.logger.info(`扫描完成：新增场次 ${added}，更新 ${updated}，缺失 ${missing}${cleaned ? `，清理幽灵条目 ${cleaned}` : ''}${ghosts ? `，清理幽灵会话 ${ghosts}` : ''}${duplicateOrphans ? `，清理重复独立场次 ${duplicateOrphans}` : ''}${adopted ? `，归位拆散文件 ${adopted}` : ''}`);
       this.onEvent({ type: 'files' });
     } else {
       this.logger.debug(`扫描完成：无变化（共 ${found.length} 个媒体文件）`);
@@ -302,6 +323,66 @@ export class Storage {
       await this.store.saveSession(s).catch(() => {});
       this.logger.info(`独立场次校准（${s.id}）：startedAt=${s.startedAt} durationSec=${s.durationSec}`);
     }
+  }
+
+  /** 归位「被时序竞争拆散的独立场次」：转封装/分段收编失败时，未被认领的产物先被一轮扫描登记成
+   *  独立场次（taskId=null、segmentIndex=0、时间按文件名推断，且与真实场次同目录）。
+   *  文件库表现：同一场次的文件被拆成多块、段号乱序（002,004,001,003），场次字节/时长也被拆开统计。
+   *
+   *  归位条件（保守，宁可不并也不乱并）：① 独立场次只含 1 个文件；② 同 relDir；
+   *  ③ 场次开始时间与某个「有 taskId 的真实录制场次」落在同一秒（秒级对齐，容忍毫秒差）；
+   *  ④ 目标场次不在录制中、且未占用该路径。段号从文件名尾部序号补回（解析不到则沿用原值）。 */
+  async _adoptOrphanSessionsByDirSecond() {
+    const owners = new Map(); // `${relDir}|${sec}` → 真实录制场次
+    for (const s of this.store.sessions) {
+      if (!s.taskId) continue;
+      const sec = Math.floor(new Date(s.startedAt || 0).getTime() / 1000);
+      if (!Number.isFinite(sec) || sec <= 0) continue;
+      owners.set(`${s.relDir || ''}|${sec}`, s);
+    }
+    if (!owners.size) return 0;
+    let adopted = 0;
+    for (const orphan of [...this.store.sessions]) {
+      if (orphan.taskId) continue;
+      const files = [...(orphan.segments || []), ...(orphan.extras || [])].filter((f) => f && f.path);
+      if (files.length !== 1) continue;
+      const f = files[0];
+      const sec = Math.floor(new Date(orphan.startedAt || 0).getTime() / 1000);
+      const target = owners.get(`${orphan.relDir || ''}|${sec}`);
+      if (!target || target.id === orphan.id || target.status === 'recording') continue;
+      // 保守守卫：文件名必须与目标场次里某个文件「同主名」（去掉扩展名与尾部序号后一致），
+      // 才认定是同一场次的兄弟分段/产物 —— 避免把「同目录同秒开录的另一场」误并进来。
+      const key = siblingKeyOf(f.name);
+      const sibling = [...(target.segments || []), ...(target.extras || []), target.merged, target.mp4]
+        .filter(Boolean).some((x) => siblingKeyOf(x.name) === key);
+      if (!sibling) continue;
+      const owned = [...(target.segments || []), ...(target.extras || []), target.merged, target.mp4]
+        .filter(Boolean).some((x) => x.path === f.path);
+      if (owned) { // 路径已归目标场次 → 只剩空壳，直接清掉
+        await this.store.removeSession(orphan.id).catch(() => {});
+        continue;
+      }
+      const ext = String(f.ext || extOf(f.path) || '').toLowerCase();
+      const seq = trailingSeq(f.name) || Number(f.segmentIndex) || 0;
+      const item = { ...f, sessionId: target.id, segmentIndex: seq };
+      if (['ts', 'flv', 'mkv'].includes(ext)) {
+        item.kind = 'segment';
+        target.segments = [...(target.segments || []), item]
+          .sort((a, b) => (Number(a.segmentIndex) || 0) - (Number(b.segmentIndex) || 0));
+      } else {
+        // mp4/m4a 是转封装产物 → 与录制时的产物同构：进 extras（保持「源在 segments、产物在 extras」口径）
+        item.kind = ext === 'm4a' ? 'm4a' : 'mp4';
+        target.extras = [...(target.extras || []), item];
+        if (!target.mp4) target.mp4 = item;
+      }
+      target.bytes = this._sessionFileBytes(target);
+      target.durationSec = this._sessionDurationSec(target);
+      await this.store.saveSession(target).catch(() => {});
+      await this.store.removeSession(orphan.id).catch(() => {});
+      adopted++;
+      this.logger.info(`独立场次归位：${f.name} → 场次 ${target.id}（段号 ${seq}），空壳场次 ${orphan.id} 已清理`);
+    }
+    return adopted;
   }
 
   /** 同一路径已归属场次时，清掉此前误登记为"未登记"的条目 */

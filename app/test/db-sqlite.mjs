@@ -233,6 +233,52 @@ storage3b.activePathsFn = () => [];
 await storage3b.scan();
 const healAfter = store3.sessions.find((s) => s.id === 's_heal');
 check('独立场次校准：startedAt 按文件名本地时间修正', !!healAfter && healAfter.startedAt === localIso(2026, 5, 20, 18, 0, 0));
+
+// ---------- 独立场次归位（v0.1.50）：同一场次被时序竞争拆散 → 按「同目录 + 同秒」归位回真实场次 ----------
+// 线上实况（用户 NAS 库）：真场次只认领了 002/004（段号 2/4），001/003 掉成独立场次（段号 0、时间 .000），
+// 文件库因此显示 002,004,001,003 —— 段号乱序的根因在这里，不是排序函数挑错字段。
+const ownSec = new Date(localIso(2026, 5, 21, 18, 0, 0)).getTime();
+const ownF2 = path.join(tmp, '抖音', '测试主播', '2026-05-21-18-00-00-002.mp4');
+const lostF1 = path.join(tmp, '抖音', '测试主播', '2026-05-21-18-00-00-001.mp4');
+fs.writeFileSync(ownF2, 'a'.repeat(32));
+fs.writeFileSync(lostF1, 'b'.repeat(32));
+const rowOf = (id, p, sid, kind, si) => ({
+  id, sessionId: sid, kind, name: path.basename(p), path: p, relPath: `抖音/测试主播/${path.basename(p)}`,
+  ext: 'mp4', bytes: 32, durationSec: 12, status: 'ok', segmentIndex: si,
+  createdAt: new Date(ownSec).toISOString(), completedAt: new Date(ownSec).toISOString(),
+});
+await store3.addSession({
+  id: 's_own', taskId: 't_own', platform: 'douyin', platformName: '抖音', streamer: '测试主播', title: 'x',
+  startedAt: new Date(ownSec + 73).toISOString(), endedAt: null, durationSec: 12, bytes: 32, status: 'done',
+  dir: path.dirname(ownF2), relDir: '抖音/测试主播',
+  segments: [], extras: [rowOf('f_own2', ownF2, 's_own', 'mp4', 2)],
+  merged: null, mp4: null, namingProfileId: null, taskSnapshot: { anchorName: '', roomId: '' },
+});
+// lostF1 只存在于磁盘（掉队文件）：扫描会先把它注册成独立场次，随后归位逻辑必须把它并回 s_own
+const storage3c = new Storage({ store: store3, logger: { info() {}, warn() {}, error() {}, debug() {} } });
+storage3c.activePathsFn = () => [];
+await storage3c.scan();
+const ownAfter = store3.sessions.find((s) => s.id === 's_own');
+const lostRow = (ownAfter?.extras || []).find((f) => f.path === lostF1);
+check('独立场次归位：掉队文件并入真实场次', !!lostRow);
+check('归位段号从文件名补回（…-001 → 1）', lostRow?.segmentIndex === 1);
+check('归位后空壳独立场次被清理',
+  !store3.sessions.some((s) => !s.taskId && [...(s.segments || []), ...(s.extras || [])].some((f) => f.path === lostF1)));
+const dbLost = db3.prepare('SELECT session_id s, segment_index i, kind k FROM files WHERE path = ?').get(lostF1);
+check('归位落库：files.session_id/segment_index/kind 正确',
+  dbLost?.s === 's_own' && dbLost?.i === 1 && dbLost?.k === 'mp4');
+check('归位不产生重复文件行', db3.prepare('SELECT COUNT(*) c FROM files WHERE path = ?').get(lostF1).c === 1);
+
+// 扫描不得抢注「正在转封装的输出」（抢注会占住 files.path → 真实场次收编失败，文件永久掉队成独立场次）
+const inflight = path.join(tmp, '抖音', '测试主播', '2026-05-22-18-00-00-009.mp4');
+fs.writeFileSync(inflight, 'c'.repeat(16));
+const storage3d = new Storage({ store: store3, logger: { info() {}, warn() {}, error() {}, debug() {} } });
+storage3d.activePathsFn = () => [];
+storage3d._remuxInflight.set(inflight, Promise.resolve());
+await storage3d.scan();
+check('扫描跳过正在转封装的输出（不抢注独立场次）',
+  !store3.sessions.some((s) => [...(s.segments || []), ...(s.extras || [])].some((f) => f.path === inflight)));
+storage3d._remuxInflight.clear();
 db3.close();
 
 // ---------- 老库升级：notify 表缺 on_live/dedupe 列（v0.1.36 迁移 bug：开播通知被静默关闭） ----------
