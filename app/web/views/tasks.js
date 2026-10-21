@@ -31,6 +31,7 @@ const state = {
 
 let boundRoot = null;
 let offModal = null;
+let offRefresh = null;
 let boundCtx = null;
 
 /* 分页：默认每页 10 条（任务/文件/回收站统一） */
@@ -44,12 +45,14 @@ export async function render(root, ctx) {
     offModal = ctx.on('open-task-modal', (id) => { if (id) openTaskDialog(ctx, id); else state.openNew = true; });
   }
   // 全局 2s 轮询只做局部重绘（paintResults），不得重建工具栏/搜索框而抢走输入焦点
-  ctx.onRefresh(() => tick(ctx, false));
+  if (offRefresh) { offRefresh(); offRefresh = null; }
+  offRefresh = ctx.onRefresh(() => tick(ctx, false));
   await tick(ctx, true);
 }
 
 export function destroy() {
   if (offModal) { offModal(); offModal = null; }
+  if (offRefresh) { offRefresh(); offRefresh = null; }
   state.bound = false;
   state.openNew = false;
   boundRoot = null;

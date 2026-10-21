@@ -638,6 +638,8 @@ export class UpdateManager {
         commit: (latest && latest.commit) || '',
         tag: (latest && latest.tag) || (version ? `v${version}` : ''),
         version,
+        // commitAt = 远端那次提交的时间（「不降级」保护要用它，不能用下面的落位时间 at）
+        commitAt: (latest && latest.commitAt) || '',
         at: Date.now(),
         files: copied,
         removed: removed.length,
@@ -840,7 +842,7 @@ export class UpdateManager {
         if (marker.commit) commit = String(marker.commit).slice(0, 12);
         if (marker.tag) tag = String(marker.tag);
         // commitAt 优先用「那次提交的时间」（v0.1.44 起写入），老标记只有 at（落位时间）就只用于显示
-        if (marker.commitAt) { commitDate = new Date(marker.commitAt).toISOString(); commitAt = commitDate; }
+        if (marker.commitAt) { commitDate = marker.commitAt; commitAt = commitDate; }
         else if (marker.at) commitAt = new Date(marker.at).toISOString();
       } else {
         const buildCommit = (process.env.LIVEGRAB_BUILD_COMMIT || '').trim()
@@ -853,7 +855,17 @@ export class UpdateManager {
       if (snap.commit) commit = String(snap.commit).slice(0, 12);
       if (snap.tag) tag = snap.tag;
       if (snap.version) version = snap.version;
-      if (snap.at) commitAt = new Date(snap.at).toISOString();
+      // commitDate 必须是「那次提交的时间」，不能拿标记的 at（落位时间）顶替：
+      // 落位时间恒晚于远端提交时间，会让 _computeHasUpdate 的「不降级」保护永远成立，
+      // 远端被 reset/强推后的修复提交就再也推不下来（同上面 marker 分支的约定）。
+      // 但只有快照的 commit 与标记一致时才能用它：不一致说明标记已是另一次落位（比快照新），保留标记的时间。
+      const sameRef = !!(marker && snap.commit && marker.commit
+        && String(snap.commit).slice(0, 12) === String(marker.commit).slice(0, 12));
+      const keepMarkerDate = !!(marker && marker.commitAt) && !sameRef;
+      if (!keepMarkerDate) {
+        if (snap.commitAt) { commitDate = new Date(snap.commitAt).toISOString(); commitAt = commitDate; }
+        else if (snap.at) commitAt = new Date(snap.at).toISOString();
+      }
       branch = branch || this._branch();
     }
     this.state.local = { version, commit, branch: branch || this._branch(), commitAt, commitDate, tag: tag || `v${version}` };
@@ -1020,13 +1032,22 @@ export class UpdateManager {
   /* ---------- 对外：立即更新（后台任务） ---------- */
 
   async apply() {
+    // 并发闸门必须「同步抢位」：下面的 detectEnv/localInfo 是真异步（要跑 git 子进程），
+    // 若等它们返回后再置 running，两次点击（页面进更新页时必有一次静默 check，网络慢时窗口更长）
+    // 都能穿过这道检查 → 两个 _runUpdate 并行解包同一个暂存目录、日志被互相清空、各自 re-exec 一次。
     if (this.state.running) {
-      return { running: true, message: '更新任务正在进行中' };
+      return { running: true, busy: true, message: '更新任务正在进行中' };
     }
-    const env = this.state.env || await this.detectEnv();
-    const local = this.state.local || await this.localInfo();
-
     this.state.running = true;
+    let env, local;
+    try {
+      env = this.state.env || await this.detectEnv();
+      local = this.state.local || await this.localInfo();
+    } catch (e) {
+      this.state.running = false; // 拿不到环境就放行闸门，别让页面卡在「更新中」无法重试
+      throw e;
+    }
+
     this.state.phase = 'fetch';
     this.state.progress = 2;
     this.state.task = '';
@@ -1365,28 +1386,39 @@ export class UpdateManager {
     // 覆盖式切换：先把旧目录整体备份（留着回滚），再把新版本逐项覆盖进去
     fs.rmSync(oldDir, { recursive: true, force: true });
     fs.cpSync(target, oldDir, { recursive: true, dereference: false });
+    // 先读清单（relFiles 的 withFileTypes 不会跟进软链），再动文件
     const names = fs.readdirSync(newApp);
+    // 依赖单独处理：老版本若把 node_modules 做成了目录，cpSync 会往「指向基线的软链」里继续写
+    // （→ 把基线污染成新旧混合）；所以先摘掉目标的依赖入口（软链只删链接本身，不碰基线）
+    const stagedDeps = path.join(newApp, 'node_modules');
+    for (const prefix of [target, oldDir]) {
+      const p = path.join(prefix, 'node_modules');
+      try { if (fs.lstatSync(p).isSymbolicLink()) fs.rmSync(p, { force: true }); else fs.rmSync(p, { recursive: true, force: true }); } catch { /* 不存在 */ }
+    }
     for (const n of names) {
-      const src = path.join(newApp, n);
-      const dst = path.join(target, n);
-      // 依赖由新版本目录说了算（通常是软链指向基线），旧的先删掉，避免新旧混在一起
-      if (n === 'node_modules') fs.rmSync(dst, { recursive: true, force: true });
-      fs.cpSync(src, dst, { recursive: true, force: true, dereference: false });
+      if (n === 'node_modules') continue;
+      fs.cpSync(path.join(newApp, n), path.join(target, n), { recursive: true, force: true, dereference: false });
     }
     // 新版本里已不存在的旧文件也清掉（递归比对，含子目录里的残留），别把上一版留在运行目录
-    const relFiles = (base, sub = '', out = []) => {
+    const relEntries = (base, sub = '', out = []) => {
       for (const e of fs.readdirSync(path.join(base, sub), { withFileTypes: true })) {
         const rel = sub ? `${sub}/${e.name}` : e.name;
-        if (e.isDirectory()) relFiles(base, rel, out);
+        if (e.isDirectory()) relEntries(base, rel, out);
         else out.push(rel);
       }
       return out;
     };
-    const fresh = new Set(relFiles(newApp));
-    for (const rel of relFiles(target)) {
-      if (rel === 'node_modules' || rel.startsWith('node_modules/')) continue; // 依赖与代码无关，保留
+    const fresh = new Set(relEntries(newApp));
+    for (const rel of relEntries(target)) {
+      if (rel === 'node_modules' || rel.startsWith('node_modules/') || rel.startsWith('node_modules\\')) continue; // 依赖与代码无关，保留
       if (!fresh.has(rel)) fs.rmSync(path.join(target, rel), { recursive: true, force: true });
     }
+    // 再放依赖入口：软链按「链接本身」整体复制，绝不 dereference（否则会把 27MB 基线拷进运行目录）
+    try {
+      const link = fs.lstatSync(stagedDeps);
+      if (link.isSymbolicLink()) fs.symlinkSync(fs.readlinkSync(stagedDeps), path.join(target, 'node_modules'), process.platform === 'win32' ? 'junction' : 'dir');
+      else fs.cpSync(stagedDeps, path.join(target, 'node_modules'), { recursive: true, force: true, dereference: false });
+    } catch { /* 新版本没有依赖目录：保持上面摘除后的状态，启动时会由 entrypoint 补软链 */ }
     fs.rmSync(newApp, { recursive: true, force: true });
     return { target, how: 'copy' };
   }

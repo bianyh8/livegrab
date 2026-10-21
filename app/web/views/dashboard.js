@@ -16,16 +16,22 @@ export const page = 'dashboard';
 const state = { tasks: [], pending: false, html: '' };
 
 let boundRoot = null;
+let offRefresh = null;
 
 export async function render(root, ctx) {
   boundRoot = root;
   state.html = ''; // 重新进入页面必须强制重绘（DOM 已被路由清空）
   root.innerHTML = `<div class="stack"><div class="card"><div class="empty">${_t('dashboard.loading')}</div></div></div>`;
-  ctx.onRefresh(() => tick(ctx));
+  if (offRefresh) { offRefresh(); offRefresh = null; }
+  offRefresh = ctx.onRefresh(() => tick(ctx));
   await tick(ctx);
 }
 
-export function destroy() { boundRoot = null; state.html = ''; }
+export function destroy() {
+  if (offRefresh) { offRefresh(); offRefresh = null; }
+  boundRoot = null;
+  state.html = '';
+}
 
 async function tick(ctx) {
   if (state.pending) return;

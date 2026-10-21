@@ -207,7 +207,7 @@ console.log('== 归档通道（容器）里残留的旧 .git 不得冒充本地�
   check(arcLocal.version === '0.1.9', '归档模式本地版本取自落位标记', arcLocal.version);
   check(arcLocal.commit === markerCommit && arcLocal.commit !== headStale,
     '归档模式以落位标记的 commit 为准，不拿残留 .git 的 HEAD 冒充', `标记 ${markerCommit} / git HEAD ${headStale} / 实际 ${arcLocal.commit}`);
-  check(arcLocal.commitDate === '2026-10-19T02:00:00.000Z', 'commitDate 用标记里的 commitAt（降级保护才有依据）', arcLocal.commitDate);
+  check(arcLocal.commitDate === '2026-10-19T02:00:00Z', 'commitDate 用标记里的 commitAt（降级保护才有依据）', arcLocal.commitDate);
   const latestV19 = { version: '0.1.9', tag: 'v0.1.9', unavailable: false, commit: markerCommit, commitAt: '2026-10-19T02:00:00Z' };
   check(mArc._computeHasUpdate(arcLocal, latestV19) === false, '落位后不再误报「可用更新」（同一 commit 不提示更新）');
   check((mArc.status().log || []).some((l) => /以落位标记为准/.test(String((l && l.msg) || ''))), '归档模式发现残留 .git 时记一条诊断日志');

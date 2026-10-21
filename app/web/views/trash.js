@@ -14,16 +14,21 @@ const state = { items: [], total: 0, bytes: 0, retentionDays: 7, page: 1, pages:
 const PAGE_SIZE = 10;
 
 let boundRoot = null;
+let offRefresh = null;
 
 export async function render(root, ctx) {
   boundRoot = root;
   root.innerHTML = `<div class="card"><div class="empty">${t('trash.loading')}</div></div>`;
   if (!state.bound) state.bound = true;
-  ctx.onRefresh(() => tick(ctx));
+  if (offRefresh) { offRefresh(); offRefresh = null; }
+  offRefresh = ctx.onRefresh(() => tick(ctx));
   await tick(ctx, true);
 }
 
-export function destroy() { boundRoot = null; }
+export function destroy() {
+  if (offRefresh) { offRefresh(); offRefresh = null; }
+  boundRoot = null;
+}
 
 async function tick(ctx, initial) {
   if (state.pending) return;

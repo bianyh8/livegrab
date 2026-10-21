@@ -35,7 +35,14 @@ const PAGE_SIZE = 10;
 
 let boundRoot = null;
 let offFiles = null;   // SSE files 事件的退订函数
+let offRefresh = null; // 2s 轮询回调的退订函数
 let filesTimer = null; // 事件合并定时器（成串事件压成一次请求）
+
+/* 头部「N 个视频 · X MB」的唯一拼装点：整表重绘与 patchSizes 共用，
+   避免两处模板各自拼接、日后改文案时漂移。未转义：重绘走 esc()，局部更新走 textContent。 */
+function bytesHint() {
+  return `${t('files.videoCount', state.total)} · ${formatBytes(state.bytes)}`;
+}
 
 /* 默认查询区间：近 7 天（7 天前 → 今天） */
 function defaultDateRange() {
@@ -78,7 +85,8 @@ export async function render(root, ctx) {
   root.innerHTML = `<div class="card"><div class="empty">${t('files.loadingLibrary')}</div></div>`;
   if (!state.bound) state.bound = true;
   if (!state.defaultsSet) resetToDefaults(true);
-  ctx.onRefresh(() => tick(ctx));
+  if (offRefresh) { offRefresh(); offRefresh = null; }
+  offRefresh = ctx.onRefresh(() => tick(ctx));
   // 服务端 SSE 的 files 事件：新分段落地 / 删除 / 回放产物生成 / 缺失标记都会推。
   // 收到就立即刷新，不必等下一次 2 秒轮询（轮询保留 —— SSE 断线重连期间靠它自愈）。
   // 事件常成串到来（一次扫描可能连发几条），250ms 合并成一次请求。
@@ -92,6 +100,7 @@ export async function render(root, ctx) {
 
 export function destroy() {
   if (offFiles) { offFiles(); offFiles = null; }
+  if (offRefresh) { offRefresh(); offRefresh = null; }
   if (filesTimer) { clearTimeout(filesTimer); filesTimer = null; }
   boundRoot = null;
 }
@@ -128,7 +137,7 @@ function patchSizes() {
   if (!root || !root.isConnected) return;
   const head = root.querySelector('[data-files-bytes]');
   if (head) {
-    const txt = `${t('files.videoCount', state.total)} · ${formatBytes(state.bytes)}`;
+    const txt = bytesHint();
     if (head.textContent !== txt) head.textContent = txt;
   }
   const byId = new Map(state.rows.map((row) => [String(row.f.id), row]));
@@ -168,7 +177,7 @@ function paint(ctx, force) {
     <div class="card">
       <div class="card-h">
         <h3>${t('files.libraryTitle')}</h3>
-        <span class="hint" data-files-bytes>${esc(t('files.videoCount', state.total))} · ${esc(formatBytes(state.bytes))}</span>
+        <span class="hint" data-files-bytes>${esc(bytesHint())}</span>
         <div class="spacer"></div>
         <button class="btn sm ghost" id="flRefresh">${t('common.refresh')}</button>
       </div>

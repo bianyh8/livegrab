@@ -50,9 +50,12 @@ const ctx = {
   formatDateTime,
   /* 视图注册自己的局部刷新函数（2s 轮询调用，返回 false 表示不再需要刷新）。
      实际渲染时会被 makeViewCtx 换成绑定到本次视图 token 的版本，
-     以免旧视图迟到的注册覆盖新视图的刷新逻辑。 */
+     以免旧视图迟到的注册覆盖新视图的刷新逻辑。返回退订函数（与 on 一致）。 */
   onRefresh(fn) {
-    if (typeof fn === 'function' && runtime.view) runtime.view.refresh = fn;
+    if (!(typeof fn === 'function' && runtime.view)) return () => {};
+    const token = runtime.view;
+    token.refresh = fn;
+    return () => { if (token.refresh === fn) token.refresh = null; };
   },
   /* 视图间事件总线（SSE 与跨页局部刷新用） */
   on(evt, fn) {
@@ -307,11 +310,14 @@ function nextFrame() {
 
 /* 单次视图渲染的 ctx 门面：所有会「延时生效」的接口都绑定本次视图 token。
    视图在 await 之后调用 ctx.isActive() 即可判断自己是否已被路由切走，
-   避免迟到的绘制/注册污染新视图。 */
+   避免迟到的绘制/注册污染新视图。
+   onRefresh 与 on() 一样返回退订函数：视图自己先注册再销毁（或 render 被重复调用）时，
+   能主动摘掉旧回调，不用等下次路由覆盖 —— 与 ctx.on('files', …) 的用法保持一致。 */
 function makeViewCtx(token) {
   const c = Object.create(ctx);
   c.onRefresh = (fn) => {
     if (runtime.view === token && typeof fn === 'function') token.refresh = fn;
+    return () => { if (token.refresh === fn) token.refresh = null; };
   };
   c.isActive = () => runtime.view === token;
   return c;

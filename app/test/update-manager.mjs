@@ -625,12 +625,18 @@ console.log('== S. 容器归档通道：按 commit 比对 → 下载该提交 �
       writeFileSync(path.join(RUN, 'server', 'server.js'), '// old code 0.1.0\n');
       try { symlinkSync(path.join(img2, 'node_modules'), path.join(RUN, 'node_modules'), 'dir'); } catch { /* 不支持软链就跳过 */ }
 
+      // 显式钉住落位目录：detectEnv() 会回退读 process.env.LIVEGRAB_SRC_DIR，而前面的用例
+      // 已经把它设成了 src/app —— 不钉住的话这里会落到 <src>/app，断言却查 <opt>/.run
       const m4 = new UpdateManager({
         appDir: RUN, imageApp: img2,
+        srcRoot: RUN,
         getRepoConfig: () => ({ updateRepo: 'bianyh8/livegrab', updateBranch: 'main' }),
         restart: async (info) => { restarted = info; },
       });
       await m4.detectEnv();
+      // 本机（尤其 Windows）不一定跑在容器里；容器里 inContainer=true 会让 detectEnv 直接判 archive。
+      // 固定成「容器运行目录形态」，结果才不随宿主机变化（runDir 仍是 cwd，即被测的运行目录）。
+      m4.state.env = { ...m4.state.env, mode: 'archive', inContainer: true, srcRoot: RUN };
       await m4.localInfo();
       await m4.apply();
       await new Promise((r) => setTimeout(r, 2000));
@@ -640,7 +646,7 @@ console.log('== S. 容器归档通道：按 commit 比对 → 下载该提交 �
       check(!fsExists(path.join(ARCH, 'src', 'app.stage')), '不再往旧的 ${CONFIG_DIR}/src 落位');
       check(!!restarted && restarted.cwd === RUN, '重启钩子拿到运行目录本身作为 cwd', JSON.stringify(restarted));
       try { check(lstatSync(path.join(RUN, 'node_modules')).isSymbolicLink(), '运行目录里的依赖仍是软链（更新不碰依赖）'); } catch { check(false, '运行目录里的依赖仍是软链（更新不碰依赖）', '软链丢失'); }
-      const mk4 = new UpdateManager({ appDir: RUN, imageApp: img2, getRepoConfig: () => ({ updateRepo: 'bianyh8/livegrab', updateBranch: 'main' }) });
+      const mk4 = new UpdateManager({ appDir: RUN, imageApp: img2, srcRoot: RUN, getRepoConfig: () => ({ updateRepo: 'bianyh8/livegrab', updateBranch: 'main' }) });
       await mk4.detectEnv();
       const loc4 = await mk4.localInfo();
       check(loc4.version === '0.2.0' && loc4.commit === 'deadbeef0001', '重启后版本/提交读自运行目录里的标记', `${loc4.version}/${loc4.commit}`);
@@ -661,6 +667,7 @@ console.log('== S. 容器归档通道：按 commit 比对 → 下载该提交 �
       try { symlinkSync(path.join(img3, 'node_modules'), path.join(RUN2, 'node_modules'), 'dir'); } catch { /* 忽略 */ }
       const m5 = new UpdateManager({
         appDir: RUN2, imageApp: img3,
+        srcRoot: RUN2, // 同上：不复用前面用例留在环境里的 LIVEGRAB_SRC_DIR
         getRepoConfig: () => ({ updateRepo: 'bianyh8/livegrab', updateBranch: 'main' }),
         restart: async (info) => { restarted = info; },
       });
@@ -678,6 +685,7 @@ console.log('== S. 容器归档通道：按 commit 比对 → 下载该提交 �
       };
       try {
         await m5.detectEnv();
+        m5.state.env = { ...m5.state.env, mode: 'archive', inContainer: true, srcRoot: RUN2 }; // 同 ③-b：固定容器形态
         await m5.localInfo();
         await m5.apply();
         await new Promise((r) => setTimeout(r, 2000));
@@ -745,10 +753,12 @@ console.log('== S. 容器归档通道：按 commit 比对 → 下载该提交 �
         const hitsBefore = archiveHits;
         const m6 = new UpdateManager({
           appDir: RUN3, imageApp: img4,
+          srcRoot: RUN3,
           getRepoConfig: () => ({ updateRepo: 'bianyh8/livegrab', updateBranch: 'main' }),
           restart: async (info) => { restarted = info; },
         });
         await m6.detectEnv();
+        m6.state.env = { ...m6.state.env, mode: 'archive', inContainer: true, srcRoot: RUN3 }; // 同 ③-b：固定容器形态
         await m6.localInfo();
         await m6.apply();
         await new Promise((r) => setTimeout(r, 1200));
@@ -767,10 +777,12 @@ console.log('== S. 容器归档通道：按 commit 比对 → 下载该提交 �
       setFetchMode('ok');
       const m7 = new UpdateManager({
         appDir: RUN3, imageApp: img4,
+        srcRoot: RUN3,
         getRepoConfig: () => ({ updateRepo: 'bianyh8/livegrab', updateBranch: 'main' }),
         restart: async (info) => { restarted = info; },
       });
       await m7.detectEnv();
+      m7.state.env = { ...m7.state.env, mode: 'archive', inContainer: true, srcRoot: RUN3 }; // 同 ③-b：固定容器形态
       await m7.localInfo();
       await m7.apply();
       await new Promise((r) => setTimeout(r, 2000));
@@ -814,6 +826,31 @@ console.log('== S. 容器归档通道：按 commit 比对 → 下载该提交 �
   check(!err, '经代理下载二进制归档不再抛错（import 齐全）', err);
   check(!!got && got.length === payload.length, '经代理下载二进制拿到完整字节', got ? `${got.length}B` : 'null');
   proxySrv.close();
+}
+
+/* ⑥ 并发闸门：apply() 必须「同步抢位」。
+   页面进入更新页时必有一次静默 check()，网络慢时它还没结束用户就点了「立即更新」；
+   旧实现里 state.running 的检查与置位之间夹着 detectEnv/localInfo 两个 await，
+   两次点击都能穿透 → 两个 _runUpdate 并行解包同一暂存区、日志被互相清空、可能各 re-exec 一次。 */
+{
+  const m = new UpdateManager({ appDir: TMP });
+  m.detectEnv = () => new Promise((r) => setTimeout(() => r(m.state.env), 120)); // 模拟慢环境探测
+  m.localInfo = () => new Promise((r) => setTimeout(() => r(m.state.local), 120));
+  m._runUpdate = async () => { await new Promise((r) => setTimeout(r, 300)); }; // 不真的联网
+  const r1 = await m.apply();
+  check(r1.running === true && !r1.busy, '第一次 apply() 正常启动', JSON.stringify(r1));
+  const r2 = await m.apply(); // 此刻仍在 detectEnv 的 await 中
+  check(r2.busy === true, '任务启动中再点一次 → 返回 busy=true（页面会提示「正在进行中」）', JSON.stringify(r2));
+  await new Promise((r) => setTimeout(r, 60));
+  const r3 = await m.apply();
+  check(r3.busy === true, '任务已在后台跑时再点一次 → 仍然 busy=true', JSON.stringify(r3));
+  // 失败路径必须放行闸门，否则页面会永远卡在「更新中」无法重试
+  m.state.running = false;
+  m.detectEnv = async () => { throw new Error('环境探测炸了'); };
+  let threw = '';
+  try { await m.apply(); } catch (e) { threw = e.message; }
+  check(/炸了/.test(threw), '环境探测失败时把错误抛给调用方', threw);
+  check(m.state.running === false, '失败后闸门已放行（可重试）', String(m.state.running));
 }
 
 console.log(bad === 0 ? '\n全部通过 ✅' : `\n${bad} 项失败 ❌`);
