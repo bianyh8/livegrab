@@ -67,6 +67,8 @@ export class Recorder extends EventEmitter {
     this.startNumber = 1;
     this.closed = new Set();
     this.reconnectAttempt = 0;
+    this.streamCandidates = []; // 流地址候选阶梯（跨表示降级）：[{ url, proto, key, heuristic }]
+    this.streamIndex = 0;       // 当前候选游标
     this._stderrTail = [];
     this._rawStderr = [];   // 最近若干行 ffmpeg stderr（不过滤）：断流时写进日志才能定性
     this._bytesAtSpawn = 0; // 本次拉流启动时的落盘字节数（算「这次录到没有」）
@@ -83,6 +85,35 @@ export class Recorder extends EventEmitter {
 
   _meta() { return { taskId: this.task.id, taskName: this.task.anchorName || this.task.title || this.task.id }; }
 
+  /* 流地址候选阶梯（跨表示降级）：抖音同一场直播有 HLS master(_or4) / 各档 HLS / FLV 多个表示，
+     单 URL 重试会在同一个不可拉的表示上烧光重连额度。这里把它们收成阶梯，失败时降级下一个。
+     兼容：平台未给 candidates（如直链/B 站）时退化为单地址阶梯，行为与旧版一致。 */
+  _setStream(stream, keepIndex = 0) {
+    const raw = Array.isArray(stream.candidates) && stream.candidates.length
+      ? stream.candidates.map((c) => (typeof c === 'string' ? { url: c } : { ...c }))
+      : [{ url: stream.url }];
+    const list = [];
+    const seen = new Set();
+    for (const c of raw) {
+      const clean = this.media.sanitizeStreamUrl(c.url || '');
+      if (!clean || seen.has(clean)) continue;
+      seen.add(clean);
+      list.push({ ...c, url: clean });
+    }
+    if (!list.length) list.push({ url: this.media.sanitizeStreamUrl(stream.url || '') || stream.url || '' });
+    this.streamCandidates = list;
+    this.streamIndex = Math.min(Math.max(0, keepIndex), list.length - 1);
+    this.headers = this.media.sanitizeHeaders(stream.headers || this.headers || {});
+    this._applyCandidate();
+  }
+
+  /** 把当前游标指向的候选落到 streamUrl（净化后喂 ffmpeg）；无合法地址则保留上一次可用地址。 */
+  _applyCandidate() {
+    const c = this.streamCandidates[this.streamIndex] || this.streamCandidates[0] || {};
+    const clean = this.media.sanitizeStreamUrl(c.url || '');
+    if (clean) this.streamUrl = clean;
+  }
+
   // ---------- 启动 ----------
   async start({ startNumber = 1 } = {}) {
     const t = this.task;
@@ -95,8 +126,7 @@ export class Recorder extends EventEmitter {
       { settings: this.settings, logger: this.logger },
     );
     if (!stream?.url) throw Object.assign(new Error('未能解析到流地址'), { code: 'NO_STREAM' });
-    this.streamUrl = stream.url;
-    this.headers = stream.headers || {};
+    this._setStream(stream, 0);
     this.qualityActual = stream.qualityActual || stream.quality || t.quality;
     this.resolution = stream.resolution || '';
     this.qualityLabelText = qualityLabel(this.qualityActual);
@@ -334,7 +364,9 @@ export class Recorder extends EventEmitter {
 
   async _handleUnexpectedExit(code, signal) {
     const tail = this.lastStderrError || this._stderrTail.slice(-2).join(' | ');
-    const blocked = isPullBlocked(tail);
+    // 兜底（heuristic，如去 _orN 变体）失败不算平台封禁：403/404 都应继续降级，而不是长冷却复用
+    const curCand = this.streamCandidates[this.streamIndex] || {};
+    const blocked = isPullBlocked(tail) && !curCand.heuristic;
     // 主播已下播导致的流中断：正常收尾（reason=offline），不进入断流重连、不报"录制异常结束"。
     // 403/401/429 是平台侧明确拒绝（风控/限流），不是下播：跳过探活，避免风控期间再加接口压力。
     if (!blocked && this.probeOffline) {
@@ -374,24 +406,20 @@ export class Recorder extends EventEmitter {
     await sleep(delay);
     if (this.stopping || this.paused) return;
     try {
-      // 403 场景复用当前地址：重新解析只会增加接口压力，且地址本身有效（实测同一地址可连续拉数小时）
-      if (!blocked) {
+      if (blocked) {
+        // 403/401/429 平台拒绝（风控/限流）：复用当前地址（有效期以天计），不重新解析，避免给平台加压
+      } else if (!plan.productive && this.streamIndex + 1 < this.streamCandidates.length) {
+        // 跨表示降级：当前候选这次没录到数据（如 _or4 404）→ 换下一个表示，不重新解析（秒级续上）
+        this.streamIndex += 1;
+        this._applyCandidate();
+        this.logger.info(`流地址降级到候选 ${this.streamIndex + 1}/${this.streamCandidates.length}：${this.streamUrl}`, this._meta());
+      } else {
+        // 真断流（本段有数据）或候选用尽 → 重新解析刷新 token；有数据时保住当前表示，否则回首选
         const stream = await this.resolveStream(
           { ...this.task, qualityFallback: this.settings.qualityFallback },
           { settings: this.settings, logger: this.logger },
         );
-        if (stream?.url) {
-          const clean = this.media.sanitizeStreamUrl(stream.url);
-          // 重连重新解析出的地址必须可落地到 ffmpeg：净化后仍为合法 http(s) 才采用，否则复用上一次
-          // 已知可用地址。抖音重连偶发拿到带换行/空白或 HLS↔FLV 切换的脏地址，直接喂给 ffmpeg 会报
-          // 5: Invalid argument 且永不落盘——这是本次崩溃根因；复用首跑成功过的地址即可破局。
-          if (/^https?:\/\//i.test(clean)) {
-            this.streamUrl = clean;
-            this.headers = this.media.sanitizeHeaders(stream.headers || this.headers);
-          } else {
-            this.logger.warn(`重连解析出的流地址不可用（${JSON.stringify(stream.url)}），复用上一次可用地址继续重连`, this._meta());
-          }
-        }
+        if (stream?.url) this._setStream(stream, plan.productive ? this.streamIndex : 0);
       }
       this.logger.info(`重连成功，继续拉流（第 ${this.reconnectAttempt}/${max} 次 · 流地址 ${this.streamUrl || '(未知 URL)'}）`, this._meta());
       const segs = await this.scanSegments();

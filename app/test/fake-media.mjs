@@ -12,6 +12,8 @@ export const buildMergeArgs = real.buildMergeArgs;
 export const buildConcatList = real.buildConcatList;
 export const buildPlayArgs = real.buildPlayArgs;
 export const extOfContainer = real.extOfContainer;
+export const sanitizeStreamUrl = real.sanitizeStreamUrl;
+export const sanitizeHeaders = real.sanitizeHeaders;
 
 export function spawnFfmpeg({ args = [], onStderr, onStdout } = {}) {
   return real.spawnFfmpeg({

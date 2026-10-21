@@ -343,12 +343,21 @@ function originMainHls(su) {
   } catch { return ''; }
 }
 
+/**
+ * 去掉抖音流地址里的 _orN 原画变体后缀（stream-123_or4.m3u8 → stream-123.m3u8）。
+ * 抖音原画变体 _or4 业界已知常 404（去掉后可拉），作为末位兜底候选（best-effort）。
+ */
+function stripOrVariant(url) {
+  return String(url || '').replace(/_or\d+(?=\.(?:m3u8|flv|ts)(?:\?|$))/i, '');
+}
+
 export async function resolveStream({ roomId, quality, settings, logger }) {
   const { room, cookie, shortId } = await enterRoom(roomId, settings, logger);
   const keys = QUALITY_KEYS[quality] || QUALITY_KEYS.origin;
   if (room._fallback) {
     if (!room.urls.length) throw new HttpError('NO_STREAM', '主播未开播或未拿到流地址', 502);
-    return { url: room.urls[0], resolution: '', headers: headers(cookie, roomId), qualityActual: quality };
+    const list = room.urls.map((u) => ({ url: u, key: '', proto: /\.m3u8/.test(u) ? 'hls' : 'flv', heuristic: false }));
+    return { url: list[0].url, candidates: list, resolution: '', headers: headers(cookie, roomId), qualityActual: quality };
   }
   const su = room.stream_url || {};
   // HLS 优先：抖音 flv 边缘节点在本网络常 404/超时，HLS(m3u8) 可稳定拉流
@@ -356,23 +365,38 @@ export async function resolveStream({ roomId, quality, settings, logger }) {
   const hlsMap = su.hls_pull_url_map || {};
   const flvMap = su.flv_pull_url || {};
   const isTop = quality === 'origin' || quality === 'bluray';
+  const candidates = [];
+  const seen = new Set();
+  const add = (url, key, heuristic = false) => {
+    const u = String(url || '').replace(/[\u0000\r\n\t]+/g, '').trim();
+    if (!u || seen.has(u)) return;
+    seen.add(u);
+    candidates.push({ url: u, key, proto: /\.m3u8/.test(u) ? 'hls' : 'flv', heuristic });
+  };
+  // 跨表示候选阶梯（与旧「取第一个即返回」同序，但全部收集，供录制失败时降级）：
+  //   每个质量 key：origin HLS(master) → 该档 HLS → 该档 flv；再加 _orN 去后缀兜底（末位）。
   for (const k of keys) {
-    // 每个质量的候选：origin HLS(master) → 该档 HLS → 该档 flv
-    const candidates = [];
-    if (isTop || !hlsMap[k]) candidates.push(hlsMaster);
-    if (hlsMap[k]) candidates.push(hlsMap[k]);
-    if (flvMap[k]) candidates.push(flvMap[k]);
-    for (const url of candidates) {
-      if (!url) continue;
-      return {
-        url,
-        resolution: su.default_resolution || '',
-        headers: headers(cookie, roomId),
-        qualityActual: quality,
-        qualityKey: k,
-        proto: /\.m3u8/.test(url) ? 'hls' : 'flv',
-      };
-    }
+    if (isTop || !hlsMap[k]) add(hlsMaster, k);
+    if (hlsMap[k]) add(hlsMap[k], k);
+    if (flvMap[k]) add(flvMap[k], k);
   }
-  throw new HttpError('NO_STREAM', `直播间没有可用流（状态：${room.status === 2 ? '开播' : '未开播'}），可能未开播或需要登录 Cookie`, 502);
+  const base = candidates.slice();
+  for (const c of base) {
+    if (c.proto !== 'hls') continue;
+    const stripped = stripOrVariant(c.url);
+    if (stripped && stripped !== c.url) add(stripped, c.key, true);
+  }
+  if (!candidates.length) {
+    throw new HttpError('NO_STREAM', `直播间没有可用流（状态：${room.status === 2 ? '开播' : '未开播'}），可能未开播或需要登录 Cookie`, 502);
+  }
+  const first = candidates[0];
+  return {
+    url: first.url,
+    candidates,
+    resolution: su.default_resolution || '',
+    headers: headers(cookie, roomId),
+    qualityActual: quality,
+    qualityKey: first.key,
+    proto: first.proto,
+  };
 }

@@ -308,6 +308,10 @@ async function testResolvers() {
     eq(stream.url, 'http://cdn.example.com/full.m3u8', '抖音原画档取到原画 HLS 流地址');
     eq(stream.qualityKey, 'FULL_HD1', '抖音原画档命中最高码率 key');
     eq(stream.qualityActual, 'origin', '抖音实际清晰度回写');
+    ok(Array.isArray(stream.candidates) && stream.candidates.length >= 2, '抖音返回候选阶梯（跨表示降级）', stream.candidates && stream.candidates.length);
+    eq(stream.candidates[0].url, stream.url, '候选阶梯首位即主 URL（保持最优画质优先）');
+    ok(stream.candidates.some((c) => /\.flv/.test(c.url)), '候选阶梯含 FLV 兜底（HLS 不可用时降级）');
+    ok(stream.candidates.some((c) => /\.m3u8/.test(c.url)), '候选阶梯含 HLS 表示');
     const hd = await resolvers.resolveStream({ platform: 'douyin', roomId: '7694422853944462115', quality: 'hd' }, { settings: {} });
     ok(!!hd.url, '抖音高清档取到流地址', hd.qualityKey);
     // 未开播：接口返回 10011，必须按"未开播"处理（任务继续等待开播），而不是抛错
@@ -807,6 +811,42 @@ async function testRecorderLiveProxy() {
     if (savedEnv[k] === undefined) delete process.env[k];
     else process.env[k] = savedEnv[k];
   }
+}
+
+/* 流候选阶梯：抖音同场多表示（HLS master _or4 / 各档 HLS / FLV）。断流应跨表示降级，
+   而不是在同一个不可拉的 URL 上烧光重连额度（本次「雪衣容」断流根因）。 */
+async function testStreamCandidates() {
+  suite('流候选阶梯：跨表示降级（_or4 404 → 换下一个表示）');
+  const ff = { info() {}, warn() {}, error() {}, debug() {} };
+  const rec = new Recorder({
+    task: { id: 't_cand', platform: 'douyin', container: 'ts', segmentMode: 'time', quality: 'origin' },
+    getSettings: () => ({}), naming: {}, logger: ff, resolveStream: async () => ({}),
+  });
+  const candidates = [
+    { url: 'http://a/stream-1_or4.m3u8', proto: 'hls', key: 'FULL_HD1', heuristic: false },
+    { url: 'http://a/stream-1_hd1.m3u8', proto: 'hls', key: 'HD1', heuristic: false },
+    { url: 'http://a/stream-1.flv', proto: 'flv', key: 'FULL_HD1', heuristic: false },
+    { url: 'http://a/stream-1.m3u8', proto: 'hls', key: 'FULL_HD1', heuristic: true },
+  ];
+  rec._setStream({ url: candidates[0].url, candidates, headers: {} }, 0);
+  eq(rec.streamUrl, 'http://a/stream-1_or4.m3u8', '初始用首选候选（原画 _or4）');
+  eq(rec.streamIndex, 0, '游标从首个候选开始');
+  eq(rec.streamCandidates.length, 4, '候选阶梯完整收录（含 FLV 与去 _orN 兜底）');
+  // 模拟 _or4 404 断流 → 跨表示降级到第二个候选（不再重试同一 URL）
+  rec.streamIndex += 1; rec._applyCandidate();
+  eq(rec.streamUrl, 'http://a/stream-1_hd1.m3u8', '降级到第二候选（换高清 HLS）');
+  rec.streamIndex += 1; rec._applyCandidate();
+  eq(rec.streamUrl, 'http://a/stream-1.flv', '继续降级到 FLV 表示');
+  // 末位是去 _orN 兜底候选（heuristic）：即便 403 也不算平台封禁，继续降级而非长冷却
+  rec.streamIndex = 3; rec._applyCandidate();
+  eq(rec.streamUrl, 'http://a/stream-1.m3u8', '末位是去 _orN 兜底候选');
+  // 无 candidates 时退化为单地址阶梯（其它平台兼容，行为同旧版）
+  rec._setStream({ url: 'http://b/x.flv', headers: {} }, 0);
+  eq(rec.streamCandidates.length, 1, '无 candidates 时退化为单地址阶梯');
+  eq(rec.streamUrl, 'http://b/x.flv', '单地址阶梯仍取到该地址');
+  // 重复 URL 去重：同一表示不重复排队
+  rec._setStream({ url: 'http://c/s.m3u8', candidates: [{ url: 'http://c/s.m3u8' }, { url: 'http://c/s.m3u8' }] }, 0);
+  eq(rec.streamCandidates.length, 1, '候选去重（同一 URL 不重复）');
 }
 
 /* 全局一致性审计守卫：把「前后端契约 / 多处口径不一致」的真实缺陷钉死，防止回退。 */
@@ -1652,7 +1692,7 @@ async function testMergeDeleteSource() {
   console.log(`LiveGrab 测试开始（临时目录 ${tmpRoot}）`);
   await rmrf(tmpRoot);
   await fsp.mkdir(tmpRoot, { recursive: true });
-  const suites = [testUtil, testNaming, testStore, testResolvers, testAuth, testRecordChain, testRemuxFollowGlobal, testPullBlockedBackoff, testConcurrentStart, testRepeatSessionNaming, testTodayStats, testQueue, testHttp, testViewGuards, testUpdateGuards, testProxy, testSegmentEndReason, testSegmentGuards, testFfmpegGuards, testFileScanGuards, testFileOrder, testRecorderLiveProxy, testAuditConsistency, testAuditRemainder, testDeadCodeRemainder, testMergeOnStopAndDeleteCount, testMergeDeleteSource];
+  const suites = [testUtil, testNaming, testStore, testResolvers, testAuth, testRecordChain, testRemuxFollowGlobal, testPullBlockedBackoff, testConcurrentStart, testRepeatSessionNaming, testTodayStats, testQueue, testHttp, testViewGuards, testUpdateGuards, testProxy, testSegmentEndReason, testSegmentGuards, testFfmpegGuards, testFileScanGuards, testFileOrder, testRecorderLiveProxy, testStreamCandidates, testAuditConsistency, testAuditRemainder, testDeadCodeRemainder, testMergeOnStopAndDeleteCount, testMergeDeleteSource];
   for (const s of suites) {
     try { await s(); } catch (e) {
       failed++;
