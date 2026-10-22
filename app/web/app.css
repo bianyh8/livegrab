@@ -497,6 +497,10 @@ td .sub{font-size:11.5px;color:var(--txt-3);margin-top:3px}
 .fl-filter #flQ{flex:1 1 160px;min-width:140px;max-width:420px}
 .fl-filter #flClear{margin-left:auto}
 .fl-selall{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--txt-2);cursor:pointer;user-select:none}
+/* 文件库标题行兼任查询条件的折叠开关：一行里「录制文件库 + 数量说明 + 箭头」，
+   不另起一行「查询条件」栏（用户明确要一行）。箭头沿用任务管理的 .tq-arrow。 */
+.fl-head{cursor:pointer;user-select:none;transition:.15s}
+.fl-head:hover{background:rgba(255,255,255,.025)}
 
 /* 日期区间：起止两个 date 输入合进同一个外壳，中间用「至」+ 竖线分隔，
    看起来是一个控件而不是两个独立输入框（原生 date 的边框/背景全部去掉）。 */

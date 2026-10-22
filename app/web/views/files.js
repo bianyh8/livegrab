@@ -24,7 +24,7 @@ const state = {
   /* 已生效的筛选条件（点「查询」才提交）；输入框草稿暂存在上面的 q/platform/dateFrom/dateTo/ext */
   filters: { q: '', platform: '', dateFrom: '', dateTo: '', ext: '' },
   defaultsSet: false,
-  filterOpen: false, // 查询条件默认收起（与任务管理一致），条件改由折叠栏右侧摘要交代
+  filterOpen: false, // 查询条件默认收起（与任务管理一致）；点标题行展开/收起
   picked: new Set(),
   merging: new Set(), // 正在合并中的文件 id（行状态显示「合并中」，期间禁止再合并/删除）
   page: 1,
@@ -37,9 +37,6 @@ const state = {
 /* 分页：默认每页 10 条（任务/文件/回收站统一） */
 const PAGE_SIZE = 10;
 
-/* 类型下拉的「值 → 文案 key」，下拉选项与头部摘要共用一份，避免两处各写一套映射 */
-const EXT_LABEL = { ts: 'files.extTs', mp4: 'files.extMp4', m4a: 'files.extM4a' };
-
 let boundRoot = null;
 let offFiles = null;   // SSE files 事件的退订函数
 let offRefresh = null; // 2s 轮询回调的退订函数
@@ -49,19 +46,6 @@ let filesTimer = null; // 事件合并定时器（成串事件压成一次请求
    避免两处模板各自拼接、日后改文案时漂移。未转义：重绘走 esc()，局部更新走 textContent。 */
 function bytesHint() {
   return `${t('files.videoCount', state.total)} · ${formatBytes(state.bytes)}`;
-}
-
-/* 折叠栏摘要：用一行文字交代当前生效的条件（与任务管理的「查询条件 + 摘要」同一套写法，
-   文案、样式 class（.tq-toggle/.tq-title/.tq-summary/.tq-arrow）都复用那边的）。
-   用草稿值 state.q/...——它们就是筛选控件里渲染出来的内容，防抖提交后与 filters 必然同步。 */
-function querySummary() {
-  const parts = [];
-  const q = String(state.q || '').trim();
-  if (q) parts.push(`「${q}」`);
-  if (state.platform) parts.push(platNameOf(state.platform));
-  if (state.ext) parts.push(t(EXT_LABEL[state.ext] || 'files.allTypes'));
-  if (state.dateFrom || state.dateTo) parts.push(`${state.dateFrom || '…'} ${t('files.dateSep')} ${state.dateTo || '…'}`);
-  return parts.length ? parts.join(' · ') : t('files.allFiles');
 }
 
 /* 默认查询区间：近 7 天（7 天前 → 今天） */function defaultDateRange() {
@@ -211,9 +195,6 @@ function paintResults(ctx) {
   if (body) body.innerHTML = list.length ? list.map(filenameRow).join('') : emptyBox(t('files.noFilteredFiles'));
   const pagerEl = root.querySelector('#flPager');
   if (pagerEl) pagerEl.outerHTML = pagerHTML('flPager', state.page, state.pages, state.total);
-  /* 摘要只在局部重绘里补一下：轮询/翻页不重建头部，但条件可能刚变过 */
-  const sumEl = root.querySelector('#flHeadSum');
-  if (sumEl) sumEl.textContent = querySummary();
   bindRows(ctx);
   bindPager(root, 'flPager', state, () => { state.hash = ''; tick(ctx, false); });
   syncPickedBar();
@@ -233,17 +214,13 @@ function paint(ctx, force) {
 
   root.innerHTML = `
     <div class="card">
-      <div class="card-h">
+      <!-- 标题行兼任查询条件折叠开关：一行里「录制文件库 + 数量说明 + 箭头」。与任务管理的
+           折叠头同为「标题 + 说明 + 箭头」三段式，只是不另占一行（用户要的就是这一行的样式）。
+           点整行收起/展开下面的筛选行；收起时只留这一行，列表紧接着往下排。 -->
+      <div class="card-h fl-head" id="flFilterToggle" role="button" aria-expanded="${state.filterOpen ? 'true' : 'false'}">
         <h3>${t('files.libraryTitle')}</h3>
         <span class="hint" data-files-bytes>${esc(bytesHint())}</span>
         <div class="spacer"></div>
-      </div>
-      <!-- 查询条件折叠栏：与任务管理同一个组件（.tq-toggle），标题「查询条件」+ 当前条件摘要 + 箭头。
-           摘要常显（收起时它就是唯一的条件说明，展开时与控件互为印证），不随展开状态增删节点，
-           免得切换时布局抖一下。 -->
-      <div class="tq-toggle" id="flFilterToggle" role="button" aria-expanded="${state.filterOpen ? 'true' : 'false'}">
-        <span class="tq-title">${t('tasks.filterTitle')}</span>
-        <span class="tq-summary" id="flHeadSum">${esc(querySummary())}</span>
         <span class="tq-arrow">${state.filterOpen ? '▴' : '▾'}</span>
       </div>
       <div class="toolbar fl-filter" id="flFilterBar" style="${state.filterOpen ? '' : 'display:none'}">
@@ -332,7 +309,7 @@ function bind(ctx) {
   const root = boundRoot;
   if (!root) return;
 
-  /* 点折叠栏收起/展开查询条件（与任务管理的折叠头同一套交互：箭头朝下=收起、朝上=展开）。
+  /* 点标题行收起/展开查询条件（与任务管理的折叠头同一套交互：箭头朝下=收起、朝上=展开）。
      只重绘本视图（paint），不重新请求：条件没变，数据也不用重拉。 */
   const filterToggle = root.querySelector('#flFilterToggle');
   if (filterToggle) filterToggle.onclick = () => { state.filterOpen = !state.filterOpen; paint(ctx, true); };

@@ -84,7 +84,6 @@ const DEFAULT_DICT = {
   "dashboard.totalDuration": "累计录制时长",
   "dashboard.writtenSeg": "第 {0} 段 · 已写 {1}",
   "dashboard.writtenSingle": "单文件 · 已写 {0}",
-  "files.allFiles": "全部文件",
   "files.allTypes": "全部类型",
   "files.clear": "清除",
   "files.clearFilters": "清除条件",

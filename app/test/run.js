@@ -1900,20 +1900,18 @@ function testViewGuards() {
   ok(!/fl-div/.test(filesSrc) && !/\.fl-div\{/.test(cssSrc), '「已选中」与批量按钮之间不再有竖线分隔符（DOM 与 CSS 都已移除）');
   ok(/\.fl-selbar\{[^}]*padding:10px 32px 12px 32px/.test(cssSrc), '勾选栏左右内边距 32px（左对齐行内复选框、右对齐行内「删除」按钮），上内边距 10px（与折叠栏/筛选行留呼吸）');
 
-  /* 文件库查询条件可折叠（2026-10-22 二次调整：用户要「和任务管理一样加个说明」+ 默认折叠）：
-     不再让卡片标题行兼任开关，改为在标题行下方单加一条 .tq-toggle 折叠栏——
-     与任务管理同一个组件、同一套写法（「查询条件」+ 条件摘要 + 箭头），文案也复用
-     tasks.filterTitle（不同文新增 files.filterTitle，否则会被 build 的同文 dedupe 改写源码）。 */
+  /* 文件库查询条件可折叠（2026-10-22 三次调整）：折叠开关就是卡片标题行本身——
+     一行里「录制文件库 + N 个视频文件 · X GB + 箭头」，与任务管理折叠头同为
+     「标题 + 说明 + 箭头」三段式，但**不另占一行**（用户明确：样式是一行，不要两行）。
+     收起时只留这一行，下面直接是勾选栏与列表。 */
   ok(/filterOpen: false/.test(filesSrc), '查询条件默认折叠（与任务管理一致）');
-  ok(/<div class="tq-toggle" id="flFilterToggle" role="button" aria-expanded="\$\{state\.filterOpen \? 'true' : 'false'\}">/.test(filesSrc), '独立「查询条件」折叠栏（.tq-toggle + role=button + aria-expanded）');
-  ok(/<span class="tq-title">\$\{t\('tasks\.filterTitle'\)\}<\/span>/.test(filesSrc), '折叠栏标题用「查询条件」文案（复用 tasks.filterTitle，不新增同文 key）');
-  ok(/<span class="tq-summary" id="flHeadSum">\$\{esc\(querySummary\(\)\)\}<\/span>/.test(filesSrc), '整栏常显条件摘要（收起时是唯一说明，展开时与控件互为印证）');
+  ok(/<div class="card-h fl-head" id="flFilterToggle" role="button" aria-expanded="\$\{state\.filterOpen \? 'true' : 'false'\}">/.test(filesSrc), '标题行兼任折叠开关（role=button + aria-expanded 反映状态）');
+  ok(/data-files-bytes>[\s\S]{0,200}?<div class="spacer"><\/div>[\s\S]{0,80}?<span class="tq-arrow">/.test(filesSrc), '一行三段式：标题 → 数量说明 → 箭头靠右（数量说明就是折叠头的「说明」）');
+  ok(!/tq-toggle/.test(filesSrc) && !/<span class="tq-title">/.test(filesSrc), '不再单独占一行「查询条件」栏（tq-toggle / tq-title 已移除）');
   ok(/id="flFilterBar" style="\$\{state\.filterOpen \? '' : 'display:none'\}"/.test(filesSrc), '筛选行按 filterOpen 显隐（收起时整行 display:none）');
-  ok(/filterToggle\.onclick = \(\) => \{ state\.filterOpen = !state\.filterOpen; paint\(ctx, true\); \}/.test(filesSrc), '点折叠栏切换并只重绘本视图（不重新请求接口）');
-  ok(!/fl-head/.test(filesSrc) && !/\.fl-head/.test(cssSrc), '卡片标题行不再兼任折叠开关（fl-head 已彻底移除）');
-  ok(/function querySummary\(\)/.test(filesSrc) && /t\('files\.allFiles'\)/.test(filesSrc) && /state\.dateFrom \|\| '…'/.test(filesSrc), '摘要汇总关键词/平台/类型/日期，无条件时显示「全部文件」');
-  ok(/querySummary\(\)/.test(filesSrc.slice(filesSrc.indexOf('function paintResults'), filesSrc.indexOf('function paint('))) && /#flHeadSum/.test(filesSrc), '局部重绘也会刷新摘要（轮询/翻页后不残留旧条件）');
-  ok(zhJson['files.allFiles'] === '全部文件', '摘要兜底文案 = 全部文件');
+  ok(/filterToggle\.onclick = \(\) => \{ state\.filterOpen = !state\.filterOpen; paint\(ctx, true\); \}/.test(filesSrc), '点标题行切换并只重绘本视图（不重新请求接口）');
+  ok(/\.fl-head\{cursor:pointer/.test(cssSrc) && /\.fl-head:hover\{background/.test(cssSrc), '标题行有可点击指针与 hover 反馈');
+  ok(!/querySummary|flHeadSum|files\.allFiles/.test(filesSrc) && zhJson['files.allFiles'] === undefined, '条件摘要与 files.allFiles 文案一并下线（一行放不下，改为点开看控件）');
   /* 间隔：筛选行底部不留 padding，间距统一由勾选栏的 10px 上内边距给——
      收起时（筛选行 display:none）折叠栏与勾选栏之间也是 10px，不会贴在一起。 */
   ok(/\.fl-filter\{[^}]*padding:10px 32px 0 16px/.test(cssSrc), '筛选行底部不留 padding（间距交给勾选栏上内边距，收起时也一致）');
