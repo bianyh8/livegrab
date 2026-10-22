@@ -1620,6 +1620,18 @@ function testViewGuards() {
   ok(/ctx\.onRefresh\(\(\) => tick\(ctx, false\)\)/.test(tasksSrc), '任务视图 2s 轮询走局部重绘（不得抢走搜索框焦点）');
   ok(/function bindTable\s*\(/.test(tasksSrc) && /bindTable\(ctx\)/.test(tasksSrc), '局部重绘后重绑表格行内按钮（换数据不换操作）');
 
+  /* 录制文件库查询框（用户报「输入主播还没输完就自动查询」+「自动查询和查询按钮逻辑重复」）：
+     与任务管理一致——搜索输入走 300ms 防抖 + 局部重绘（paintResults），不重建 #flQ；
+     去掉冗余的「查询」按钮（草稿/提交两套状态本就重复）；「刷新」给 toast 反馈。
+     与任务管理保持同一套交互约定，避免两个页面查询体验漂移。 */
+  const filesSrc = fs.readFileSync(path.join(APP_DIR, 'web', 'views', 'files.js'), 'utf8');
+  ok(/function paintResults\s*\(/.test(filesSrc), '文件库有 paintResults()（只重绘结果区，不重建搜索框）');
+  ok(/setTimeout\(\(\) => \{[\s\S]{0,80}?commitFilters\(\);[\s\S]{0,80}?tick\(ctx, true\);[\s\S]{0,40}?\}, 300\)/.test(filesSrc), '文件库查询防抖 = 300ms + commitFilters + tick（不再一输就查、不抢焦点）');
+  ok(!/id="flQuery"/.test(filesSrc) && !/flQuery/.test(filesSrc), '文件库不再有「查询」按钮（草稿/提交两套状态重复）');
+  ok(/toast\(t\('files\.refreshed'\)\)/.test(filesSrc), '「刷新」给 toast 反馈（避免点了不知道生效没）');
+  ok(/function bindRows\s*\(/.test(filesSrc) && /bindRows\(ctx\)/.test(filesSrc), '局部重绘后重绑行内按钮（换数据不换操作）');
+  ok(/function syncPickedBar\s*\(/.test(filesSrc), '勾选计数单独同步（勾选不整表重绘）');
+
   /* 播放器进度条（用户报「只能点击、不能拖动」）：必须 Pointer Events +
      setPointerCapture，不得退回 onclick；拖动中只回绘预览、松手才写 currentTime；
      横屏时舞台被 rotate(90deg)，seek 方向必须实时读舞台矩阵（不得硬编码 false）。 */

@@ -7,6 +7,7 @@ import { t } from '../i18n.js';
 import {
   esc, formatBytes, formatDuration, formatDateTime, platBadge, emptyBox,
   toast, confirmDialog, openPlayer, platformInfo, pagerHTML, bindPager,
+  captureFocus, restoreFocus,
 } from '../ui.js';
 
 const state = {
@@ -105,7 +106,7 @@ export function destroy() {
   boundRoot = null;
 }
 
-async function tick(ctx, initial) {
+async function tick(ctx, full) {
   if (state.pending) return;
   state.pending = true;
   try {
@@ -120,12 +121,14 @@ async function tick(ctx, initial) {
     state.pages = Math.max(1, Number((r && r.pages) || 1));
     state.bytes = Number((r && r.bytes) || 0);
     if (r && Array.isArray(r.platforms)) state.platforms = r.platforms;
-    paint(ctx, initial);
+    // full=true → 全量重绘（初始/筛选/折叠/勾选变化）；
+    // full=false → 仅重绘结果区（搜索防抖/翻页/2s 轮询），不重建工具栏与搜索框，避免焦点丢失。
+    if (full) paint(ctx, true); else paintResults(ctx);
     // 整表没重绘时（内容指纹未变），把「大小」这类会持续增长的数字单独补上：
     // 指纹里不含字节数，录制中的分段在长大但总数不变 → 不补的话大小会停在旧值。
     patchSizes();
   } catch (e) {
-    if (initial && boundRoot) boundRoot.innerHTML = `<div class="card"><div class="empty">${t('files.loadFailed', esc(e.message || t('common.unknownError')))}</div></div>`;
+    if (full && boundRoot) boundRoot.innerHTML = `<div class="card"><div class="empty">${t('files.loadFailed', esc(e.message || t('common.unknownError')))}</div></div>`;
   } finally {
     state.pending = false;
   }
@@ -162,16 +165,50 @@ async function fetchAllRows() {
   } catch { return []; }
 }
 
+/* 结果区指纹：paint 与 paintResults 共用同一套判据，数据/筛选/勾选/翻页无变化时跳过重绘。
+   指纹用「草稿值」（state.q/platform/…）——它们就是工具栏输入框里渲染出来的内容，
+   与模板 value= 一一对应；filters 只是查询用的已提交副本（防抖后两者必然同步）。 */
+function listHash() {
+  const list = state.rows;
+  return JSON.stringify([
+    list.map(({ f, s }) => [f.id, f.status, s.platform, s.streamer, s.startedAt]),
+    state.q, state.platform, state.dateFrom, state.dateTo, state.ext,
+    Array.from(state.picked), 'p' + state.page, state.total,
+  ]);
+}
+
+/* 仅重绘结果区（文件列表 + 分页），不重建工具栏与搜索框。
+   搜索输入防抖、翻页与全局 2s 轮询都走这里：避免重建 #flQ 导致焦点/光标丢失、
+   中文输入法（IME）组合被打断（与任务管理同一套交互约定）。 */
+function paintResults(ctx) {
+  const root = boundRoot;
+  if (!root) return;
+  if (state.page > state.pages) state.page = state.pages;
+  const list = state.rows;
+  const hash = listHash();
+  if (hash === state.hash) return;
+  state.hash = hash;
+  const focus = captureFocus(root);
+  const body = root.querySelector('#flBody');
+  if (body) body.innerHTML = list.length ? list.map(filenameRow).join('') : emptyBox(t('files.noFilteredFiles'));
+  const pagerEl = root.querySelector('#flPager');
+  if (pagerEl) pagerEl.outerHTML = pagerHTML('flPager', state.page, state.pages, state.total);
+  bindRows(ctx);
+  bindPager(root, 'flPager', state, () => { state.hash = ''; tick(ctx, false); });
+  syncPickedBar();
+  restoreFocus(root, focus);
+}
+
 function paint(ctx, force) {
   const root = boundRoot;
   if (!root) return;
   const list = state.rows; // 后端分页：当前页数据
   if (state.page > state.pages) state.page = state.pages;
   const allSel = list.length > 0 && list.every(({ f }) => state.picked.has(f.id));
-  const hash = JSON.stringify([list.map(({ f, s }) => [f.id, f.status, s.platform, s.streamer, s.startedAt]),
-    state.q, state.platform, state.dateFrom, state.dateTo, state.ext, Array.from(state.picked), 'p' + state.page, state.total]);
+  const hash = listHash();
   if (!force && hash === state.hash) return;
   state.hash = hash;
+  const focus = captureFocus(root);
 
   root.innerHTML = `
     <div class="card">
@@ -193,7 +230,6 @@ function paint(ctx, force) {
         <select class="select" id="flExt" style="width:120px">
           ${[['', 'files.allTypes'], ['ts', 'files.extTs'], ['mp4', 'files.extMp4'], ['m4a', 'files.extM4a']].map(([v, k]) => `<option value="${v}"${state.ext === v ? ' selected' : ''}>${t(k)}</option>`).join('')}
         </select>
-        <button class="btn sm" id="flQuery">${t('files.query')}</button>
         <button class="btn sm ghost" id="flClear">${t('files.clear')}</button>
         <div class="spacer"></div>
         <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--txt-2);cursor:pointer"><input type="checkbox" class="cb" id="flSelAll"${allSel ? ' checked' : ''} /> ${t('files.selectAll')}</label>
@@ -207,6 +243,7 @@ function paint(ctx, force) {
     </div>`;
 
   bind(ctx);
+  restoreFocus(root, focus);
 }
 
 function platNameOf(id) {
@@ -262,39 +299,45 @@ function bind(ctx) {
   const root = boundRoot;
   if (!root) return;
 
-  /* 输入只改草稿，点「查询」才应用；「清除」完全清空（关键词/平台/格式/日期范围） */
+  /* 与任务管理一致：搜索框输入即查询（300ms 防抖，给足连续输入/中文组词时间），
+     不再单独设「查询」按钮——草稿/提交两套状态本就重复，且「还没输完就查询」的体验也更顺。
+     「清除」保留（清空关键词/平台/格式/日期范围）。「刷新」给 toast 反馈，避免点了不知道生效没。 */
   const q = root.querySelector('#flQ');
-  if (q) q.oninput = () => { state.q = q.value; };
+  if (q) {
+    let timer = null;
+    q.oninput = () => {
+      state.q = q.value;
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        commitFilters();
+        tick(ctx, true);
+      }, 300);
+    };
+  }
   const plat = root.querySelector('#flPlat');
-  if (plat) plat.onchange = () => { state.platform = plat.value; };
+  if (plat) plat.onchange = () => { state.platform = plat.value; commitFilters(); tick(ctx, true); };
   const dateFrom = root.querySelector('#flDateFrom');
   if (dateFrom) {
     bindDatePicker(dateFrom);
-    dateFrom.onchange = () => { state.dateFrom = dateFrom.value; };
+    dateFrom.onchange = () => { state.dateFrom = dateFrom.value; commitFilters(); tick(ctx, true); };
   }
   const dateTo = root.querySelector('#flDateTo');
   if (dateTo) {
     bindDatePicker(dateTo);
-    dateTo.onchange = () => { state.dateTo = dateTo.value; };
+    dateTo.onchange = () => { state.dateTo = dateTo.value; commitFilters(); tick(ctx, true); };
   }
   const ext = root.querySelector('#flExt');
-  if (ext) ext.onchange = () => { state.ext = ext.value; };
+  if (ext) ext.onchange = () => { state.ext = ext.value; commitFilters(); tick(ctx, true); };
 
-  const queryBtn = root.querySelector('#flQuery');
-  if (queryBtn) queryBtn.onclick = () => { commitFilters(); tick(ctx, true); };
   const clearBtn = root.querySelector('#flClear');
-  if (clearBtn) clearBtn.onclick = () => { clearAllFilters(true); tick(ctx, true); };
-  // 翻页需重新向后端请求对应页数据
-  bindPager(root, 'flPager', state, () => { state.hash = ''; tick(ctx, true); });
+  if (clearBtn) clearBtn.onclick = () => {
+    clearAllFilters(true);
+    tick(ctx, true);
+    toast(t('files.queryApplied'));
+  };
+  // 翻页需重新向后端请求对应页数据（走局部重绘，不重建工具栏/搜索框）
+  bindPager(root, 'flPager', state, () => { state.hash = ''; tick(ctx, false); });
 
-  root.querySelectorAll('[data-pick-file]').forEach((cb) => {
-    cb.onchange = () => {
-      if (cb.checked) state.picked.add(cb.dataset.pickFile);
-      else state.picked.delete(cb.dataset.pickFile);
-      state.hash = '';
-      paint(ctx, true);
-    };
-  });
   const selAll = root.querySelector('#flSelAll');
   if (selAll) selAll.onchange = () => {
     // 后端分页后「全选」应选中符合当前筛选的全部文件（跨页），需拉全量
@@ -308,10 +351,32 @@ function bind(ctx) {
   };
 
   const ref = root.querySelector('#flRefresh');
-  if (ref) ref.onclick = () => { state.hash = ''; tick(ctx, true); };
+  if (ref) ref.onclick = () => {
+    state.hash = '';
+    tick(ctx, true);
+    toast(t('files.refreshed'));
+  };
 
   const del = root.querySelector('#flDelPicked');
   if (del) del.onclick = () => { void deleteFiles(Array.from(state.picked), ctx); };
+
+  bindRows(ctx);
+}
+
+/* 行内绑定（勾选框 / 播放 / 下载 / 删除）：全量 paint 与局部 paintResults 都会重建 #flBody，
+   行内按钮需重新绑定，故单独抽出（与任务管理 bindTable 同一形态）。 */
+function bindRows(ctx) {
+  const root = boundRoot;
+  if (!root) return;
+
+  root.querySelectorAll('[data-pick-file]').forEach((cb) => {
+    cb.onchange = () => {
+      if (cb.checked) state.picked.add(cb.dataset.pickFile);
+      else state.picked.delete(cb.dataset.pickFile);
+      state.hash = '';
+      syncPickedBar();
+    };
+  });
 
   root.querySelectorAll('[data-file-act]').forEach((btn) => {
     btn.onclick = async () => {
@@ -343,6 +408,26 @@ function bind(ctx) {
       }
     };
   });
+}
+
+/* 只更新「已选中 N 项 / 删除所选」这几个文本与可用态，不重建 DOM：
+   勾选框在结果区（会随 paintResults 重建），但工具栏的选中计数要跟着变，
+   这里单独同步，避免勾一个就整表重绘（勾选计数变了 → hash 变 → 必要时才重绘）。 */
+function syncPickedBar() {
+  const root = boundRoot;
+  if (!root) return;
+  const chip = root.querySelector('#flPickChip');
+  if (chip) {
+    chip.classList.toggle('on', state.picked.size > 0);
+    chip.innerHTML = `<i class="dot"></i>${t('files.selectedCount', state.picked.size)}`;
+  }
+  const del = root.querySelector('#flDelPicked');
+  if (del) del.disabled = state.picked.size === 0;
+  const selAll = root.querySelector('#flSelAll');
+  if (selAll) {
+    const list = state.rows;
+    selAll.checked = list.length > 0 && list.every(({ f }) => state.picked.has(f.id));
+  }
 }
 
 function findFile(id) {
