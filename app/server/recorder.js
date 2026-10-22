@@ -69,6 +69,8 @@ export class Recorder extends EventEmitter {
     this.reconnectAttempt = 0;
     this.streamCandidates = []; // 流地址候选阶梯（跨表示降级）：[{ url, proto, key, heuristic }]
     this.streamIndex = 0;       // 当前候选游标
+    this.qualityOrder = [];     // 画质档位顺序 = [任务画质, ...settings.qualityFallback]（去重）
+    this.qualityCursor = 0;     // 当前在第几档（只在降档时前进）
     this._stderrTail = [];
     this._rawStderr = [];   // 最近若干行 ffmpeg stderr（不过滤）：断流时写进日志才能定性
     this._bytesAtSpawn = 0; // 本次拉流启动时的落盘字节数（算「这次录到没有」）
@@ -114,6 +116,25 @@ export class Recorder extends EventEmitter {
     if (clean) this.streamUrl = clean;
   }
 
+  /* 画质档位顺序：任务画质 + 系统设置 qualityFallback（去重、保序）。
+     降档只在这里推进（advance=true），且只降不升——不绕过用户在设置里配的「画质回退顺序」。 */
+  _initQualityOrder() {
+    this.qualityOrder = [this.task.quality, ...(this.settings.qualityFallback || [])]
+      .filter((v, i, a) => v && a.indexOf(v) === i);
+    this.qualityCursor = 0;
+  }
+
+  /** 重新解析的入参；advance=true 且还有下一档时前进一档（候选用尽才降档）。 */
+  _reResolveArgs(advance = false) {
+    if (!this.qualityOrder.length) this._initQualityOrder();
+    if (advance && this.qualityCursor + 1 < this.qualityOrder.length) this.qualityCursor += 1;
+    return {
+      ...this.task,
+      quality: this.qualityOrder[this.qualityCursor],
+      qualityFallback: this.qualityOrder.slice(this.qualityCursor + 1),
+    };
+  }
+
   // ---------- 启动 ----------
   async start({ startNumber = 1 } = {}) {
     const t = this.task;
@@ -121,10 +142,8 @@ export class Recorder extends EventEmitter {
     this.stopping = false;
     this.paused = false;
 
-    const stream = await this.resolveStream(
-      { ...t, qualityFallback: this.settings.qualityFallback },
-      { settings: this.settings, logger: this.logger },
-    );
+    this._initQualityOrder();
+    const stream = await this.resolveStream(this._reResolveArgs(false), { settings: this.settings, logger: this.logger });
     if (!stream?.url) throw Object.assign(new Error('未能解析到流地址'), { code: 'NO_STREAM' });
     this._setStream(stream, 0);
     this.qualityActual = stream.qualityActual || stream.quality || t.quality;
@@ -414,12 +433,22 @@ export class Recorder extends EventEmitter {
         this._applyCandidate();
         this.logger.info(`流地址降级到候选 ${this.streamIndex + 1}/${this.streamCandidates.length}：${this.streamUrl}`, this._meta());
       } else {
-        // 真断流（本段有数据）或候选用尽 → 重新解析刷新 token；有数据时保住当前表示，否则回首选
-        const stream = await this.resolveStream(
-          { ...this.task, qualityFallback: this.settings.qualityFallback },
-          { settings: this.settings, logger: this.logger },
-        );
-        if (stream?.url) this._setStream(stream, plan.productive ? this.streamIndex : 0);
+        /* 候选用尽（本档所有表示都不通）→ 按系统设置 qualityFallback 推进下一画质档；
+           本段已有数据（真断流）则保持当前档，只重新解析刷新 token。 */
+        const prevQuality = this.qualityOrder[this.qualityCursor];
+        const args = this._reResolveArgs(!plan.productive);
+        if (args.quality !== prevQuality) {
+          this.logger.info(`画质按系统设置降档：${prevQuality} → ${args.quality}（本档所有流地址均不可用）`, this._meta());
+        }
+        const stream = await this.resolveStream(args, { settings: this.settings, logger: this.logger });
+        if (stream?.url) {
+          this._setStream(stream, plan.productive ? this.streamIndex : 0);
+          // 实际档位回写：日志/场次记录反映真实画质（原档不可用时已按设置降档）
+          if (stream.quality && stream.quality !== this.qualityActual) {
+            this.qualityActual = stream.quality;
+            this.qualityLabelText = qualityLabel(this.qualityActual);
+          }
+        }
       }
       this.logger.info(`重连成功，继续拉流（第 ${this.reconnectAttempt}/${max} 次 · 流地址 ${this.streamUrl || '(未知 URL)'}）`, this._meta());
       const segs = await this.scanSegments();

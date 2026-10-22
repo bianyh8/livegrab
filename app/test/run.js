@@ -312,6 +312,9 @@ async function testResolvers() {
     eq(stream.candidates[0].url, stream.url, '候选阶梯首位即主 URL（保持最优画质优先）');
     ok(stream.candidates.some((c) => /\.flv/.test(c.url)), '候选阶梯含 FLV 兜底（HLS 不可用时降级）');
     ok(stream.candidates.some((c) => /\.m3u8/.test(c.url)), '候选阶梯含 HLS 表示');
+    // 只收「本档位内的表示」：不得自带 HD1/SD1/SD2 低档位——画质降档归系统设置 qualityFallback
+    ok(!stream.candidates.some((c) => /hd\.flv|sd1\.flv|sd2\.flv/.test(c.url)), '候选阶梯不跨档降级（降档交给系统设置）');
+    eq(stream.candidates.length, 2, '候选阶梯仅本档位表示（原画 HLS + 该档 FLV）');
     const hd = await resolvers.resolveStream({ platform: 'douyin', roomId: '7694422853944462115', quality: 'hd' }, { settings: {} });
     ok(!!hd.url, '抖音高清档取到流地址', hd.qualityKey);
     // 未开播：接口返回 10011，必须按"未开播"处理（任务继续等待开播），而不是抛错
@@ -847,6 +850,36 @@ async function testStreamCandidates() {
   // 重复 URL 去重：同一表示不重复排队
   rec._setStream({ url: 'http://c/s.m3u8', candidates: [{ url: 'http://c/s.m3u8' }, { url: 'http://c/s.m3u8' }] }, 0);
   eq(rec.streamCandidates.length, 1, '候选去重（同一 URL 不重复）');
+}
+
+/* 画质降档必须走系统设置「录制 → 画质回退顺序」qualityFallback，
+   不能由解析器里硬编码的降序表（FULL_HD1→HD1→SD1→SD2）绕过。 */
+async function testQualityFallbackBySetting() {
+  suite('画质降档：按系统设置 qualityFallback 推进（不硬编码降序）');
+  const ff = { info() {}, warn() {}, error() {}, debug() {} };
+  const rec = new Recorder({
+    task: { id: 't_qfb', platform: 'douyin', container: 'ts', segmentMode: 'time', quality: 'origin' },
+    getSettings: () => ({ qualityFallback: ['uhd', 'hd', 'sd'] }),
+    naming: {}, logger: ff, resolveStream: async () => ({}),
+  });
+  rec._initQualityOrder();
+  eq(rec.qualityOrder.join(','), 'origin,uhd,hd,sd', '档位顺序 = 任务画质 + 系统设置（去重保序）');
+  eq(rec._reResolveArgs(false).quality, 'origin', '本段有数据/未用尽 → 不降档，只刷新 token');
+  eq(rec._reResolveArgs(true).quality, 'uhd', '候选用尽 → 按设置降到下一档');
+  eq(rec._reResolveArgs(true).quality, 'hd', '继续按设置降档');
+  eq(rec._reResolveArgs(true).quality, 'sd', '降到末档');
+  eq(rec._reResolveArgs(true).quality, 'sd', '已在末档不再降（不越界）');
+  const args = rec._reResolveArgs(false);
+  eq(args.qualityFallback.join(','), '', '末档的剩余回退链为空（只降不升）');
+  // 回退链随游标收缩：中间档的剩余链只含更低档
+  const rec2 = new Recorder({
+    task: { id: 't_qfb2', platform: 'douyin', container: 'ts', segmentMode: 'time', quality: 'origin' },
+    getSettings: () => ({ qualityFallback: ['uhd', 'hd', 'sd'] }),
+    naming: {}, logger: ff, resolveStream: async () => ({}),
+  });
+  rec2._initQualityOrder();
+  rec2._reResolveArgs(true);
+  eq(rec2._reResolveArgs(false).qualityFallback.join(','), 'hd,sd', '降档后剩余回退链只含更低档（只降不升）');
 }
 
 /* 全局一致性审计守卫：把「前后端契约 / 多处口径不一致」的真实缺陷钉死，防止回退。 */
@@ -1692,7 +1725,7 @@ async function testMergeDeleteSource() {
   console.log(`LiveGrab 测试开始（临时目录 ${tmpRoot}）`);
   await rmrf(tmpRoot);
   await fsp.mkdir(tmpRoot, { recursive: true });
-  const suites = [testUtil, testNaming, testStore, testResolvers, testAuth, testRecordChain, testRemuxFollowGlobal, testPullBlockedBackoff, testConcurrentStart, testRepeatSessionNaming, testTodayStats, testQueue, testHttp, testViewGuards, testUpdateGuards, testProxy, testSegmentEndReason, testSegmentGuards, testFfmpegGuards, testFileScanGuards, testFileOrder, testRecorderLiveProxy, testStreamCandidates, testAuditConsistency, testAuditRemainder, testDeadCodeRemainder, testMergeOnStopAndDeleteCount, testMergeDeleteSource];
+  const suites = [testUtil, testNaming, testStore, testResolvers, testAuth, testRecordChain, testRemuxFollowGlobal, testPullBlockedBackoff, testConcurrentStart, testRepeatSessionNaming, testTodayStats, testQueue, testHttp, testViewGuards, testUpdateGuards, testProxy, testSegmentEndReason, testSegmentGuards, testFfmpegGuards, testFileScanGuards, testFileOrder, testRecorderLiveProxy, testStreamCandidates, testQualityFallbackBySetting, testAuditConsistency, testAuditRemainder, testDeadCodeRemainder, testMergeOnStopAndDeleteCount, testMergeDeleteSource];
   for (const s of suites) {
     try { await s(); } catch (e) {
       failed++;

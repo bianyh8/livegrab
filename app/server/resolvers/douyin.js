@@ -373,13 +373,15 @@ export async function resolveStream({ roomId, quality, settings, logger }) {
     seen.add(u);
     candidates.push({ url: u, key, proto: /\.m3u8/.test(u) ? 'hls' : 'flv', heuristic });
   };
-  // 跨表示候选阶梯（与旧「取第一个即返回」同序，但全部收集，供录制失败时降级）：
-  //   每个质量 key：origin HLS(master) → 该档 HLS → 该档 flv；再加 _orN 去后缀兜底（末位）。
-  for (const k of keys) {
-    if (isTop || !hlsMap[k]) add(hlsMaster, k);
-    if (hlsMap[k]) add(hlsMap[k], k);
-    if (flvMap[k]) add(flvMap[k], k);
-  }
+  /* 候选阶梯只收「本档位内的表示」：origin HLS(master) → 该档 HLS → 该档 FLV，再加 _orN 去后缀兜底。
+     ★ 不在这里跨档降级（不去遍历 keys 的 HD1/SD1/SD2）：画质降档改由系统设置
+       settings.qualityFallback 驱动（index.js 按标签顺序 + recorder 的降档游标），
+       否则会绕过用户在「录制 → 画质回退顺序」里配的顺序，一路跌到标清。
+     本档完全没有流 → 抛 NO_STREAM，交给 index.js 按设置推进下一画质档。 */
+  const tierKey = keys[0];
+  if (isTop || !hlsMap[tierKey]) add(hlsMaster, tierKey);
+  if (hlsMap[tierKey]) add(hlsMap[tierKey], tierKey);
+  if (flvMap[tierKey]) add(flvMap[tierKey], tierKey);
   const base = candidates.slice();
   for (const c of base) {
     if (c.proto !== 'hls') continue;
