@@ -216,7 +216,6 @@ function paint(ctx, force) {
         <h3>${t('files.libraryTitle')}</h3>
         <span class="hint" data-files-bytes>${esc(bytesHint())}</span>
         <div class="spacer"></div>
-        <button class="btn sm ghost" id="flRefresh">${t('common.refresh')}</button>
       </div>
       <div class="toolbar" style="padding:10px 16px 12px;flex-wrap:wrap">
         <input class="input" id="flQ" style="width:180px" placeholder="${t('files.searchPlaceholder')}" value="${esc(state.q)}" />
@@ -231,11 +230,12 @@ function paint(ctx, force) {
           ${[['', 'files.allTypes'], ['ts', 'files.extTs'], ['mp4', 'files.extMp4'], ['m4a', 'files.extM4a']].map(([v, k]) => `<option value="${v}"${state.ext === v ? ' selected' : ''}>${t(k)}</option>`).join('')}
         </select>
         <button class="btn sm ghost" id="flClear">${t('files.clear')}</button>
+        <button class="btn sm ghost" id="flRefresh">${t('common.refresh')}</button>
         <div class="spacer"></div>
         <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--txt-2);cursor:pointer"><input type="checkbox" class="cb" id="flSelAll"${allSel ? ' checked' : ''} /> ${t('files.selectAll')}</label>
         <span class="chip ${state.picked.size ? 'on' : ''}" id="flPickChip"><i class="dot"></i>${t('files.selectedCount', state.picked.size)}</span>
         <button class="btn sm danger" id="flDelPicked"${state.picked.size ? '' : ' disabled'}>${t('files.deleteSelected')}</button>
-        <button class="btn sm primary" id="flMergePicked"${state.picked.size >= 2 ? '' : ' disabled'}>${t('files.mergeSelected')}</button>
+        <button class="btn sm danger" id="flMergePicked"${state.picked.size >= 2 ? '' : ' disabled'}>${t('files.mergeSelected')}</button>
       </div>
       <div style="padding:0 16px 16px" id="flBody">
         ${list.length ? list.map(filenameRow).join('') : emptyBox(t('files.noFilteredFiles'))}
@@ -267,7 +267,7 @@ function filenameRow({ f, s, tag }) {
       </div>
       <div style="flex:1;min-width:0">
         <div style="font-size:13px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(f.name || f.relPath || '—')}
-          ${tag ? `<span class="chip">${esc(tag)}</span>` : ''}
+          <span class="chip">${esc(extLabel)}</span>
           ${playing ? `<span class="chip wait" style="margin-left:6px"><i class="dot"></i>${t('common.recording')}</span>` : missing ? `<span class="chip err" style="margin-left:6px">${t('files.missing')}</span>` : `<span class="chip on" style="margin-left:6px"><i class="dot"></i>${t('common.recorded')}</span>`}
         </div>
         <div style="display:flex;gap:10px;align-items:center;margin-top:5px;font-size:11.5px;color:var(--txt-3);flex-wrap:wrap">

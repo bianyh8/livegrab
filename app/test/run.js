@@ -1642,6 +1642,16 @@ function testViewGuards() {
   ok(/files\.mergeKeep/.test(filesSrc) && /files\.mergeDeleteSource/.test(filesSrc), '弹框提供「合并」与「合并后删除源文件」两个动作');
   ok(/deleteSources/.test(filesSrc), '合并后删除源文件作为显式选项传后端');
 
+  /* 工具栏/徽标一致性（用户三连反馈：刷新位置、合并按钮样式、同为 .mp4 徽标不一致）：
+     「刷新」移到「清除」后边（工具栏内）；「合并」与「删除所选」同款（btn sm danger）；
+     类型徽标按文件类型统一渲染（extLabel = tag || 扩展名大写），不再按 tag 归属有条件渲染——
+     否则转封装 MP4（有 tag）与直接录制的 .mp4 分段（无 tag）同为 mp4 却一个有一个没有。 */
+  const iClear = filesSrc.indexOf('id="flClear"');
+  const iRefresh = filesSrc.indexOf('id="flRefresh"');
+  ok(iClear > 0 && iRefresh > iClear, '「刷新」按钮在「清除」按钮后边');
+  ok(/class="btn sm danger" id="flMergePicked"/.test(filesSrc) && /class="btn sm danger" id="flDelPicked"/.test(filesSrc), '「合并」与「删除所选」按钮同款样式（btn sm danger）');
+  ok(/<span class="chip">\$\{esc\(extLabel\)\}<\/span>/.test(filesSrc) && !/\$\{tag \?/.test(filesSrc), '类型徽标统一按 extLabel 渲染（不按 tag 归属，同类型文件显示一致）');
+
   /* 播放器进度条（用户报「只能点击、不能拖动」）：必须 Pointer Events +
      setPointerCapture，不得退回 onclick；拖动中只回绘预览、松手才写 currentTime；
      横屏时舞台被 rotate(90deg)，seek 方向必须实时读舞台矩阵（不得硬编码 false）。 */
