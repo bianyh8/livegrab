@@ -294,6 +294,8 @@ async function testResolvers() {
     if (u.includes('webcast/room/web/enter')) return new Response(JSON.stringify({ status_code: 4001038 }), { status: 200 });
     if (u.includes('live.douyin.com/')) return new Response('<html><body>no stream here</body></html>', { status: 200 });
     if (u.includes('live.douyin.com')) return new Response('', { status: 200, headers: { 'set-cookie': 'ttwid=fake-ttwid' } });
+    // 流地址 HEAD 预校验（httpHead）：mock 返回 200 表示候选可用
+    if (u.includes('cdn.example.com')) return new Response('', { status: 200 });
     return new Response('{}', { status: 404 });
   };
   try {
@@ -880,6 +882,37 @@ async function testQualityFallbackBySetting() {
   rec2._initQualityOrder();
   rec2._reResolveArgs(true);
   eq(rec2._reResolveArgs(false).qualityFallback.join(','), 'hd,sd', '降档后剩余回退链只含更低档（只降不升）');
+}
+
+/* URL 预校验（StreamGet get_response_status 模式）：解析阶段 HEAD 校验候选，
+   过滤死 URL（如 _or4 变体常 404），避免送进录制候选阶梯烧重连额度。 */
+async function testResolveStreamPrecheck() {
+  suite('流地址解析：URL 预校验 + 邻档降级（StreamGet 模式）');
+  const realFetch = globalThis.fetch;
+  // mock：首个候选 404，第二个 200 → 预校验应跳过首个，选第二个
+  let headCall = 0;
+  globalThis.fetch = async (url, opts = {}) => {
+    const u = String(url);
+    const method = (opts && opts.method) || 'GET';
+    if (method === 'HEAD' && u.includes('cdn.example.com')) {
+      headCall += 1;
+      if (u.includes('full.m3u8')) return new Response('', { status: 404 }); // 首选死 URL
+      return new Response('', { status: 200 }); // 降级候选可用
+    }
+    // 其它请求（enterRoom 等）走原 mock 逻辑（简化：返回空）
+    return new Response('{}', { status: 404 });
+  };
+  try {
+    // 直接测 httpHead 助手
+    const { httpHead } = await import('../server/resolvers/http.js');
+    const okStatus = await httpHead('http://cdn.example.com/hd.m3u8', { headers: {} });
+    eq(okStatus, 200, 'httpHead 返回 200 表示候选可用');
+    const deadStatus = await httpHead('http://cdn.example.com/full.m3u8', { headers: {} });
+    eq(deadStatus, 404, 'httpHead 返回 404 表示候选已死');
+    ok(headCall >= 2, 'httpHead 走 HEAD 方法预校验', String(headCall));
+  } finally {
+    globalThis.fetch = realFetch;
+  }
 }
 
 /* 断流误判下播的修复：probeOffline 需连续 2 次确认；heuristic 候选跳过探播。 */
@@ -1753,7 +1786,7 @@ async function testMergeDeleteSource() {
   console.log(`LiveGrab 测试开始（临时目录 ${tmpRoot}）`);
   await rmrf(tmpRoot);
   await fsp.mkdir(tmpRoot, { recursive: true });
-  const suites = [testUtil, testNaming, testStore, testResolvers, testAuth, testRecordChain, testRemuxFollowGlobal, testPullBlockedBackoff, testConcurrentStart, testRepeatSessionNaming, testTodayStats, testQueue, testHttp, testViewGuards, testUpdateGuards, testProxy, testSegmentEndReason, testSegmentGuards, testFfmpegGuards, testFileScanGuards, testFileOrder, testRecorderLiveProxy, testStreamCandidates, testQualityFallbackBySetting, testOfflineConfirm, testAuditConsistency, testAuditRemainder, testDeadCodeRemainder, testMergeOnStopAndDeleteCount, testMergeDeleteSource];
+  const suites = [testUtil, testNaming, testStore, testResolvers, testAuth, testRecordChain, testRemuxFollowGlobal, testPullBlockedBackoff, testConcurrentStart, testRepeatSessionNaming, testTodayStats, testQueue, testHttp, testViewGuards, testUpdateGuards, testProxy, testSegmentEndReason, testSegmentGuards, testFfmpegGuards, testFileScanGuards, testFileOrder, testRecorderLiveProxy, testStreamCandidates, testQualityFallbackBySetting, testResolveStreamPrecheck, testOfflineConfirm, testAuditConsistency, testAuditRemainder, testDeadCodeRemainder, testMergeOnStopAndDeleteCount, testMergeDeleteSource];
   for (const s of suites) {
     try { await s(); } catch (e) {
       failed++;

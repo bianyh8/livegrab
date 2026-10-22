@@ -1,7 +1,7 @@
 // 抖音直播解析：移动端 reflow/info 取房间元数据（免登录）→ web/enter 权威开播状态与 HLS 流
 // （短号 + ttwid 匿名可用）→ 移动端元数据兜底 → 页面兜底（2026-10 实测已失效，保留）
 import { HttpError } from '../util.js';
-import { httpGet, httpJson, pickSetCookie, cookiesToString, DESKTOP_UA } from './http.js';
+import { httpGet, httpJson, httpHead, pickSetCookie, cookiesToString, DESKTOP_UA } from './http.js';
 import { abSign } from './douyin-sign.js';
 
 const QUALITY_KEYS = {
@@ -394,12 +394,30 @@ export async function resolveStream({ roomId, quality, settings, logger }) {
   if (!candidates.length) {
     throw new HttpError('NO_STREAM', `直播间没有可用流（状态：${room.status === 2 ? '开播' : '未开播'}），可能未开播或需要登录 Cookie`, 502);
   }
-  const first = candidates[0];
+  /* URL 预校验（StreamGet 的 get_response_status 模式）：对候选逐个 HEAD 校验，过滤死 URL（如 _or4 变体常 404）。
+     只预校验到找到第一个可用候选为止（不全量校验，避免延迟）；全失败才抛 NO_STREAM。
+     预校验只是「进阶梯前过滤」，候选阶梯仍完整保留（录制中失效时 recorder 会降级）。 */
+  let precheckHeaders = headers(cookie, roomId);
+  let usable = [];
+  for (const c of candidates) {
+    const status = await httpHead(c.url, { headers: precheckHeaders, label: `抖音流预校验(${c.key || c.proto})`, logger });
+    if (status && status < 400) {
+      usable.push(c);
+      break; // 找到第一个可用候选即停（预校验目的是选首位，不是全量过滤）
+    }
+    if (logger) logger.debug(`抖音流预校验失败（${c.key || c.proto} ${c.url}）：HTTP ${status || 'ERR'}`);
+  }
+  if (!usable.length) {
+    throw new HttpError('NO_STREAM', `所有候选流地址预校验均失败（共 ${candidates.length} 个），可能流地址已失效或网络异常`, 502);
+  }
+  // 预校验通过的候选排首位，其余候选保留（录制中失效时降级用）
+  const reordered = [...usable, ...candidates.filter((c) => !usable.includes(c))];
+  const first = reordered[0];
   return {
     url: first.url,
-    candidates,
+    candidates: reordered,
     resolution: su.default_resolution || '',
-    headers: headers(cookie, roomId),
+    headers: precheckHeaders,
     qualityActual: quality,
     qualityKey: first.key,
     proto: first.proto,

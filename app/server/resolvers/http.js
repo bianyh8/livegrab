@@ -1,6 +1,6 @@
 // 公共 HTTP 助手：超时 + 重试 + 统一 UA
 import { HttpError, errText } from '../util.js';
-import { proxyStore, httpGetViaProxy } from '../proxy-fetch.js';
+import { proxyStore, httpGetViaProxy, requestViaProxy } from '../proxy-fetch.js';
 
 export const DESKTOP_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
 
@@ -38,6 +38,36 @@ export async function httpJson(url, opts = {}) {
   } catch {
     throw new HttpError('BAD_RESPONSE', `响应不是合法 JSON（HTTP ${status}${ok ? '' : ' 错误'}）`, 502);
   }
+}
+
+/** HEAD 预校验 URL 可用性（StreamGet 的 get_response_status 模式）：返回 HTTP status code，异常返回 false。
+ *  用于解析阶段过滤死 URL（如抖音 _or4 变体常 404），避免把不可用地址送进录制候选阶梯烧重连额度。 */
+export async function httpHead(url, { headers = {}, timeoutMs = 8000, retries = 1, logger = null, label = '', proxy = '' } = {}) {
+  const effectiveProxy = proxy || proxyStore.getStore()?.proxy || '';
+  if (effectiveProxy) {
+    try {
+      const res = await requestViaProxy(url, { method: 'HEAD', headers, timeoutMs, maxRedirects: 3, proxy: effectiveProxy });
+      return res.status;
+    } catch (e) {
+      if (logger) logger.debug(`${label || 'HEAD'} 预校验失败（${url}）：${errText(e, { withStack: false })}`);
+      return false;
+    }
+  }
+  for (let i = 0; i <= retries; i++) {
+    try {
+      const res = await fetch(url, {
+        method: 'HEAD',
+        headers: { 'User-Agent': DESKTOP_UA, 'Accept-Language': 'zh-CN,zh;q=0.9', ...headers },
+        redirect: 'follow',
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+      return res.status;
+    } catch (e) {
+      if (logger && i < retries) logger.debug(`${label || 'HEAD'} 第 ${i + 1} 次预校验失败：${errText(e, { withStack: false })}`);
+      await new Promise((r) => setTimeout(r, 300 * (i + 1)));
+    }
+  }
+  return false;
 }
 
 export function pickSetCookie(headers) {
