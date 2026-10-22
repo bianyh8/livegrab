@@ -235,6 +235,7 @@ function recItem(t) {
         <div class="tm">${esc(formatDuration(elapsed))}</div>
         <div style="font-size:11px;color:var(--txt-3)">${segOf === 'none' ? _t('dashboard.singleFile') : _t('dashboard.currentSeg', esc(formatDuration(current))) /* current=本段已录秒数，仅用于时长 */}</div>
         <div class="acts" style="margin-top:7px">
+          <button class="btn sm danger" data-act="stop-once" data-id="${esc(t.id)}" title="${_t('tasks.stopOnceTip')}">${_t('tasks.stopOnce')}</button>
           <button class="btn sm danger" data-act="stop" data-id="${esc(t.id)}">${_t('common.stopRecord')}</button>
         </div>
       </div>
@@ -258,6 +259,8 @@ function bind(root, ctx) {
       try {
         if (act === 'pause') { await api.taskAction(id, 'pause'); toast(_t('tasks.pauseDone')); }
         else if (act === 'stop') { await api.taskAction(id, 'stop'); toast(_t('tasks.stopDone')); }
+        // 停止本场：与任务列表同一动作（只停这次，不改自动录制配置），避免总览页只能「永久停止」
+        else if (act === 'stop-once') { await api.taskAction(id, 'stop-once'); toast(_t('tasks.stopOnceDone')); }
         else if (act === 'start') { await api.taskAction(id, 'start'); toast(_t('dashboard.startToast')); }
         else if (act === 'check') { await api.taskAction(id, 'check'); toast(_t('dashboard.checkToast')); }
         else if (act === 'pause-all') {

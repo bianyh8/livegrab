@@ -212,9 +212,9 @@ function paint(ctx, force) {
         <button class="btn sm ghost" id="tkSelAll">${t('files.selectAll')}</button>
         <span class="chip">${t('tasks.oneTaskTip')}</span>
         <div class="spacer"></div>
-        <button class="btn sm" data-batch="refresh" title="${t('tasks.batchRefreshTip')}">${t('tasks.batchRefresh')}</button>
-        <button class="btn sm" data-batch="start">${t('tasks.batchStart')}</button>
-        <button class="btn sm" data-batch="stop">${t('common.stopRecord')}</button>
+        <button class="btn sm ok" data-batch="refresh" title="${t('tasks.batchRefreshTip')}">${t('tasks.batchRefresh')}</button>
+        <button class="btn sm ok" data-batch="start">${t('tasks.batchStart')}</button>
+        <button class="btn sm danger" data-batch="stop">${t('common.stopRecord')}</button>
         <button class="btn sm danger" data-batch="delete">${t('tasks.batchDelete')}</button>
       </div>
       <div class="hintline" style="margin:0 0 12px 2px">${t('tasks.batchHint')}${state.sort === 'custom' ? t('tasks.customSortHint') : t('tasks.customSortTip')}</div>

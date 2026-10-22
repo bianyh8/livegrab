@@ -1748,6 +1748,16 @@ function testViewGuards() {
   ok(/ctx\.onRefresh\(\(\) => tick\(ctx, false\)\)/.test(tasksSrc), '任务视图 2s 轮询走局部重绘（不得抢走搜索框焦点）');
   ok(/function bindTable\s*\(/.test(tasksSrc) && /bindTable\(ctx\)/.test(tasksSrc), '局部重绘后重绑表格行内按钮（换数据不换操作）');
 
+  /* 批量条配色 + 总览录制卡片的「停止本场」（2026-10-22 用户反馈）：
+     批量刷新 / 开始录制 = 绿色（btn sm ok），停止录制 = 红色（btn sm danger）；
+     总览「正在录制」不能只给「停止录制」（那是改配置的永久停止），必须补上任务列表同款
+     「停止本场」（taskAction 'stop-once'：只停这次，不动自动录制配置）。 */
+  const dashSrc = fs.readFileSync(path.join(APP_DIR, 'web', 'views', 'dashboard.js'), 'utf8');
+  ok(/class="btn sm ok" data-batch="refresh"/.test(tasksSrc) && /class="btn sm ok" data-batch="start"/.test(tasksSrc) && /class="btn sm danger" data-batch="stop"/.test(tasksSrc), '批量条：批量刷新/开始录制绿色，停止录制红色');
+  ok(/data-act="stop-once"[\s\S]{0,240}?data-act="stop"/.test(dashSrc), '总览录制卡片 = 停止本场 + 停止录制（本场在前，与任务列表同序）');
+  ok(/act === 'stop-once'[\s\S]{0,120}?api\.taskAction\(id, 'stop-once'\)/.test(dashSrc), '总览「停止本场」走任务列表同一个 taskAction(id, stop-once)');
+  ok(/t\('tasks\.stopOnceTip'\)/.test(dashSrc) && /t\('tasks\.stopOnceDone'\)/.test(dashSrc), '总览「停止本场」复用既有文案（悬停说明 + 完成提示）');
+
   /* 录制文件库查询框（用户报「输入主播还没输完就自动查询」+「自动查询和查询按钮逻辑重复」）：
      与任务管理一致——搜索输入走 300ms 防抖 + 局部重绘（paintResults），不重建 #flQ；
      去掉冗余的「查询」按钮（草稿/提交两套状态本就重复）；「刷新」给 toast 反馈。
