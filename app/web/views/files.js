@@ -219,7 +219,7 @@ function paint(ctx, force) {
         <span class="hint" data-files-bytes>${esc(bytesHint())}</span>
         <div class="spacer"></div>
       </div>
-      <div class="toolbar" style="padding:10px 16px 8px;flex-wrap:wrap;border-bottom:0">
+      <div class="toolbar fl-filter">
         <input class="input" id="flQ" style="width:320px" placeholder="${t('files.searchPlaceholder')}" value="${esc(state.q)}" />
         <select class="select" id="flPlat" style="width:120px">
           <option value="">${t('common.allPlatforms')}</option>

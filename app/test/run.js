@@ -1857,14 +1857,16 @@ function testViewGuards() {
   const iExt = filesSrc.indexOf('id="flExt"');
   const iRange = filesSrc.indexOf('class="fl-range"');
   ok(iQ > 0 && iPlat > iQ && iExt > iPlat && iRange > iExt && iClearBtn > iRange, '筛选行顺序 = 搜索 → 平台 → 类型 → 时间 → 清除条件');
-  ok(!/id="flExt"[\s\S]{0,300}?<div class="spacer"><\/div>[\s\S]{0,200}?id="flClear"/.test(filesSrc), '「清除条件」紧跟时间控件，中间不塞 spacer');
+  ok(!/id="flExt"[\s\S]{0,300}?<div class="spacer"><\/div>[\s\S]{0,200}?id="flClear"/.test(filesSrc), '「清除条件」前不塞 spacer（靠 margin-left:auto 贴行尾，见下条）');
   ok(zhJson['files.clearFilters'] === '清除条件' && /t\('files\.clearFilters'\)/.test(filesSrc), '清除按钮文案 = 清除条件（不与其他「清除」复用同一 key）');
   /* 起止日期合进同一个外壳：视觉上一个控件，中间「至」两侧有竖线分隔 */
   ok(/<div class="fl-range">[\s\S]{0,400}?id="flDateFrom"[\s\S]{0,200}?fl-range-sep[\s\S]{0,200}?id="flDateTo"/.test(filesSrc), '起止日期合进同一个外壳（fl-range + 「至」分隔）');
   ok(/\.fl-range\{[^}]*display:inline-flex/.test(cssSrc) && /\.fl-range-in\{[^}]*border:0/.test(cssSrc), '日期区间外壳有独立边框，内部两个 date 输入去掉原生边框');
   /* 选完开始日期无条件覆盖结束日期（用户明确：不要「只在为空/早于开始时补」那套判断） */
   ok(/if \(dateTo && state\.dateFrom\) \{[\s\S]{0,120}?dateTo\.value = state\.dateFrom/.test(filesSrc) && !/dateTo\.value < state\.dateFrom/.test(filesSrc), '录入开始日期后无条件覆盖结束日期（不保留原区间）');
-  /* 批量动作配色：删除文件危险色，合并文件/扫描磁盘绿色（btn ok） */
+  /* 筛选行右内边距 32px（= #flBody 16 + .fl-item 16）+ #flClear margin-left:auto：
+     「清除条件」的右边缘与下方每行行尾「删除」按钮落在同一条竖线上（用户要求「往左对齐到删除按钮」）。 */
+  ok(/class="toolbar fl-filter"/.test(filesSrc) && /\.fl-filter\{[^}]*padding:10px 32px 8px 16px/.test(cssSrc) && /\.fl-filter #flClear\{margin-left:auto\}/.test(cssSrc), '「清除条件」右边缘与行内「删除」按钮对齐（toolbar 右内边距 32px + margin-left:auto）');
   ok(/class="btn sm danger" id="flDelPicked"/.test(filesSrc) && /class="btn sm ok" id="flMergePicked"/.test(filesSrc) && /class="btn sm ok" id="flScan"/.test(filesSrc), '删除文件 = 危险色，合并文件 / 扫描磁盘 = 绿色');
   ok(/<span class="fl-div"><\/span>/.test(filesSrc) && /<div class="spacer"><\/div>/.test(filesSrc), '「已选中 N 项」后跟竖线分隔，批量按钮紧跟其后（spacer 移到按钮之后）');
   ok(/\.fl-selbar\{[^}]*padding:0 16px 12px 32px/.test(cssSrc), '勾选栏左内边距 = 行内复选框缩进（全选框与列表复选框左对齐）');
