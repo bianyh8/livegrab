@@ -142,6 +142,7 @@ export const api = {
   filesScan: () => request('POST', '/api/files/scan', {}),
   remux: (fileId) => request('POST', `/api/files/${encodeURIComponent(fileId)}/remux`, {}),
   merge: (sessionId) => request('POST', '/api/files/merge', { sessionId }),
+  filesMergeSelected: (fileIds, deleteSources) => request('POST', '/api/files/merge-picked', { fileIds, deleteSources: !!deleteSources }),
   filesDelete: (payload) => request('POST', '/api/files/delete', payload),
   streamUrl: (fileId) => `/api/files/${encodeURIComponent(fileId)}/stream`,
   downloadUrl: (fileId) => `/api/files/${encodeURIComponent(fileId)}/download`,

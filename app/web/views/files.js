@@ -6,7 +6,7 @@ import { api } from '../api.js';
 import { t } from '../i18n.js';
 import {
   esc, formatBytes, formatDuration, formatDateTime, platBadge, emptyBox,
-  toast, confirmDialog, openPlayer, platformInfo, pagerHTML, bindPager,
+  toast, confirmDialog, openDialog, el, openPlayer, platformInfo, pagerHTML, bindPager,
   captureFocus, restoreFocus,
 } from '../ui.js';
 
@@ -235,6 +235,7 @@ function paint(ctx, force) {
         <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--txt-2);cursor:pointer"><input type="checkbox" class="cb" id="flSelAll"${allSel ? ' checked' : ''} /> ${t('files.selectAll')}</label>
         <span class="chip ${state.picked.size ? 'on' : ''}" id="flPickChip"><i class="dot"></i>${t('files.selectedCount', state.picked.size)}</span>
         <button class="btn sm danger" id="flDelPicked"${state.picked.size ? '' : ' disabled'}>${t('files.deleteSelected')}</button>
+        <button class="btn sm primary" id="flMergePicked"${state.picked.size >= 2 ? '' : ' disabled'}>${t('files.mergeSelected')}</button>
       </div>
       <div style="padding:0 16px 16px" id="flBody">
         ${list.length ? list.map(filenameRow).join('') : emptyBox(t('files.noFilteredFiles'))}
@@ -360,6 +361,9 @@ function bind(ctx) {
   const del = root.querySelector('#flDelPicked');
   if (del) del.onclick = () => { void deleteFiles(Array.from(state.picked), ctx); };
 
+  const mg = root.querySelector('#flMergePicked');
+  if (mg) mg.onclick = () => { void mergeFiles(ctx); };
+
   bindRows(ctx);
 }
 
@@ -423,6 +427,8 @@ function syncPickedBar() {
   }
   const del = root.querySelector('#flDelPicked');
   if (del) del.disabled = state.picked.size === 0;
+  const mg = root.querySelector('#flMergePicked');
+  if (mg) mg.disabled = state.picked.size < 2;
   const selAll = root.querySelector('#flSelAll');
   if (selAll) {
     const list = state.rows;
@@ -487,4 +493,50 @@ async function deleteFiles(ids, ctx) {
 async function trashEnabled() {
   try { const s = await api.settings(); return s.deleteToTrash !== false; }
   catch { return true; }
+}
+
+/* 勾选合并：按列表顺序把后面的文件内容追加到第一个文件，结果沿用第一个文件名。
+   弹框提供「合并」（保留全部源文件）与「合并后删除源文件」（被追加的文件移入回收站）两个动作。 */
+async function mergeFiles(ctx) {
+  // 顺序 = 文件列表展示顺序（fetchAllRows 返回后端 sortFileRows 稳定序），
+  // 不用勾选顺序——勾选先后是用户操作痕迹，不代表「第 1、2、3 集」的播放顺序。
+  const all = await fetchAllRows();
+  const byId = new Map(all.map((r) => [r.f.id, r]));
+  const ordered = all.filter(({ f }) => state.picked.has(f.id)).map(({ f }) => f.id);
+  const orderedSet = new Set(ordered);
+  for (const id of state.picked) if (!orderedSet.has(id)) ordered.push(id); // 兜底：不在当前筛选结果里的勾选项
+  if (ordered.length < 2) { toast(t('files.mergeNeedTwo'), 'warn'); return; }
+
+  // 客户端先做格式一致性预检，即时反馈；后端仍强校验
+  const files = ordered.map((id) => byId.get(id)).filter(Boolean);
+  const ext0 = String((files[0] && files[0].ext) || '').toLowerCase();
+  if (files.some((f) => String(f.ext || '').toLowerCase() !== ext0)) {
+    toast(t('files.mergeMixedExt'), 'warn');
+    return;
+  }
+
+  openDialog({
+    title: t('files.mergeTitle'),
+    body: `<div style="font-size:13px;line-height:1.9;color:var(--txt-2)">${t('files.mergeText', ordered.length - 1, esc(files[0].name || t('files.thatFile')))}</div>`,
+    footer: (close) => {
+      const b1 = el('button', 'btn ghost', t('common.cancel'));
+      const b2 = el('button', 'btn primary', t('files.mergeKeep'));
+      const b3 = el('button', 'btn danger', t('files.mergeDeleteSource'));
+      b1.onclick = close;
+      b2.onclick = () => { close(); void runMerge(ordered, false, ctx); };
+      b3.onclick = () => { close(); void runMerge(ordered, true, ctx); };
+      return [b1, b2, b3];
+    },
+  });
+}
+
+async function runMerge(ids, deleteSources, ctx) {
+  try {
+    const r = await api.filesMergeSelected(ids, deleteSources);
+    const name = (r && r.item && r.item.name) || '';
+    toast(t('files.mergedDone') + (name ? `：${name}` : ''));
+    if (deleteSources) ids.slice(1).forEach((id) => state.picked.delete(id)); // 被追加源已移除
+    state.hash = '';
+    await tick(ctx, true);
+  } catch (e) { toast(e.message || t('files.mergeFailed'), 'err'); }
 }

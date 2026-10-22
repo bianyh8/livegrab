@@ -1632,6 +1632,16 @@ function testViewGuards() {
   ok(/function bindRows\s*\(/.test(filesSrc) && /bindRows\(ctx\)/.test(filesSrc), '局部重绘后重绑行内按钮（换数据不换操作）');
   ok(/function syncPickedBar\s*\(/.test(filesSrc), '勾选计数单独同步（勾选不整表重绘）');
 
+  /* 勾选合并（用户要「删除所选」旁加合并，按列表顺序追加到第一个文件、沿用第一个文件名）：
+     按钮紧挨删除所选且 <2 项禁用；弹框两动作「合并 / 合并后删除源文件」；
+     顺序必须取列表展示顺序（fetchAllRows），不能用勾选顺序（勾选先后不代表播放顺序）。 */
+  ok(/id="flDelPicked"[\s\S]{0,200}?id="flMergePicked"/.test(filesSrc), '「合并」按钮紧挨「删除所选」其后');
+  ok(/state\.picked\.size >= 2/.test(filesSrc) && /#flMergePicked/.test(filesSrc) && /mg\.disabled = state\.picked\.size < 2/.test(filesSrc), '合并按钮 <2 项禁用（syncPickedBar 同步）');
+  ok(/function mergeFiles\s*\(/.test(filesSrc) && /filesMergeSelected/.test(filesSrc), '合并走 filesMergeSelected API');
+  ok(/fetchAllRows\(\)/.test(filesSrc) && /state\.picked\.has\(f\.id\)/.test(filesSrc), '合并顺序取列表展示顺序（不是勾选顺序）');
+  ok(/files\.mergeKeep/.test(filesSrc) && /files\.mergeDeleteSource/.test(filesSrc), '弹框提供「合并」与「合并后删除源文件」两个动作');
+  ok(/deleteSources/.test(filesSrc), '合并后删除源文件作为显式选项传后端');
+
   /* 播放器进度条（用户报「只能点击、不能拖动」）：必须 Pointer Events +
      setPointerCapture，不得退回 onclick；拖动中只回绘预览、松手才写 currentTime；
      横屏时舞台被 rotate(90deg)，seek 方向必须实时读舞台矩阵（不得硬编码 false）。 */
@@ -1905,12 +1915,140 @@ async function testMergeDeleteSource() {
   ok((await exists(pathsE[0])) && (await exists(pathsE[1])), '合并产物缺失 → 原始散段必须保留（安全闸兜底）');
 }
 
+// ============ 文件库勾选合并（mergePicked，用户要求：按顺序追加到第一个文件、沿用第一个文件名） ============
+async function testMergePicked() {
+  suite('文件库勾选合并（mergePicked）');
+  const logger = { debug() {}, info() {}, warn() {}, error() {} };
+  const exists = async (pp) => !!(await fsp.stat(pp).catch(() => null));
+
+  // 与 testMergeDeleteSource 同思路：不碰真 ffmpeg，runFfmpeg 按 concat 清单把源文件内容
+  // 依序拼到输出 —— 既能验证「追加顺序 = 传入顺序」，也能验证失败路径不动源文件。
+  const ConcatMedia = {
+    fail: false,
+    buildConcatList(list) { return list.map((x) => `file '${x}'`).join('\n'); },
+    buildMergeArgs({ listFile, output }) { return ['-y', '-f', 'concat', '-i', listFile, '-c', 'copy', output]; },
+    async runFfmpeg({ args }) {
+      if (ConcatMedia.fail) return { code: 1 };
+      const listFile = args[args.indexOf('-i') + 1];
+      const out = args[args.length - 1];
+      const txt = await fsp.readFile(listFile, 'utf8');
+      const parts = [];
+      for (const line of txt.split('\n')) {
+        const m = line.match(/^file '(.+)'$/);
+        if (m) parts.push(await fsp.readFile(m[1]));
+      }
+      await fsp.mkdir(path.dirname(out), { recursive: true });
+      await fsp.writeFile(out, Buffer.concat(parts));
+      return { code: 0 };
+    },
+    async probeJson() { return null; },
+  };
+
+  async function makePickSession(store, id, files, { recording = false } = {}) {
+    const dir = p('merge-pick', id);
+    await fsp.mkdir(dir, { recursive: true });
+    const segs = [];
+    for (let i = 0; i < files.length; i++) {
+      const fp = path.join(dir, files[i].name);
+      await fsp.writeFile(fp, Buffer.from(files[i].body));
+      segs.push({
+        id: `${id}_f${i}`, sessionId: id, kind: 'segment', name: files[i].name, path: fp,
+        relPath: files[i].name, ext: path.extname(files[i].name).replace('.', '').toLowerCase(),
+        bytes: Buffer.byteLength(files[i].body), durationSec: 5, status: 'ok', segmentIndex: i + 1,
+      });
+    }
+    const session = {
+      id, taskId: 'task_' + id, platform: 'douyin', platformName: '抖音', streamer: '主播A',
+      title: '', roomId: 'r', startedAt: '2026-01-01T00:00:00Z', quality: '原画', durationSec: 15,
+      status: recording ? 'recording' : 'completed',
+      segments: segs, extras: [], merged: null, mp4: null,
+      bytes: segs.reduce((a, b) => a + b.bytes, 0),
+    };
+    store.sessions.push(session);
+    await store.saveSession(session);
+    return session;
+  }
+
+  const errCode = async (fn) => {
+    try { await fn(); return null; } catch (e) { return e.code || e.message; }
+  };
+
+  // Case A：顺序 = 传入顺序（列表序），结果沿用第一个文件名/记录；不删源
+  const storeA = await openStore(p('merge-pick-a'));
+  const sessA = await makePickSession(storeA, 'A', [
+    { name: 'ep1.ts', body: 'AAA' }, { name: 'ep2.ts', body: 'BBB' }, { name: 'ep3.ts', body: 'CCC' },
+  ]);
+  const storageA = new Storage({ store: storeA, logger, mediaMod: ConcatMedia });
+  const idsA = sessA.segments.map((s) => s.id);
+  const rA = await storageA.mergePicked(idsA, { deleteSources: false });
+  eq(rA.item.name, 'ep1.ts', '结果沿用第一个文件的名称');
+  eq(rA.item.id, idsA[0], '第一个文件记录 id 不变（会话指针不失效）');
+  eq(rA.merged, 3, '共合并 3 个文件');
+  eq(rA.deletedSources, 0, '未选删源 → 不删除任何源文件');
+  eq(await fsp.readFile(sessA.segments[0].path, 'utf8'), 'AAABBBCCC', '内容按顺序追加：1 的内容 + 2 + 3');
+  ok((await exists(sessA.segments[1].path)) && (await exists(sessA.segments[2].path)), '保留源文件模式：被追加源仍在磁盘');
+  eq(sessA.segments.length, 3, '登记不减员');
+  eq(sessA.segments[0].bytes, 9, '第一个文件字节数更新为合并后大小');
+  const dirA = path.dirname(sessA.segments[0].path);
+  const residueA = (await fsp.readdir(dirA)).filter((n) => n.startsWith('.merge_') || n.startsWith('.concat_'));
+  eq(residueA.length, 0, '临时文件全部清理（无 .merge_*/.concat_* 残留）');
+
+  // Case B：顺序按传入顺序（反着传就反着拼）——钉死「顺序=列表顺序由调用方排好」契约
+  const storeB0 = await openStore(p('merge-pick-order'));
+  const sessB0 = await makePickSession(storeB0, 'B0', [
+    { name: 'o1.ts', body: '1' }, { name: 'o2.ts', body: '2' }, { name: 'o3.ts', body: '3' },
+  ]);
+  const storageB0 = new Storage({ store: storeB0, logger, mediaMod: ConcatMedia });
+  await storageB0.mergePicked([sessB0.segments[2].id, sessB0.segments[0].id, sessB0.segments[1].id]);
+  eq(await fsp.readFile(sessB0.segments[2].path, 'utf8'), '312', '合并顺序严格按传入顺序（首项为基准文件）');
+
+  // Case C：合并后删除源文件 → 被追加源走回收站、登记清理
+  const storeC = await openStore(p('merge-pick-c'));
+  storeC.settings.recordRoot = p('merge-pick-c'); // moveToTrash 的回收站挂在 recordRoot/.trash
+  await storeC.updateSettings({ deleteToTrash: true, trashRetentionDays: 7 });
+  const sessC = await makePickSession(storeC, 'C', [
+    { name: 'c1.ts', body: '111' }, { name: 'c2.ts', body: '222' }, { name: 'c3.ts', body: '333' },
+  ]);
+  const storageC = new Storage({ store: storeC, logger, mediaMod: ConcatMedia });
+  const idsC = sessC.segments.map((s) => s.id);
+  const rC = await storageC.mergePicked(idsC, { deleteSources: true });
+  eq(await fsp.readFile(sessC.segments[0].path, 'utf8'), '111222333', '合并内容正确（删除源模式同样先合后删）');
+  ok(!(await exists(p('merge-pick', 'C', 'c2.ts'))) && !(await exists(p('merge-pick', 'C', 'c3.ts'))), '合并后删除源文件：第 2 个起已移出磁盘');
+  eq(sessC.segments.length, 1, '登记只剩第一个文件');
+  ok(rC.deletedSources >= 2, '返回已删源数量', String(rC.deletedSources));
+  ok((storeC.trash || []).length >= 2, '被追加源进了回收站（可还原）');
+
+  // Case D：失败路径 —— 第一个文件原样、源一个不动、deleteSources 也不删
+  const storeD = await openStore(p('merge-pick-d'));
+  const sessD = await makePickSession(storeD, 'D', [
+    { name: 'd1.ts', body: 'XX' }, { name: 'd2.ts', body: 'YY' },
+  ]);
+  const storageD = new Storage({ store: storeD, logger, mediaMod: { ...ConcatMedia, fail: true, async runFfmpeg() { return { code: 1 }; } } });
+  eq(await errCode(() => storageD.mergePicked([sessD.segments[0].id, sessD.segments[1].id], { deleteSources: true })), 'MERGE_FAILED', '合并失败抛 MERGE_FAILED');
+  eq(await fsp.readFile(sessD.segments[0].path, 'utf8'), 'XX', '失败后第一个文件内容原样（从未被替换）');
+  ok(await exists(sessD.segments[1].path), '失败后源文件保留（即使勾了删源）');
+  eq(sessD.segments.length, 2, '失败不改登记');
+
+  // Case E：入参校验（数量/重复/格式/存在性/录制中）
+  const storeE = await openStore(p('merge-pick-e'));
+  const sessE = await makePickSession(storeE, 'E', [
+    { name: 'e1.ts', body: 'a' }, { name: 'e2.mp4', body: 'b' }, { name: 'e3.ts', body: 'c' },
+  ]);
+  const storageE = new Storage({ store: storeE, logger, mediaMod: ConcatMedia });
+  eq(await errCode(() => storageE.mergePicked([sessE.segments[0].id])), 'NOT_ENOUGH', '1 个文件不能合并');
+  eq(await errCode(() => storageE.mergePicked([sessE.segments[0].id, sessE.segments[0].id])), 'BAD_REQUEST', '重复文件拒绝');
+  eq(await errCode(() => storageE.mergePicked([sessE.segments[0].id, sessE.segments[1].id])), 'BAD_FORMAT', '不同格式拒绝（concat -c copy 不混容器）');
+  eq(await errCode(() => storageE.mergePicked(['nope', sessE.segments[0].id])), 'NOT_FOUND', '文件不存在');
+  const sessR = await makePickSession(storeE, 'R', [{ name: 'r1.ts', body: 'a' }, { name: 'r2.ts', body: 'b' }], { recording: true });
+  eq(await errCode(() => storageE.mergePicked([sessR.segments[0].id, sessR.segments[1].id])), 'FILE_RECORDING', '录制中的文件拒绝合并（与删除同闸门）');
+}
+
 // ============ 主流程 ============
 (async () => {
   console.log(`LiveGrab 测试开始（临时目录 ${tmpRoot}）`);
   await rmrf(tmpRoot);
   await fsp.mkdir(tmpRoot, { recursive: true });
-  const suites = [testUtil, testNaming, testStore, testResolvers, testAuth, testRecordChain, testRemuxFollowGlobal, testPullBlockedBackoff, testConcurrentStart, testRepeatSessionNaming, testTodayStats, testQueue, testHttp, testViewGuards, testUpdateGuards, testProxy, testSegmentEndReason, testSegmentGuards, testFfmpegGuards, testFileScanGuards, testFileOrder, testRecorderLiveProxy, testStreamCandidates, testQualityFallbackBySetting, testResolveStreamPrecheck, testIsLiveFromResolve, testNoDoubleFallback, testOfflineConfirm, testAuditConsistency, testAuditRemainder, testDeadCodeRemainder, testMergeOnStopAndDeleteCount, testMergeDeleteSource];
+  const suites = [testUtil, testNaming, testStore, testResolvers, testAuth, testRecordChain, testRemuxFollowGlobal, testPullBlockedBackoff, testConcurrentStart, testRepeatSessionNaming, testTodayStats, testQueue, testHttp, testViewGuards, testUpdateGuards, testProxy, testSegmentEndReason, testSegmentGuards, testFfmpegGuards, testFileScanGuards, testFileOrder, testRecorderLiveProxy, testStreamCandidates, testQualityFallbackBySetting, testResolveStreamPrecheck, testIsLiveFromResolve, testNoDoubleFallback, testOfflineConfirm, testAuditConsistency, testAuditRemainder, testDeadCodeRemainder, testMergeOnStopAndDeleteCount, testMergeDeleteSource, testMergePicked];
   for (const s of suites) {
     try { await s(); } catch (e) {
       failed++;

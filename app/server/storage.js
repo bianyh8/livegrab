@@ -831,6 +831,107 @@ export class Storage {
     }
   }
 
+  /** 文件库勾选合并：按传入顺序把第 2 个起的内容追加到第一个文件，结果沿用第一个文件的
+   *  名称/路径/记录（用户语义：勾 1,2,3 → 2、3 依次接到 1 后面，名字还是 1）。
+   *  顺序由调用方按列表展示顺序排好再传入；这里不做重排。
+   *  安全闸：先写同目录临时文件，成功后才原子替换第一个文件；任一步失败源文件一个不动。
+   *  deleteSources=true 时，被追加的源文件（第 2 个起）走 moveToTrash（与删除同回收站策略）。 */
+  async mergePicked(fileIds, { deleteSources = false } = {}) {
+    const ids = (Array.isArray(fileIds) ? fileIds : []).map(String).filter(Boolean);
+    if (ids.length < 2) throw new HttpError('NOT_ENOUGH', '至少需要 2 个文件才能合并', 400);
+    if (new Set(ids).size !== ids.length) throw new HttpError('BAD_REQUEST', '合并列表存在重复文件', 400);
+
+    const hits = [];
+    for (const id of ids) {
+      const hit = this.store.findFile(id);
+      if (!hit || !hit.file || !hit.file.path) throw new HttpError('NOT_FOUND', '文件不存在', 404);
+      if (hit.session && hit.session.status === 'recording') {
+        throw new HttpError('FILE_RECORDING', '该文件所属场次正在录制，请先停止录制再合并', 409);
+      }
+      const st = await fsp.stat(hit.file.path).catch(() => null);
+      if (!st || !st.size) throw new HttpError('FILE_MISSING', `文件缺失或为空：${hit.file.name}`, 400);
+      hits.push(hit);
+    }
+
+    // concat -c copy 要求同编码容器：按扩展名做一致校验（不同容器直接拒绝，不静默出坏文件）
+    const ext0 = String(hits[0].file.ext || path.extname(hits[0].file.path).replace('.', '') || '').toLowerCase();
+    for (const { file } of hits) {
+      const e = String(file.ext || path.extname(file.path).replace('.', '') || '').toLowerCase();
+      if (e !== ext0) throw new HttpError('BAD_FORMAT', '仅支持合并相同格式的文件', 400);
+    }
+
+    const first = hits[0].file;
+    const dir = path.dirname(first.path);
+    const token = uid('m');
+    const listFile = path.join(dir, `.concat_pick_${token}.txt`);
+    const tmpOut = path.join(dir, `.merge_tmp_${token}.${ext0 || 'ts'}`);
+    const bakPath = path.join(dir, `.merge_bak_${token}${path.extname(first.path)}`);
+    const job = this._jobStart(`合并 ${hits.length} 个文件`);
+
+    try {
+      await fsp.writeFile(listFile, this.media.buildConcatList(hits.map((h) => h.file.path)), 'utf8');
+      const { code } = await this.media.runFfmpeg({
+        args: this.media.buildMergeArgs({ listFile, output: tmpOut }),
+        onStderr: (l) => this.logger.debug(`[merge-picked] ${l}`),
+      });
+      await fsp.rm(listFile, { force: true }).catch(() => {});
+      if (code !== 0) throw new Error(`ffmpeg exit=${code}`);
+      const st = await fsp.stat(tmpOut).catch(() => null);
+      if (!st || st.size <= 0) throw new Error('合并产物为空');
+
+      // 原子替换：第一个文件先挪到备份名，临时产物再挪到第一个文件原位；
+      // 第二步失败立刻回滚备份 —— 任何时刻第一个文件要么是原内容、要么是完整合并产物。
+      await fsp.rename(first.path, bakPath).catch(async () => {
+        await fsp.copyFile(first.path, bakPath);
+        await fsp.rm(first.path, { force: true });
+      });
+      try {
+        await fsp.rename(tmpOut, first.path);
+      } catch (e) {
+        await fsp.rename(bakPath, first.path).catch(() => {});
+        throw e;
+      }
+      await fsp.rm(bakPath, { force: true }).catch(() => {});
+
+      const probe = await this.media.probeJson(first.path).catch(() => null);
+      first.bytes = st.size;
+      if (probe && Number(probe.durationSec) > 0) first.durationSec = Number(probe.durationSec);
+      else first.durationSec = hits.reduce((a, h) => a + (Number(h.file.durationSec) || 0), 0);
+      if (probe) {
+        first.width = probe.width || first.width || 0;
+        first.height = probe.height || first.height || 0;
+      }
+      first.status = 'ok';
+
+      const touched = new Set();
+      for (const { session } of hits) {
+        if (session && !touched.has(session.id)) { touched.add(session.id); await this._recalcSession(session); }
+      }
+      await this.store.persist();
+      this.logger.info(`勾选合并完成：${first.name}（${formatBytes(st.size)}，${hits.length} 个文件）`);
+      this._jobDone(job, { fileId: first.id, name: first.name });
+
+      let deletedSources = 0;
+      if (deleteSources) {
+        // 追加源（第 2 个起）合并成功后才清理；失败路径已在上面整体回退，绝不误删唯一副本
+        const r = await this.moveToTrash({ fileIds: ids.slice(1) });
+        deletedSources = Number(r && r.movedToTrash) || 0;
+      }
+      this.onEvent({ type: 'files' });
+      return { item: first, merged: hits.length, deletedSources };
+    } catch (e) {
+      await fsp.rm(listFile, { force: true }).catch(() => {});
+      await fsp.rm(tmpOut, { force: true }).catch(() => {});
+      // 替换流程中断的兜底：第一个文件不在原位时把备份挪回去
+      const origGone = !(await fsp.stat(first.path).catch(() => null));
+      if (origGone) await fsp.rename(bakPath, first.path).catch(() => {});
+      else await fsp.rm(bakPath, { force: true }).catch(() => {});
+      this.logger.error(`勾选合并失败：${errText(e)}`);
+      this._jobFail(job, e.message);
+      throw e instanceof HttpError ? e : new HttpError('MERGE_FAILED', `合并失败：${e.message}`, 500);
+    }
+  }
+
   /** 录制收尾后的自动转封装 / 合并（D5）：
    *  - mergeOnStop=true：无论是否转 MP4，先把整场分段合并为一个文件（让「停止时合并整场」真正生效）；
    *  - autoMerge=true 且 remuxToMp4=true：转 MP4 前先整场合并（避免一堆散文件）。

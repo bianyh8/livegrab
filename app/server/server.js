@@ -496,6 +496,15 @@ async function main() {
     const item = await storage.mergeSession(body.sessionId);
     return fileView(item);
   });
+  // 文件库勾选合并：按传入顺序追加到第一个文件，结果沿用第一个文件名
+  route('POST', '/api/files/merge-picked', async (req) => {
+    const body = await readBody(req);
+    const fileIds = Array.isArray(body.fileIds) ? body.fileIds : [];
+    const deleteSources = body.deleteSources === true || body.deleteSources === 'true';
+    logger.info(`勾选合并 ${fileIds.length} 个文件${deleteSources ? '（合并后删除源文件）' : ''}`);
+    const r = await storage.mergePicked(fileIds, { deleteSources });
+    return { ...r, item: fileView(r.item) };
+  });
   route('POST', '/api/files/:id/remux', async (req) => {
     const body = await readBody(req).catch(() => ({}));
     logger.info(`转封装文件：${req.params.id} → ${body.kind || 'mp4'}`);
