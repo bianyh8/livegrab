@@ -483,7 +483,13 @@ td .sub{font-size:11.5px;color:var(--txt-3);margin-top:3px}
    空处相当：列间距统一 18px，多出来的宽度全给搜索框（flex:1），
    于是各处空隙一样宽，多余的空白不会堆在「清除条件」前面；换行时保持左对齐、不留空洞。 */
 .fl-filter{padding:10px 32px 8px 16px;flex-wrap:wrap;border-bottom:0;justify-content:flex-start;row-gap:10px;column-gap:18px}
-.fl-filter #flQ{flex:1 1 320px;min-width:200px}
+/* 搜索框：基准窄（160px），多余宽度先给它吸收、最多 420px。
+   基准决定换行点——flex-wrap 按基准算行宽、先换行再收缩，所以原来 320px 的基准
+   要 ~1024px 宽的卡片才放得下整行，窄一点「清除条件」就掉到第二行；降到 160px 后
+   880px 以上卡片都是一行（实测 1002px 卡片：搜索框 296px，其余间隙全 18px）。
+   搜索框触到 420px 上限、行里还剩空白时，才由 #flClear 的 margin-left:auto 把按钮钉在行尾。 */
+.fl-filter #flQ{flex:1 1 160px;min-width:140px;max-width:420px}
+.fl-filter #flClear{margin-left:auto}
 .fl-selall{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--txt-2);cursor:pointer;user-select:none}
 /* 「已选中 N 项」与批量按钮之间的竖线：把状态和动作分成两组，不用留白分隔 */
 .fl-div{flex:0 0 auto;width:1px;height:18px;background:var(--line-2)}

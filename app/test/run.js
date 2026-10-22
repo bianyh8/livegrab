@@ -1862,25 +1862,30 @@ function testViewGuards() {
   ok(iClearBtn > 0 && iSelBar > iClearBtn && iSelAll > iSelBar, '「全选」在筛选条件下方那一行');
   ok(/class="fl-selbar"[\s\S]{0,600}?id="flSelAll"[\s\S]{0,300}?id="flPickChip"[\s\S]{0,300}?id="flDelPicked"[\s\S]{0,200}?id="flMergePicked"[\s\S]{0,200}?id="flScan"/.test(filesSrc), '第二行顺序 = 全选 → 已选中 → 删除文件 → 合并文件 → 扫描磁盘');
   ok(zhJson['files.deleteSelected'] === '删除文件' && zhJson['files.mergeFileBtn'] === '合并文件', '勾选栏按钮文案 = 删除文件 / 合并文件');
-  ok(/\.fl-filter #flQ\{flex:1 1 320px/.test(cssSrc), '搜索框基准 320px 且吃掉多余宽度（flex:1）');
+  /* 搜索框基准必须窄：flex-basis 决定换行点（flex-wrap 按基准算行宽，先换行再收缩），
+     320px 基准要 ~1024px 宽的卡片才放得下整行，窄一点「清除条件」就被挤到第二行。
+     140px 最小宽 / 420px 上限：太窄只剩图标、太宽又会把整行顶开。 */
+  ok(/\.fl-filter #flQ\{flex:1 1 160px;min-width:140px;max-width:420px\}/.test(cssSrc), '搜索框基准 160px（可伸缩，最小 140、上限 420），整行在 880px 宽卡片以上不换行');
   /* 筛选行顺序 = 搜索 → 平台 → 类型 → 时间 → 清除条件，且全部左排（不再用 spacer 把「清除」顶到最右） */
   const iQ = filesSrc.indexOf('id="flQ"');
   const iPlat = filesSrc.indexOf('id="flPlat"');
   const iExt = filesSrc.indexOf('id="flExt"');
   const iRange = filesSrc.indexOf('class="fl-range"');
   ok(iQ > 0 && iPlat > iQ && iExt > iPlat && iRange > iExt && iClearBtn > iRange, '筛选行顺序 = 搜索 → 平台 → 类型 → 时间 → 清除条件');
-  ok(!/id="flExt"[\s\S]{0,300}?<div class="spacer"><\/div>[\s\S]{0,200}?id="flClear"/.test(filesSrc), '「清除条件」前不塞 spacer（靠 space-between 均分空隙，见下条）');
+  ok(!/id="flExt"[\s\S]{0,300}?<div class="spacer"><\/div>[\s\S]{0,200}?id="flClear"/.test(filesSrc), '「清除条件」前不塞 spacer（余宽由搜索框吸收，见下条）');
   ok(zhJson['files.clearFilters'] === '清除条件' && /t\('files\.clearFilters'\)/.test(filesSrc), '清除按钮文案 = 清除条件（不与其他「清除」复用同一 key）');
   /* 起止日期合进同一个外壳：视觉上一个控件，中间「至」两侧有竖线分隔 */
   ok(/<div class="fl-range">[\s\S]{0,400}?id="flDateFrom"[\s\S]{0,200}?fl-range-sep[\s\S]{0,200}?id="flDateTo"/.test(filesSrc), '起止日期合进同一个外壳（fl-range + 「至」分隔）');
   ok(/\.fl-range\{[^}]*display:inline-flex/.test(cssSrc) && /\.fl-range-in\{[^}]*border:0/.test(cssSrc), '日期区间外壳有独立边框，内部两个 date 输入去掉原生边框');
   /* 选完开始日期无条件覆盖结束日期（用户明确：不要「只在为空/早于开始时补」那套判断） */
   ok(/if \(dateTo && state\.dateFrom\) \{[\s\S]{0,120}?dateTo\.value = state\.dateFrom/.test(filesSrc) && !/dateTo\.value < state\.dateFrom/.test(filesSrc), '录入开始日期后无条件覆盖结束日期（不保留原区间）');
-  /* 筛选行右内边距 32px（= #flBody 16 + .fl-item 16）+ justify-content:space-between：
-     控件之间空隙均分（用户要求「空处相当」），且「清除条件」右边缘仍与行内「删除」按钮竖线对齐。 */
+  /* 筛选行右内边距 32px（= #flBody 16 + .fl-item 16）+ 列间距 18px：
+     控件之间空隙恒为 18px（用户要求「空处相当」），「清除条件」右边缘与行内「删除」按钮竖线对齐。
+     #flClear 的 margin-left:auto 只兜底「搜索框触到 420px 上限、行里还剩空白」的超宽屏情形，
+     那时把按钮钉在行尾，而不是让空白留在右边。 */
   ok(/class="toolbar fl-filter"/.test(filesSrc) && /\.fl-filter\{[^}]*padding:10px 32px 8px 16px/.test(cssSrc), '筛选行右内边距 32px（「清除条件」与行内「删除」按钮右边缘对齐）');
   ok(/\.fl-filter\{[^}]*column-gap:18px/.test(cssSrc), '筛选行列间距统一 18px（各处空处相当）');
-  ok(!/#flClear\{margin-left:auto\}/.test(cssSrc), '不再用 margin-left:auto 单独顶开「清除条件」（余宽由搜索框吸收）');
+  ok(/\.fl-filter #flClear\{margin-left:auto\}/.test(cssSrc), '超宽屏搜索框触到上限后，余宽由 margin-left:auto 推走，「清除条件」仍贴行尾');
   ok(/class="btn sm danger" id="flDelPicked"/.test(filesSrc) && /class="btn sm ok" id="flMergePicked"/.test(filesSrc) && /class="btn sm ok" id="flScan"/.test(filesSrc), '删除文件 = 危险色，合并文件 / 扫描磁盘 = 绿色');
   /* 勾选栏：左边「全选 + 已选中 N 项」，spacer 之后是「竖线 + 三个批量按钮」，
      按钮组右对齐；右内边距 32px 让「扫描磁盘」右边缘与行内「删除」按钮对齐。 */
