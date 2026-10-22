@@ -1216,7 +1216,11 @@ async function testRepeatSessionNaming() {
   if (!ok1) return;
   const s1 = e.store.sessions[0];
   const firstSeg = s1.segments[0].path;
-  // 造一个"已被占用的 _2 基名分段"（模拟上一场遗留：基名 + _2 + 001.ts）
+  // 上一场先正常收尾（真实时序：新一场开录时上一场已结束），避免两场同时扫描同一目录
+  await e.scheduler.stopTask(t1.id).catch(() => {});
+  await waitFor(() => e.store.getTask(t1.id).status === 'stopped', 8000, '第一场收尾完成');
+  await sleep(300);
+  // 造一个"已被占用的 _2 基名分段"（模拟旧版重名拼法遗留：基名 + _2 + 001.ts）
   const decoy = path.join(path.dirname(firstSeg), `${path.basename(firstSeg).replace(/\.ts$/, '')}_2001.ts`);
   await fsp.writeFile(decoy, Buffer.alloc(4096, 7));
   const decoySize = fs.statSync(decoy).size;
@@ -1231,7 +1235,35 @@ async function testRepeatSessionNaming() {
   const seg2 = (s2?.segments || [])[0]?.path;
   ok(seg2 && seg2 !== decoy, '第二场选了不同的分段文件名', seg2 ? path.basename(seg2) : '无分段');
   ok(seg2 && path.basename(seg2) !== path.basename(firstSeg), '第二场分段与第一场分段不同名');
+  await e.scheduler.stopTask(t2.id).catch(() => {});
+  await sleep(300);
+}
+
+// ============ 4c-2. 同主播同日重复录制：分段序号续排（不拼出 _001_2001） ============
+async function testRepeatSessionSeqContinuation() {
+  suite('同主播同日重复录制：分段序号续排（不再出现 _001_2001 拼接名）');
+  const e = await makeEngine('seqcont', { FAKE_SEGMENT_MS: '200', FAKE_SEGMENTS_TOTAL: '2', FAKE_SEGMENT_MB: '0.1', FAKE_DURATION: '5' });
+  const t1 = await e.scheduler.createTask({ url: 'https://example.com/seq1.m3u8', platform: 'direct', anchorName: '续排主播' });
+  await e.scheduler.tick();
+  await waitFor(() => (e.store.sessions[0]?.segments?.length || 0) >= 1, 8000, '第一场产生分段');
   await e.scheduler.stopTask(t1.id).catch(() => {});
+  await waitFor(() => e.store.getTask(t1.id).status === 'stopped', 8000, '第一场收尾');
+  await sleep(300);
+
+  const s1 = e.store.sessions[0];
+  const used = (s1?.segments || []).length;
+  const seqOf = (p) => Number((String(path.basename(p || '')).match(/_(\d+)\.ts$/) || [])[1] || 0);
+  ok(used >= 1, '第一场已落盘分段', `segments=${used}`);
+
+  const t2 = await e.scheduler.createTask({ url: 'https://example.com/seq2.m3u8', platform: 'direct', anchorName: '续排主播' });
+  await e.scheduler.tick();
+  const s2 = e.store.sessions.find((s) => s.taskId === t2.id);
+  await waitFor(() => (s2?.segments?.length || 0) >= 1, 8000, '第二场产生分段');
+  const seg2 = (s2?.segments || [])[0];
+  ok(seg2 && seqOf(seg2.path) === used + 1, `第二场首段序号接续第一场（期望 ${used + 1}，实际 ${seg2 ? seqOf(seg2.path) : '无'}）`, seg2 ? path.basename(seg2.path) : '无分段');
+  const names2 = (s2?.segments || []).map((x) => path.basename(x.path));
+  ok(names2.every((n) => !/_\d{3}_\d{4,}\.ts$/.test(n)), '第二场分段名不出现「段号+重名计数」拼接（…_001_2001.ts）', names2.join(' | '));
+  ok(!names2.some((n) => (s1?.segments || []).some((x) => path.basename(x.path) === n)), '两场分段文件名互不相同');
   await e.scheduler.stopTask(t2.id).catch(() => {});
   await sleep(300);
 }
@@ -2109,7 +2141,7 @@ async function testMergePicked() {
   console.log(`LiveGrab 测试开始（临时目录 ${tmpRoot}）`);
   await rmrf(tmpRoot);
   await fsp.mkdir(tmpRoot, { recursive: true });
-  const suites = [testUtil, testNaming, testStore, testResolvers, testAuth, testRecordChain, testRemuxFollowGlobal, testPullBlockedBackoff, testConcurrentStart, testRepeatSessionNaming, testTodayStats, testQueue, testHttp, testViewGuards, testUpdateGuards, testProxy, testSegmentEndReason, testSegmentGuards, testFfmpegGuards, testFileScanGuards, testFileOrder, testRecorderLiveProxy, testStreamCandidates, testQualityFallbackBySetting, testResolveStreamPrecheck, testIsLiveFromResolve, testNoDoubleFallback, testOfflineConfirm, testAuditConsistency, testAuditRemainder, testDeadCodeRemainder, testMergeOnStopAndDeleteCount, testMergeDeleteSource, testMergePicked];
+  const suites = [testUtil, testNaming, testStore, testResolvers, testAuth, testRecordChain, testRemuxFollowGlobal, testPullBlockedBackoff, testConcurrentStart, testRepeatSessionNaming, testRepeatSessionSeqContinuation, testTodayStats, testQueue, testHttp, testViewGuards, testUpdateGuards, testProxy, testSegmentEndReason, testSegmentGuards, testFfmpegGuards, testFileScanGuards, testFileOrder, testRecorderLiveProxy, testStreamCandidates, testQualityFallbackBySetting, testResolveStreamPrecheck, testIsLiveFromResolve, testNoDoubleFallback, testOfflineConfirm, testAuditConsistency, testAuditRemainder, testDeadCodeRemainder, testMergeOnStopAndDeleteCount, testMergeDeleteSource, testMergePicked];
   for (const s of suites) {
     try { await s(); } catch (e) {
       failed++;

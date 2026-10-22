@@ -65,6 +65,7 @@ export class Recorder extends EventEmitter {
     this.audioOnly = task.quality === 'audio';
     this.ext = this.audioOnly ? 'm4a' : media.extOfContainer(task.container || 'ts');
     this.startNumber = 1;
+    this._priorEntries = null; // 序号续排时记下本场开始前目录里已有的文件名（排除上一场遗留）
     this.closed = new Set();
     this.reconnectAttempt = 0;
     this.streamCandidates = []; // 流地址候选阶梯（跨表示降级）：[{ url, proto, key, heuristic }]
@@ -154,7 +155,7 @@ export class Recorder extends EventEmitter {
     this.resolution = stream.resolution || '';
     this.qualityLabelText = qualityLabel(this.qualityActual);
 
-    if (!this.dir) await this._prepareOutput(startNumber);
+    if (!this.dir) startNumber = await this._prepareOutput(startNumber);
     this.startNumber = startNumber;
     await this._spawn(startNumber);
     if (!this.startedAt) this.startedAt = new Date();
@@ -204,24 +205,54 @@ export class Recorder extends EventEmitter {
     try { dirEntries = await fsp.readdir(absDir); } catch { dirEntries = []; }
     const stemOf = (p) => path.basename(p).replace(new RegExp(`\\.${this.ext.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`), '');
     const taken = (p) => dirEntries.some((n) => n === path.basename(p) || n.startsWith(stemOf(p)));
+    const strategy = profile.options?.dupStrategy || 'suffix';
+    // 同一基名前缀下可能已有上一场/后一场的文件（序号续排后各场共用前缀，双向都会误认）：
+    // 记下此刻的目录快照，扫描时排除，避免把别的场次的分段登记进本场。
+    // overwrite 策略是显式复用同名文件，不能排除。
+    if (!this.singleFile && strategy !== 'overwrite') this._priorEntries = new Set(dirEntries);
     if (taken(first)) {
-      const strategy = profile.options?.dupStrategy || 'suffix';
-      const unique = reserveName(first, taken, strategy);
-      const newBase = path.basename(unique).replace(new RegExp(`\\.${this.ext}$`), '');
-      if (this.singleFile) {
-        this.baseName = newBase;
-        this.outputName = `${newBase}.${this.ext}`;
-        this.filePrefix = newBase;
+      const cont = (!this.singleFile && strategy === 'suffix')
+        ? this._nextFreeSeq({ startNumber, digits, taken, absDir, outputName: this.outputName })
+        : null;
+      if (cont) {
+        // 分段模式重名：序号续排（…_001 → …_002 → …_003），与命名配置预览承诺的
+        // 「同一直播间分段按名称自然排序连续」一致。
+        // 旧实现把重名计数拼到已渲染的段号之后（…_001 + _2 + %03d → …_001_2001.ts），
+        // 既不可读，也没有任何对应的配置项。
+        startNumber = cont.seq;
+        this.startNumber = cont.seq;
+        this.ctx.vars['{序号}'] = seqText(cont.seq, digits);
+        this.logger.info(`目标文件已存在，分段序号续排：本场从第 ${cont.seq} 段（${path.basename(cont.file)}）开始`, this._meta());
       } else {
-        this.baseName = `${newBase.replace(new RegExp(seqText(startNumber, digits).replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '$'), '')}%0${digits}d`;
-        this.outputName = `${this.baseName}.${this.ext}`;
-        const i = this.baseName.indexOf('%0');
-        this.filePrefix = i >= 0 ? this.baseName.slice(0, i) : this.baseName;
-        this.fileSuffix = i >= 0 ? this.baseName.slice(i + 4) : '';
+        const unique = reserveName(first, taken, strategy);
+        const newBase = path.basename(unique).replace(new RegExp(`\\.${this.ext}$`), '');
+        if (this.singleFile) {
+          this.baseName = newBase;
+          this.outputName = `${newBase}.${this.ext}`;
+          this.filePrefix = newBase;
+        } else {
+          this.baseName = `${newBase.replace(new RegExp(seqText(startNumber, digits).replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '$'), '')}%0${digits}d`;
+          this.outputName = `${this.baseName}.${this.ext}`;
+          const i = this.baseName.indexOf('%0');
+          this.filePrefix = i >= 0 ? this.baseName.slice(0, i) : this.baseName;
+          this.fileSuffix = i >= 0 ? this.baseName.slice(i + 4) : '';
+        }
+        this.logger.info(`目标文件已存在，按「${strategy}」改名为 ${newBase}`, this._meta());
       }
-      this.logger.info(`目标文件已存在，按「${strategy}」改名为 ${newBase}`, this._meta());
     }
     this.logger.info(`本次落盘目录：${absDir}`, this._meta());
+    return startNumber;
+  }
+
+  /** 分段模式重名：取下一个未被占用的序号（…_001 → …_002 → …），无可用序号返回 null */
+  _nextFreeSeq({ startNumber, digits, taken, absDir, outputName }) {
+    let seq = Math.max(1, Number(startNumber) || 1);
+    for (let guard = 0; guard < 9999; guard++) {
+      seq += 1;
+      const file = path.join(absDir, outputName.replace(/%0\dd/, seqText(seq, digits)));
+      if (!taken(file)) return { seq, file };
+    }
+    return null;
   }
 
   async _spawn(startNumber) {
@@ -335,6 +366,7 @@ export class Recorder extends EventEmitter {
     const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const re = new RegExp(`^${esc(this.filePrefix)}(\\d+)${esc(this.fileSuffix)}\\.${esc(this.ext)}$`);
     for (const name of entries) {
+      if (this._priorEntries && this._priorEntries.has(name)) continue; // 序号续排时排除上一场遗留
       const m = re.exec(name);
       if (m) out.push({ index: Number(m[1]), name, path: path.join(this.dir, name) });
     }
