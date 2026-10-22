@@ -1760,15 +1760,21 @@ function testViewGuards() {
   ok(/function bindRows\s*\(/.test(filesSrc) && /bindRows\(ctx\)/.test(filesSrc), '局部重绘后重绑行内按钮（换数据不换操作）');
   ok(/function syncPickedBar\s*\(/.test(filesSrc), '勾选计数单独同步（勾选不整表重绘）');
 
-  /* 勾选合并（用户要「删除所选」旁加合并，按列表顺序追加到第一个文件、沿用第一个文件名）：
-     按钮紧挨删除所选且 <2 项禁用；弹框两动作「合并(保留源文件) / 合并(删除源文件)」；
+  /* 勾选合并（2026-10-22 改为小弹框 + 可拖动排序）：点「合并」弹出窄弹框，
+     按「文件库现有排序」列出勾选文件，可拖动调整顺序后按该顺序合并。
      顺序必须取列表展示顺序（fetchAllRows），不能用勾选顺序（勾选先后不代表播放顺序）。 */
   ok(/id="flDelPicked"[\s\S]{0,200}?id="flMergePicked"/.test(filesSrc), '「合并」按钮紧挨「删除所选」其后');
   ok(/state\.picked\.size >= 2/.test(filesSrc) && /#flMergePicked/.test(filesSrc) && /mg\.disabled = state\.picked\.size < 2/.test(filesSrc), '合并按钮 <2 项禁用（syncPickedBar 同步）');
-  ok(/function mergeFiles\s*\(/.test(filesSrc) && /filesMergeSelected/.test(filesSrc), '合并走 filesMergeSelected API');
-  ok(/fetchAllRows\(\)/.test(filesSrc) && /state\.picked\.has\(f\.id\)/.test(filesSrc), '合并顺序取列表展示顺序（不是勾选顺序）');
-  ok(/files\.mergeKeep/.test(filesSrc) && /files\.mergeDeleteSource/.test(filesSrc), '弹框提供「合并(保留源文件)」与「合并(删除源文件)」两个动作');
-  ok(/deleteSources/.test(filesSrc), '合并后删除源文件作为显式选项传后端');
+  ok(/function mergeFiles\s*\(/.test(filesSrc) && /fetchAllRows\(\)/.test(filesSrc) && /state\.picked\.has\(f\.id\)/.test(filesSrc), '合并顺序取列表展示顺序（不是勾选顺序）');
+
+  const mergeSrc = fs.readFileSync(path.join(APP_DIR, 'web', 'merge-dialog.js'), 'utf8');
+  ok(/openMergeDialog\(\{/.test(filesSrc) && /export function openMergeDialog/.test(mergeSrc), '点「合并」走 merge-dialog.js 的小弹框（不再跳页/不再三按钮确认框）');
+  ok(/openDialog\(\{[\s\S]{0,200}?width: 'min\(560px,92vw\)'/.test(mergeSrc), '弹框是窄宽小框（画布不铺满、不留大片空白）');
+  ok(/class="mg-handle"/.test(mergeSrc) && /addEventListener\('pointerdown'/.test(mergeSrc) && /list\.insertBefore\(row/.test(mergeSrc), '拖动排序：左侧手柄 + pointer 事件 + insertBefore 改 DOM 顺序（鼠标/触屏同一套）');
+  ok(/const byId = new Map\(getOrder\(\)/.test(mergeSrc) && /setOrder\(next\)/.test(mergeSrc), '松手后 DOM 顺序回写成新的合并顺序（提交按它走）');
+  ok(/ids: order\.map\(\(r\) => r\.f\.id\), name, deleteSources: del/.test(mergeSrc), '提交按列表当前顺序调用 filesMergeSelected');
+  ok(/deleteSources: await mergeDeleteDefault\(\)/.test(filesSrc) && /deleteAfterMerge !== false/.test(filesSrc), '「合并后把源文件移入回收站」默认值取系统设置 deleteAfterMerge');
+  ok(/id="mgDel"/.test(mergeSrc) && /el\('button', 'btn primary', t\('files\.mergeSelected'\)\)/.test(mergeSrc) && !/mergeKeep|mergeDeleteSource/.test(mergeSrc), '提交区 = 一个「合并」按钮 + 删源勾选（不再两个合并动作）');
 
   /* 工具栏/徽标一致性（用户三连反馈：刷新位置、合并按钮样式、同为 .mp4 徽标不一致）：
      「刷新」移到「清除」后边（工具栏内）；「合并」与「删除所选」同款（btn sm danger）；
@@ -1781,16 +1787,12 @@ function testViewGuards() {
   ok(/class="btn sm danger" id="flMergePicked"/.test(filesSrc) && /class="btn sm danger" id="flDelPicked"/.test(filesSrc), '「合并」与「删除所选」按钮同款样式（btn sm danger）');
   ok(!/<span class="chip">\$\{esc\(extLabel\)\}<\/span>/.test(filesSrc) && !/\$\{tag \? `<span class="chip">/.test(filesSrc), '文件名后不渲染类型徽标（非用户需求，已移除；状态徽标保留）');
 
-  /* 弹框动作按钮统一 + 回收站按钮统一 + 合并中状态（用户三连反馈）：
-     弹框「合并(保留源文件)」「合并(删除源文件)」都用合并同款 btn primary（不再一红一暗）；
+  /* 回收站按钮统一 + 合并中状态（用户三连反馈）：
      回收站「全部还原」「清空回收站」用「新建任务」同款 btn sm primary；
      合并进行中行状态显示「合并中」，期间禁用合并/删除（防中途删源把合并搞坏）。
      文案以 zh-CN.json 真源为准（i18n.js 是 build 生成物）。 */
   const zhJson = JSON.parse(fs.readFileSync(path.join(APP_DIR, 'web', 'i18n', 'zh-CN.json'), 'utf8'));
-  ok(zhJson['files.mergeKeep'] === '合并(保留源文件)' && zhJson['files.mergeDeleteSource'] === '合并(删除源文件)', '弹框动作文案 = 合并(保留源文件) / 合并(删除源文件)');
   ok(zhJson['files.merging'] === '合并中', '有「合并中」状态文案');
-  ok(/el\('button', 'btn primary', t\('files\.mergeKeep'\)\)/.test(filesSrc) && /el\('button', 'btn primary', t\('files\.mergeDeleteSource'\)\)/.test(filesSrc), '弹框两动作按钮同款 btn primary（合并样式）');
-  ok(!/el\('button', 'btn danger', t\('files\.mergeDeleteSource'\)\)/.test(filesSrc), '「合并(删除源文件)」不再用 btn danger（与另一动作样式分叉）');
   const trashSrc = fs.readFileSync(path.join(APP_DIR, 'web', 'views', 'trash.js'), 'utf8');
   ok(/class="btn sm primary" id="trRestoreAll"/.test(trashSrc) && /class="btn sm primary" id="trEmpty"/.test(trashSrc), '回收站「全部还原」「清空回收站」同款 btn sm primary（新建任务样式）');
   ok(/merging: new Set\(\)/.test(filesSrc), 'state.merging 跟踪合并中文件');
@@ -1800,12 +1802,13 @@ function testViewGuards() {
 
   /* 合并产物 = 全新命名文件（2026-10-22 语义变更）：弹框录名（预填「第一个文件名(合并)」、可改）；
      「保留源」→ 文件数 = 源数+1；「删源」→ 全部源删除只剩结果；结果继承第一个文件的场次信息。 */
-  ok(/id="flMergeName"/.test(filesSrc), '弹框有「文件名」输入框');
-  ok(/stemOf\(/.test(filesSrc) && /\(合并\)/.test(filesSrc), '预填默认名 = 第一个文件名去扩展名 +「(合并)」');
-  ok(/ordered\.map\(\(id\) => \(byId\.get\(id\) \|\| \{\}\)\.f\)/.test(filesSrc), '合并取文件对象本身（解包行包装 .f，否则预填只剩「(合并)」）');
-  ok(/filesMergeSelected\(ids, deleteSources, name\)/.test(filesSrc), '录入的文件名传给后端');
-  ok(/files\.mergeNameLabel/.test(filesSrc) && /files\.mergeNameRequired/.test(filesSrc), '命名输入有标签文案与空值拦截');
-  ok(zhJson['files.mergeNameLabel'] === '文件名' && /生成全新文件/.test(zhJson['files.mergeText']), '文案改为「生成全新文件」语义');
+  ok(/id="mgName"/.test(mergeSrc), '弹框有「文件名」输入框');
+  ok(/stemOf\(/.test(mergeSrc) && /\(合并\)/.test(mergeSrc) && /const defName =/.test(mergeSrc), '预填默认名 = 第一个文件名去扩展名 +「(合并)」');
+  ok(/list\[0\]\.f && \(list\[0\]\.f\.name \|\| list\[0\]\.f\.relPath\)/.test(mergeSrc), '合并取文件对象本身（解包行包装 .f，否则预填只剩「(合并)」）');
+  ok(/files\.mergeNameLabel/.test(mergeSrc) && /files\.mergeNameRequired/.test(mergeSrc), '命名输入有标签文案与空值拦截');
+  ok(zhJson['files.mergeNameLabel'] === '文件名', '命名输入标签文案沿用「文件名」');
+  ok(zhJson['merge.title'] === '合并文件' && !!zhJson['merge.count'] && /拖动/.test(zhJson['merge.dragHint']), '合并弹框文案齐全（标题 / 文件数 / 拖动说明）');
+  ok(/默认跟随/.test(zhJson['merge.deleteSources']), '删源勾选框文案写明默认值跟随系统设置');
   const srvSrc = fs.readFileSync(path.join(APP_DIR, 'server', 'server.js'), 'utf8');
   ok(/mergePicked\(fileIds, \{ deleteSources, name \}\)/.test(srvSrc), '路由透传 name');
   const storSrc = fs.readFileSync(path.join(APP_DIR, 'server', 'storage.js'), 'utf8');

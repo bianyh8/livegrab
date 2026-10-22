@@ -655,6 +655,21 @@ table.tight th{padding:8px 12px}
 .mvbtn:hover{background:var(--line);color:var(--txt-1)}
 .mvbtn:disabled{opacity:.35;cursor:default}
 
+/* ---- 合并弹框（文件库勾选后点「合并」）：勾选文件的合并顺序，可拖动手柄调整 ---- */
+.mg-list{display:flex;flex-direction:column;gap:6px;margin-top:8px;max-height:300px;overflow:auto}
+.mg-row{display:flex;align-items:center;gap:10px;padding:9px 11px;border:1px solid var(--line);border-radius:8px;background:#0d1219}
+.mg-row:hover{border-color:var(--line-2)}
+.mg-row.mg-dragging{border-color:var(--accent);background:rgba(91,140,255,.10);box-shadow:0 6px 18px rgba(0,0,0,.35);position:relative;z-index:2}
+.mg-handle{flex:0 0 auto;cursor:grab;color:var(--txt-3);font-size:15px;line-height:1;letter-spacing:-2px;padding:2px 4px;user-select:none;touch-action:none}
+.mg-handle:active{cursor:grabbing;color:var(--txt-1)}
+.mg-idx{flex:0 0 22px;text-align:right;font-size:11.5px;color:var(--txt-3);font-variant-numeric:tabular-nums}
+.mg-nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px}
+.mg-meta{flex:0 0 auto;font-size:11.5px;color:var(--txt-3)}
+.mg-list.mg-sorting .mg-row{transition:transform .12s ease}
+.mg-list.mg-busy{opacity:.55;pointer-events:none}
+.mg-del{display:flex;align-items:center;gap:8px;margin-top:12px;font-size:12.5px;color:var(--txt-2);cursor:pointer}
+@media (max-width:767px){.mg-meta{display:none}.mg-row{gap:8px;padding:9px}}
+
 /* ================= 手机端适配（<768px：底部 Tab + 卡片化；桌面端不受影响） ================= */
 .tabbar{display:none} /* 桌面隐藏，手机显示 */
 @media (max-width:768px){

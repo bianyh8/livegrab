@@ -6,9 +6,10 @@ import { api } from '../api.js';
 import { t } from '../i18n.js';
 import {
   esc, formatBytes, formatDuration, formatDateTime, platBadge, emptyBox,
-  toast, confirmDialog, openDialog, el, openPlayer, platformInfo, pagerHTML, bindPager,
+  toast, confirmDialog, openPlayer, platformInfo, pagerHTML, bindPager,
   captureFocus, restoreFocus,
 } from '../ui.js';
+import { openMergeDialog } from '../merge-dialog.js';
 
 const state = {
   rows: [],        // 当前页文件行（后端已拍平/过滤/分页）：{ f, s, tag }
@@ -495,76 +496,57 @@ async function trashEnabled() {
   catch { return true; }
 }
 
-/* 勾选合并：按列表顺序把后面的文件内容追加到第一个文件之后，生成全新文件（源文件不动）。
-   弹框录入产物文件名（预填「第一个文件名(合并)」，可改），并提供「合并(保留源文件)」与
-   「合并(删除源文件)」（全部源文件移入回收站）两个动作。合并结果继承第一个文件的场次信息。 */
+/* 勾选合并：弹小框（merge-dialog.js）——按本列表现有顺序列出勾选的文件，
+   可拖动调整顺序后再合并。顺序 = 文件列表展示顺序（fetchAllRows 返回后端 sortFileRows 稳定序），
+   不用勾选顺序——勾选先后是用户操作痕迹，不代表「第 1、2、3 集」的播放顺序。 */
 async function mergeFiles(ctx) {
   if (state.merging.size) return; // 已有合并在进行，按钮也已禁用，双保险
-  // 顺序 = 文件列表展示顺序（fetchAllRows 返回后端 sortFileRows 稳定序），
-  // 不用勾选顺序——勾选先后是用户操作痕迹，不代表「第 1、2、3 集」的播放顺序。
   const all = await fetchAllRows();
   const byId = new Map(all.map((r) => [r.f.id, r]));
-  const ordered = all.filter(({ f }) => state.picked.has(f.id)).map(({ f }) => f.id);
-  const orderedSet = new Set(ordered);
-  for (const id of state.picked) if (!orderedSet.has(id)) ordered.push(id); // 兜底：不在当前筛选结果里的勾选项
-  if (ordered.length < 2) { toast(t('files.mergeNeedTwo'), 'warn'); return; }
+  // 解包行包装：byId 里存的是 { f, s, tag }，文件字段在 .f 上（直接取 .name 会拿到 undefined）
+  const rows = all.filter(({ f }) => state.picked.has(f.id));
+  const seen = new Set(rows.map((r) => r.f.id));
+  for (const id of state.picked) { const row = byId.get(id); if (row && !seen.has(id)) rows.push(row); } // 兜底：不在当前筛选结果里的勾选项
+  if (rows.length < 2) { toast(t('files.mergeNeedTwo'), 'warn'); return; }
 
-  // 客户端先做格式一致性预检，即时反馈；后端仍强校验。
-  // 注意解包行包装：byId 里存的是 { f, s, tag }，文件字段在 .f 上——
-  // 直接 files[0].name/.ext 会拿到 undefined（预填只剩「(合并)」的根因）。
-  const files = ordered.map((id) => (byId.get(id) || {}).f).filter(Boolean);
-  const ext0 = String((files[0] && files[0].ext) || '').toLowerCase();
-  if (files.some((f) => String(f.ext || '').toLowerCase() !== ext0)) {
+  // 客户端先做格式一致性预检，即时反馈；后端仍强校验
+  const ext0 = String((rows[0].f && rows[0].f.ext) || '').toLowerCase();
+  if (rows.some((r) => String((r.f && r.f.ext) || '').toLowerCase() !== ext0)) {
     toast(t('files.mergeMixedExt'), 'warn');
     return;
   }
 
-  // 产物名预填：第一个文件名去扩展名 + 「(合并)」，可改（如 A.mp4 → 预填「A(合并)」）
-  const stemOf = (n) => String(n || '').replace(/\.[A-Za-z0-9]{1,8}$/, '');
-  const defName = `${stemOf(files[0].name || files[0].relPath)}(合并)`;
-  openDialog({
-    title: t('files.mergeTitle'),
-    body: `<div style="font-size:13px;line-height:1.9;color:var(--txt-2)">${t('files.mergeText', ordered.length - 1, ordered.length + 1)}</div>
-      <div class="form-row" style="margin-top:10px">
-        <label class="fl">${t('files.mergeNameLabel')}</label>
-        <input class="input" id="flMergeName" value="${esc(defName)}" />
-        <div class="hintline">${t('files.mergeNameHint')}</div>
-      </div>`,
-    footer: (close, body) => {
-      const input = body.querySelector('#flMergeName');
-      const run = (del) => {
-        const name = String((input && input.value) || '').trim();
-        if (!name) { toast(t('files.mergeNameRequired'), 'warn'); if (input) input.focus(); return; }
-        close();
-        void runMerge(ordered, del, ctx, name);
-      };
-      const b1 = el('button', 'btn ghost', t('common.cancel'));
-      const b2 = el('button', 'btn primary', t('files.mergeKeep'));
-      const b3 = el('button', 'btn primary', t('files.mergeDeleteSource'));
-      b1.onclick = close;
-      b2.onclick = () => run(false);
-      b3.onclick = () => run(true);
-      if (input) setTimeout(() => input.focus(), 30);
-      return [b1, b2, b3];
-    },
+  openMergeDialog({
+    rows,
+    deleteSources: await mergeDeleteDefault(),
+    onSubmit: (payload) => runMerge({ ...payload }, ctx),
   });
 }
 
-async function runMerge(ids, deleteSources, ctx, name) {
+/* 「合并后把源文件移入回收站」默认值：取系统设置（设置 → 录制 →「合并后删除原始分段」） */
+async function mergeDeleteDefault() {
+  try { const s = await api.settings(); return s.deleteAfterMerge !== false; }
+  catch { return true; }
+}
+
+/* 执行合并：标记「合并中」（行状态 + 禁用行内操作），成功后清掉已删源的勾选。
+   返回 true 表示成功（弹框据此关闭），失败留在弹框便于原样重试。 */
+async function runMerge({ ids, name, deleteSources }, ctx) {
   ids.forEach((id) => state.merging.add(id));
   paint(ctx, true); // 先亮「合并中」行状态（指纹不含合并态，须强制重绘）
+  let ok = false;
   try {
     const r = await api.filesMergeSelected(ids, deleteSources, name);
     const outName = (r && r.item && r.item.name) || name || '';
     if (deleteSources) ids.forEach((id) => state.picked.delete(id)); // 全部源文件已移除
-    ids.forEach((id) => state.merging.delete(id));
-    state.hash = '';
-    await tick(ctx, true);
     toast(t('files.mergedDone') + (outName ? `：${outName}` : ''));
+    ok = true;
   } catch (e) {
+    toast(e.message || t('files.mergeFailed'), 'err');
+  } finally {
     ids.forEach((id) => state.merging.delete(id));
     state.hash = '';
-    await tick(ctx, true); // 失败也复位重绘：状态还原、按钮恢复可用
-    toast(e.message || t('files.mergeFailed'), 'err');
+    await tick(ctx, true); // 成功/失败都复位重绘：状态还原、按钮恢复可用
   }
+  return ok;
 }

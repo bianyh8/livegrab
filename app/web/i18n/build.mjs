@@ -92,10 +92,6 @@ const ADD = {
 
   // files（勾选合并 + 查询反馈 + 合并中状态；2026-10-22 补登此前直接写进生成物的孤儿键）
   'files.mergeSelected': '合并',
-  'files.mergeTitle': '合并所选文件',
-  'files.mergeKeep': '合并(保留源文件)',
-  'files.mergeDeleteSource': '合并(删除源文件)',
-  'files.mergeText': '将按列表顺序把后面 <b>{0}</b> 个文件的内容依次追加，生成全新文件，源文件保持不变。<br><span style=\"color:var(--txt-3)\">「合并(保留源文件)」保留全部源文件（合并后共 {1} 个）；「合并(删除源文件)」把全部源文件移出磁盘，仅保留合并结果（受「删除时移入回收站」开关控制）。</span>',
   'files.mergeNameLabel': '文件名',
   'files.mergeNameHint': '扩展名自动使用源文件格式；合并结果继承第一个文件的场次信息（平台/主播/开播时间）',
   'files.mergeNameRequired': '请填写合并后的文件名',
@@ -258,10 +254,22 @@ const ADD = {
   'files.dateFrom': '起始日期',
   'files.dateTo': '结束日期',
   'files.dateSep': '至',
+
+  // merge（合并弹框：按文件库排序列出勾选文件，可拖动调整顺序）
+  'merge.title': '合并文件',
+  'merge.count': '共 {0} 个文件',
+  'merge.dragHint': '按住左侧 ⋮⋮ 拖动可调整顺序；合并会按此顺序把后面的内容依次追加到第一个文件之后。',
+  'merge.dragTip': '拖动调整顺序',
+  'merge.deleteSources': '合并后把源文件移入回收站（默认跟随「设置 → 录制 → 合并后删除原始分段」）',
+  'merge.submitting': '合并中…',
 };
 
 /* ---------------- ② 废弃键（已统一到 common.*） ---------------- */
 const REMOVE = [
+  // 合并从弹框改为独立页（#/merge）：弹框标题、两个合并动作、说明长文案全部下线
+  'files.mergeTitle', 'files.mergeKeep', 'files.mergeDeleteSource', 'files.mergeText',
+  // 合并最终定为小弹框（不是独立页）：页面专属文案（副标题/返回/加载中/加载失败）随之下线
+  'merge.sub', 'merge.back', 'merge.loading', 'merge.loadFail', 'merge.needTwo',
   'dashboard.statMonitor', 'dashboard.statQueued', 'dashboard.statWaiting',
   'dashboard.waitSlot', 'dashboard.pollSec', 'dashboard.unnamed', 'dashboard.room',
   'dashboard.checkLiveTip', 'dashboard.diskTrash',
