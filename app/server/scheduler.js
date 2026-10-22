@@ -481,6 +481,7 @@ export class Scheduler {
     });
     this.recorders.set(task.id, recorder);
 
+    recorder.on('segment-open', (seg) => { this._onSegmentOpen(task, session, seg).catch((e) => this.logger.error(`分段开录登记失败：${errText(e)}`, { taskId: task.id })); });
     recorder.on('segment-close', (seg) => { this._onSegmentClose(task, session, seg).catch(() => {}); });
     recorder.on('reconnect', async (info) => {
       task.reconnectCount = (task.reconnectCount || 0) + 1;
@@ -536,6 +537,22 @@ export class Scheduler {
     }
   }
 
+  /** 分段开录即登记：路径/段号/所属场次先落库（status=recording），文件库不展示；收尾时改回 ok 自动显示。
+   *  这样录制一开始就有路径记录（崩溃/断电也不会只剩一个不知道归属的裸文件）。 */
+  async _onSegmentOpen(task, session, seg) {
+    if (!session || !seg || !seg.path) return;
+    const exists = (session.segments || []).find((f) => f.path === seg.path || f.segmentIndex === seg.index);
+    if (exists) return; // 已在册（重连同段 / 覆盖策略沿用同名）→ 不重复登记
+    const rel = path.relative(this.store.settings.recordRoot, seg.path).split(path.sep).join('/');
+    session.segments = [...(session.segments || []), {
+      id: uid('f'), sessionId: session.id, kind: 'segment', name: seg.name, path: seg.path, relPath: rel,
+      ext: path.extname(seg.name).replace('.', ''), bytes: 0, durationSec: 0, width: 0, height: 0,
+      createdAt: seg.startedAt || nowIso(), completedAt: null, status: 'recording',
+      segmentIndex: seg.index, endReason: null,
+    }].sort((a, b) => (Number(a.segmentIndex) || 0) - (Number(b.segmentIndex) || 0));
+    await this.store.saveSession(session);
+  }
+
   async _onSegmentClose(task, session, seg) {
     // 空分段（0 字节）：ffmpeg 在轮转/停止的瞬间会先创建下一个分段文件再退出，留下 0 字节残渣。
     // 它不是有效录制内容，登记进文件库只会变成"未登记垃圾"，因此明确清理并留日志（不静默丢数据：0 字节没有数据）。
@@ -546,6 +563,12 @@ export class Scheduler {
     }
     if (bytes <= 0) {
       await fsp.rm(seg.path, { force: true }).catch(() => {});
+      // 开录时登记的占位行（status=recording）一并撤掉：0 字节没有内容，留着只会变成幽灵条目
+      const idx = (session.segments || []).findIndex((f) => f.path === seg.path || f.segmentIndex === seg.index);
+      if (idx >= 0) {
+        session.segments.splice(idx, 1);
+        await this.store.saveSession(session).catch(() => {});
+      }
       this.logger.warn(`分段 #${seg.index} 为 0 字节（轮转/停止瞬间的空文件），已清理：${seg.name}`, { taskId: task.id, taskName: task.anchorName });
       return;
     }
@@ -643,6 +666,24 @@ export class Scheduler {
     const reason = payload.reason || 'user';
     if (session) {
       session.endedAt = nowIso();
+      // 收尾兜底：开录即登记的分段若没走到 segment-close（异常退出/强杀），按磁盘实际情况落定——
+      // 有内容→改回 ok（文件库显示），无内容/已消失→撤掉占位行。
+      const kept = [];
+      for (const f of session.segments || []) {
+        if (f && f.status === 'recording') {
+          const st = await fsp.stat(f.path).catch(() => null);
+          if (st && st.size > 0) {
+            f.status = 'ok';
+            f.bytes = st.size;
+            f.completedAt = f.completedAt || nowIso();
+            if (!f.endReason) f.endReason = 'interrupted';
+            kept.push(f);
+          }
+          continue;
+        }
+        kept.push(f);
+      }
+      session.segments = kept;
       session.bytes = this.storage._sessionFileBytes(session); // 删源后仍按现存文件口径（不再归零）
       session.durationSec = this.storage._sessionDurationSec(session);
       session.status = reason === 'error' ? 'error' : (session.segments.length ? 'done' : 'partial');

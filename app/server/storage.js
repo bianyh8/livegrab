@@ -173,11 +173,15 @@ export class Storage {
     let updated = 0;
     let missing = 0;
     let ghosts = 0;
+    const pending = []; // 本轮新发现的未登记文件：先收集，再按前缀归组登记
     const seen = new Set();
     // 「正在写入」的活动分段：录制的当前分段尚未封口（segment 还没 close），不是完整文件。
     // 若把它当未登记文件登记成独立会话，就会出现「文件库里有个录制中的 ts，点开不能播、首帧也没有」，
     // 且等分段真正关闭时同路径会再登记一次 → 重复记录。这里直接跳过，并标记 seen 免得被判缺失。
     const active = this.activePathsFn ? new Set(this.activePathsFn() || []) : new Set();
+    // 开录即登记的分段（status=recording）还没封口：所属场次仍在录制 → 保持不展示；
+    // 场次已结束（崩溃/强杀留下的占位行）→ 按磁盘落定：有内容转 ok，没内容撤行。
+    const recordingSessionIds = new Set(this.store.sessions.filter((s) => s.status === 'recording').map((s) => s.id));
     for (const p of found) {
       seen.add(p);
       if (active.has(p)) continue;
@@ -190,6 +194,14 @@ export class Storage {
       if (!st) continue;
       if (recs && recs.length) {
         for (const rec of recs) {
+          if (rec.status === 'recording') {
+            if (recordingSessionIds.has(rec.sessionId)) continue; // 本场仍在录：保持隐藏
+            rec.bytes = st.size;
+            rec.status = 'ok';
+            rec.completedAt = rec.completedAt || nowIso();
+            updated++;
+            continue;
+          }
           if (rec.status === 'missing' || rec.bytes !== st.size) {
             rec.bytes = st.size;
             rec.status = 'ok';
@@ -224,16 +236,39 @@ export class Storage {
             createdAt: st.birthtime?.toISOString?.() || nowIso(), completedAt: st.mtime?.toISOString?.() || nowIso(),
             status: 'ok', segmentIndex: 0,
           };
-          // 扫描到未登记文件 → 后台自动注册为独立场次（文件库立即可见可播），不再挂「未登记」列表
-          await this._registerUnregistered(item, st);
-          added++;
+          // 扫描到未登记文件 → 先收集，本轮结束后按「同目录 + 同主名前缀」归组注册为独立场次
+          item.kind = 'unregistered';
+          pending.push(item);
         }
+      }
+    }
+    // 未登记文件按「同目录 + 同主名前缀」归组：一次录制的多个分段属于同一个独立场次，
+    // 不能一个文件算一个场次（否则文件库被拆成一堆单文件场次，段号与时长全散）。
+    if (pending.length) {
+      const groups = new Map();
+      for (const it of pending) {
+        const rel = String(it.relPath || '').replace(/\\/g, '/');
+        const dir = rel.includes('/') ? rel.slice(0, rel.lastIndexOf('/')) : '';
+        const key = `${dir}|${siblingKeyOf(it.name)}`;
+        if (!groups.has(key)) groups.set(key, []);
+        groups.get(key).push(it);
+      }
+      for (const items of groups.values()) {
+        if (items.length === 1) await this._registerUnregistered(items[0], statOf.get(items[0].path) || null);
+        else await this._registerUnregisteredGroup(items);
+        added += items.length;
       }
     }
     for (const [p, recs] of indexed) {
       for (const rec of recs) {
         if (rec.kind === 'unregistered') continue;
-        if (!seen.has(p) && rec.status !== 'missing') { rec.status = 'missing'; missing++; }
+        if (seen.has(p)) continue;
+        if (rec.status === 'recording') {
+          // 占位行（开录即登记，但文件从未落盘/已被轮转清掉）：撤掉，不能标成「文件缺失」
+          if (!recordingSessionIds.has(rec.sessionId)) await this._dropFileRow(rec);
+          continue;
+        }
+        if (rec.status !== 'missing') { rec.status = 'missing'; missing++; }
       }
     }
     // 清理历史幽灵会话：早期扫描曾把「正在写入的当前分段」登记成独立会话（taskId 为空、仅含该文件）。
@@ -433,6 +468,24 @@ export class Storage {
     };
   }
 
+  /** 从所属场次移除一个文件行（占位行清理用）；场次空了就一并删掉 */
+  async _dropFileRow(rec) {
+    if (!rec) return;
+    const sess = rec.sessionId ? this.store.sessions.find((s) => s.id === rec.sessionId) : null;
+    if (!sess) {
+      this.store.state.external = (this.store.state.external || []).filter((x) => x.id !== rec.id);
+      return;
+    }
+    const same = (x) => x && (x.id === rec.id || x.path === rec.path);
+    sess.segments = (sess.segments || []).filter((x) => !same(x));
+    sess.extras = (sess.extras || []).filter((x) => !same(x));
+    if (same(sess.merged)) sess.merged = null;
+    if (same(sess.mp4)) sess.mp4 = null;
+    const left = (sess.segments || []).length + (sess.extras || []).length + (sess.merged ? 1 : 0) + (sess.mp4 ? 1 : 0);
+    if (!left) await this.store.removeSession(sess.id).catch(() => {});
+    else await this.store.saveSession(sess).catch(() => {});
+  }
+
   /** 把一个未登记文件注册为独立场次（addSession 写穿透）；磁盘已不存在则跳过，返回场次 id 或 null。
    *  st 可传入调用方已取得的 stat，避免扫描时对同一文件重复 stat。 */
   async _registerUnregistered(rec, st = null) {
@@ -453,6 +506,36 @@ export class Storage {
     }
     this.store.state.external = this.store.state.external.filter((x) => x.id !== rec.id);
     await this.store.addSession(session);
+    return session.id;
+  }
+
+  /** 多个未登记文件（同目录同前缀）归为一个独立场次：分段按尾部序号排序，时长用 ffprobe 补 */
+  async _registerUnregisteredGroup(items) {
+    const list = items.filter((f) => f && f.path);
+    if (!list.length) return null;
+    if (list.length === 1) return this._registerUnregistered(list[0]);
+    list.sort((a, b) => (trailingSeq(a.name) || 0) - (trailingSeq(b.name) || 0));
+    const session = this._sessionFromUnregistered(list[0]);
+    session.segments = list.map((f) => ({ ...f, kind: 'segment', sessionId: null, segmentIndex: trailingSeq(f.name) || 0 }));
+    let dur = 0;
+    for (const f of session.segments) {
+      if (Number(f.durationSec) > 0) { dur += Number(f.durationSec); continue; }
+      if (!/\.(mp4|m4a|ts|flv|mkv|mov|mp3|aac|wav)$/i.test(f.path || '')) continue;
+      try {
+        const info = await this.media.probeJson(f.path);
+        if (info && Number(info.durationSec) > 0) {
+          f.durationSec = Number(info.durationSec);
+          dur += f.durationSec;
+        }
+      } catch { /* 保持 0 */ }
+    }
+    session.bytes = session.segments.reduce((n, f) => n + (Number(f.bytes) || 0), 0);
+    session.durationSec = dur;
+    const times = session.segments.map((f) => new Date(f.createdAt || 0).getTime()).filter((t) => Number.isFinite(t) && t > 0);
+    if (times.length) session.startedAt = new Date(Math.min(...times)).toISOString();
+    this.store.state.external = this.store.state.external.filter((x) => !list.some((f) => f.id === x.id));
+    await this.store.addSession(session);
+    this.logger.info(`未登记文件按前缀归组登记为独立场次：${session.segments.length} 个文件 → ${session.id}`);
     return session.id;
   }
 

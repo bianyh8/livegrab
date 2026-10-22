@@ -277,6 +277,12 @@ export class Recorder extends EventEmitter {
     });
     this.logger.info(`启动 ffmpeg（第 ${startNumber} 段起 · ${this.qualityLabelText} · 流地址 ${this.streamUrl}）`, this._meta());
     this.child = this.media.spawnFfmpeg({ args, onStderr: (line) => this._onStderr(line) });
+    // 分段开录即上报路径：调度器把它登记进库（status=recording），文件库暂不展示；
+    // 段收尾时 segment-close 改回 ok 自动显示。路径由 printf 模式确定性推导，无需等磁盘出现文件。
+    const opened = path.join(this.dir, this.singleFile
+      ? this.outputName
+      : this.outputName.replace(/%0\dd/, seqText(startNumber, this.digits)));
+    this.emit('segment-open', { index: startNumber, name: path.basename(opened), path: opened, startedAt: new Date().toISOString() });
     this._bytesAtSpawn = await this._bytesOnDisk(); // spawn 时刻磁盘总字节基线
     this._offlineStreak = 0; // 每次拉流重置下播确认计数（新拉流 = 新的探测上下文）
     this.child.on('close', (code, signal) => this._onClose(code, signal));

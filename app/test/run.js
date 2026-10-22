@@ -1268,6 +1268,73 @@ async function testRepeatSessionSeqContinuation() {
   await sleep(300);
 }
 
+// ============ 4c-3. 开录即登记：路径/场次先入库，录制中不展示，收尾自动转正 ============
+async function testRecordingFileRow() {
+  suite('开录即登记：录制中 status=recording 且不展示，收尾转 ok');
+  const e = await makeEngine('recrow', { FAKE_SEGMENT_MS: '8000', FAKE_SEGMENTS_TOTAL: '1', FAKE_SEGMENT_MB: '0.1', FAKE_DURATION: '5' });
+  const t = await e.scheduler.createTask({ url: 'https://example.com/recrow.m3u8', platform: 'direct', anchorName: '登记主播' });
+  await e.scheduler.tick();
+  const started = await waitFor(() => e.store.getTask(t.id).status === 'recording', 8000, '开始录制');
+  ok(started, '任务进入录制中');
+  const s = e.store.sessions.find((x) => x.taskId === t.id);
+  await waitFor(() => (s?.segments?.length || 0) >= 1, 4000, '开录即登记分段行');
+  const row = (s?.segments || [])[0];
+  ok(row && row.status === 'recording', '录制中的分段行 status=recording（还没收尾不展示）', row ? `${row.status} ${path.basename(row.path)}` : '无行');
+  ok(row && path.isAbsolute(row.path) && row.sessionId === s.id && Number(row.segmentIndex) === 1, '行内已带路径/场次/段号', row ? `${path.basename(row.path)} seg=${row.segmentIndex}` : '无行');
+
+  // /api/files 拍平时必须滤掉 recording 行（接口需鉴权，这里按源码口径钉死）
+  const serverSrc = fs.readFileSync(path.join(APP_DIR, 'server', 'server.js'), 'utf8');
+  ok(/f\.status !== 'recording'/.test(serverSrc), '/api/files 不返回 status=recording 的分段');
+
+  await e.scheduler.stopTask(t.id).catch(() => {});
+  await waitFor(() => ['stopped', 'completed'].includes(e.store.getTask(t.id).status), 8000, '收尾完成');
+  await sleep(500);
+  const after = (s?.segments || [])[0];
+  ok(after && after.status === 'ok', '收尾后同一行转为 ok（文件库正常显示）', after ? after.status : '无行');
+  ok(after && Number(after.bytes) > 0, '收尾后行内字节数已回填', after ? String(after.bytes) : '无行');
+
+  // 崩溃遗留：占位行没转正但场次已结束 → 扫描按磁盘落定
+  if (after) {
+    after.status = 'recording';
+    s.status = 'done';
+    await e.store.saveSession(s);
+    await e.storage.scan();
+    ok(after.status === 'ok', '扫描把崩溃遗留的占位行按磁盘转正（文件有内容）', after.status);
+    // 从未落盘的占位行 → 撤行，不能标成「文件缺失」
+    const ghostPath = path.join(path.dirname(after.path), 'ghost_recording_999.ts');
+    const ghost = { id: 'f_ghost_rec', sessionId: s.id, kind: 'segment', name: path.basename(ghostPath), path: ghostPath, relPath: 'x/ghost_recording_999.ts', ext: 'ts', bytes: 0, durationSec: 0, status: 'recording', segmentIndex: 99, createdAt: new Date().toISOString() };
+    s.segments.push(ghost);
+    await e.store.saveSession(s);
+    await e.storage.scan();
+    ok(!(s.segments || []).some((x) => x.id === ghost.id), '扫描撤掉从未落盘的占位行（不留成文件缺失）');
+  }
+}
+
+// ============ 4c-4. 未登记文件按前缀归为一个独立场次 ============
+async function testUnregisteredGrouping() {
+  suite('无录制记录的文件：扫描按同目录同前缀归为一个独立场次');
+  const e = await makeEngine('group');
+  const dir = path.join(e.recordRoot, '直链', '分组主播', '2026-10-22');
+  await fsp.mkdir(dir, { recursive: true });
+  const names = ['2026-10-22_分组主播_原画_001.mp4', '2026-10-22_分组主播_原画_002.mp4', '2026-10-22_分组主播_原画_003.mp4'];
+  for (const n of names) await fsp.writeFile(path.join(dir, n), Buffer.alloc(2048, 1));
+  await fsp.writeFile(path.join(dir, '2026-10-22_另一个主播_原画_001.mp4'), Buffer.alloc(1024, 2));
+
+  const scan = await e.storage.scan();
+  const orphans = (e.store.sessions || []).filter((s) => !s.taskId);
+  const group = orphans.find((s) => (s.segments || []).length === 3);
+  ok(!!group, '三个同前缀分段归入同一个独立场次（不是三个单文件场次）', `场次数=${orphans.length}`);
+  if (group) {
+    eq(group.segments.map((f) => Number(f.segmentIndex)).join(','), '1,2,3', '段号按文件名尾部序号排序');
+    eq(group.bytes, 2048 * 3, '场次字节数 = 组内分段之和');
+    ok(group.startedAt && !Number.isNaN(new Date(group.startedAt).getTime()), '场次开始时间已写入', group.startedAt);
+    ok(group.segments.every((f) => !!f.path), '每个分段都带磁盘路径');
+  }
+  const single = orphans.find((s) => (s.segments || []).length === 1);
+  ok(!!single, '不同前缀的文件各自成一个独立场次', `场次数=${orphans.length}`);
+  ok(scan.added >= 4, '扫描统计按文件计数', `added=${scan.added}`);
+}
+
 // ============ 4d. 今日统计口径 ============
 async function testTodayStats() {
   suite('今日统计口径（时区当天 / 分段累加 / 派生文件不计时长）');
@@ -2141,7 +2208,7 @@ async function testMergePicked() {
   console.log(`LiveGrab 测试开始（临时目录 ${tmpRoot}）`);
   await rmrf(tmpRoot);
   await fsp.mkdir(tmpRoot, { recursive: true });
-  const suites = [testUtil, testNaming, testStore, testResolvers, testAuth, testRecordChain, testRemuxFollowGlobal, testPullBlockedBackoff, testConcurrentStart, testRepeatSessionNaming, testRepeatSessionSeqContinuation, testTodayStats, testQueue, testHttp, testViewGuards, testUpdateGuards, testProxy, testSegmentEndReason, testSegmentGuards, testFfmpegGuards, testFileScanGuards, testFileOrder, testRecorderLiveProxy, testStreamCandidates, testQualityFallbackBySetting, testResolveStreamPrecheck, testIsLiveFromResolve, testNoDoubleFallback, testOfflineConfirm, testAuditConsistency, testAuditRemainder, testDeadCodeRemainder, testMergeOnStopAndDeleteCount, testMergeDeleteSource, testMergePicked];
+  const suites = [testUtil, testNaming, testStore, testResolvers, testAuth, testRecordChain, testRemuxFollowGlobal, testPullBlockedBackoff, testConcurrentStart, testRepeatSessionNaming, testRepeatSessionSeqContinuation, testRecordingFileRow, testUnregisteredGrouping, testTodayStats, testQueue, testHttp, testViewGuards, testUpdateGuards, testProxy, testSegmentEndReason, testSegmentGuards, testFfmpegGuards, testFileScanGuards, testFileOrder, testRecorderLiveProxy, testStreamCandidates, testQualityFallbackBySetting, testResolveStreamPrecheck, testIsLiveFromResolve, testNoDoubleFallback, testOfflineConfirm, testAuditConsistency, testAuditRemainder, testDeadCodeRemainder, testMergeOnStopAndDeleteCount, testMergeDeleteSource, testMergePicked];
   for (const s of suites) {
     try { await s(); } catch (e) {
       failed++;

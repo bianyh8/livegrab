@@ -424,7 +424,9 @@ async function main() {
     const seen = new Set(); const seenPath = new Set();
     for (const s of store.sessions) {
       const sv = sessionView(s);
-      const push = (f, tag) => { if (f && f.id && !seen.has(f.id) && !seenPath.has(f.path)) { seen.add(f.id); seenPath.add(f.path); rows.push({ f, s: sv, tag }); } };
+      // status=recording 的分段：开录即入库（路径/场次/段号），但内容还没写完，文件库不展示；
+      // 分段收尾后状态转 ok，下一次轮询/SSE 刷新即正常出现。
+      const push = (f, tag) => { if (f && f.id && f.status !== 'recording' && !seen.has(f.id) && !seenPath.has(f.path)) { seen.add(f.id); seenPath.add(f.path); rows.push({ f, s: sv, tag }); } };
       (sv.segments || []).forEach((x) => push(x, null));
       (sv.extras || []).forEach((x) => push(x, x.kind === 'm4a' ? 'M4A' : x.kind === 'merged' ? '合并' : 'MP4'));
       if (sv.mp4) push(sv.mp4, 'MP4');
