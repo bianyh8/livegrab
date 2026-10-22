@@ -496,8 +496,9 @@ async function trashEnabled() {
   catch { return true; }
 }
 
-/* 勾选合并：按列表顺序把后面的文件内容追加到第一个文件，结果沿用第一个文件名。
-   弹框提供「合并(保留源文件)」（保留全部源文件）与「合并(删除源文件)」（被追加的文件移入回收站）两个动作。 */
+/* 勾选合并：按列表顺序把后面的文件内容追加到第一个文件之后，生成全新文件（源文件不动）。
+   弹框录入产物文件名（预填「第一个文件名(合并)」，可改），并提供「合并(保留源文件)」与
+   「合并(删除源文件)」（全部源文件移入回收站）两个动作。合并结果继承第一个文件的场次信息。 */
 async function mergeFiles(ctx) {
   if (state.merging.size) return; // 已有合并在进行，按钮也已禁用，双保险
   // 顺序 = 文件列表展示顺序（fetchAllRows 返回后端 sortFileRows 稳定序），
@@ -517,32 +518,48 @@ async function mergeFiles(ctx) {
     return;
   }
 
+  // 产物名预填：第一个文件名去扩展名 + 「(合并)」，可改（如 1、2、3、4 → 预填「1(合并)」）
+  const stemOf = (n) => String(n || '').replace(/\.[A-Za-z0-9]{1,8}$/, '');
+  const defName = `${stemOf(files[0].name || files[0].relPath)}(合并)`;
   openDialog({
     title: t('files.mergeTitle'),
-    body: `<div style="font-size:13px;line-height:1.9;color:var(--txt-2)">${t('files.mergeText', ordered.length - 1, esc(files[0].name || t('files.thatFile')))}</div>`,
-    footer: (close) => {
+    body: `<div style="font-size:13px;line-height:1.9;color:var(--txt-2)">${t('files.mergeText', ordered.length - 1, ordered.length + 1)}</div>
+      <div class="form-row" style="margin-top:10px">
+        <label class="fl">${t('files.mergeNameLabel')}</label>
+        <input class="input" id="flMergeName" value="${esc(defName)}" />
+        <div class="hintline">${t('files.mergeNameHint')}</div>
+      </div>`,
+    footer: (close, body) => {
+      const input = body.querySelector('#flMergeName');
+      const run = (del) => {
+        const name = String((input && input.value) || '').trim();
+        if (!name) { toast(t('files.mergeNameRequired'), 'warn'); if (input) input.focus(); return; }
+        close();
+        void runMerge(ordered, del, ctx, name);
+      };
       const b1 = el('button', 'btn ghost', t('common.cancel'));
       const b2 = el('button', 'btn primary', t('files.mergeKeep'));
       const b3 = el('button', 'btn primary', t('files.mergeDeleteSource'));
       b1.onclick = close;
-      b2.onclick = () => { close(); void runMerge(ordered, false, ctx); };
-      b3.onclick = () => { close(); void runMerge(ordered, true, ctx); };
+      b2.onclick = () => run(false);
+      b3.onclick = () => run(true);
+      if (input) setTimeout(() => input.focus(), 30);
       return [b1, b2, b3];
     },
   });
 }
 
-async function runMerge(ids, deleteSources, ctx) {
+async function runMerge(ids, deleteSources, ctx, name) {
   ids.forEach((id) => state.merging.add(id));
   paint(ctx, true); // 先亮「合并中」行状态（指纹不含合并态，须强制重绘）
   try {
-    const r = await api.filesMergeSelected(ids, deleteSources);
-    const name = (r && r.item && r.item.name) || '';
-    if (deleteSources) ids.slice(1).forEach((id) => state.picked.delete(id)); // 被追加源已移除
+    const r = await api.filesMergeSelected(ids, deleteSources, name);
+    const outName = (r && r.item && r.item.name) || name || '';
+    if (deleteSources) ids.forEach((id) => state.picked.delete(id)); // 全部源文件已移除
     ids.forEach((id) => state.merging.delete(id));
     state.hash = '';
     await tick(ctx, true);
-    toast(t('files.mergedDone') + (name ? `：${name}` : ''));
+    toast(t('files.mergedDone') + (outName ? `：${outName}` : ''));
   } catch (e) {
     ids.forEach((id) => state.merging.delete(id));
     state.hash = '';

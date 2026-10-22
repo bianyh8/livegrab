@@ -501,8 +501,9 @@ async function main() {
     const body = await readBody(req);
     const fileIds = Array.isArray(body.fileIds) ? body.fileIds : [];
     const deleteSources = body.deleteSources === true || body.deleteSources === 'true';
-    logger.info(`勾选合并 ${fileIds.length} 个文件${deleteSources ? '（合并后删除源文件）' : ''}`);
-    const r = await storage.mergePicked(fileIds, { deleteSources });
+    const name = String(body.name || '').trim();
+    logger.info(`勾选合并 ${fileIds.length} 个文件 → ${name || '(未命名)'}${deleteSources ? '（合并后删除源文件）' : ''}`);
+    const r = await storage.mergePicked(fileIds, { deleteSources, name });
     return { ...r, item: fileView(r.item) };
   });
   route('POST', '/api/files/:id/remux', async (req) => {

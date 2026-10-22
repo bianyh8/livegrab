@@ -830,10 +830,10 @@ function segTableHtml(task) {
   const segs = task.segments || [];
   if (!segs.length) return `<div class="note">${t('tasks.noSegs')}</div>`;
   return `<table>
-    <thead><tr><th style="width:70px">${t('tasks.segIndex')}</th><th>${t('tasks.segName')}</th><th>${t('tasks.segDuration')}</th><th>${t('tasks.segSize')}</th><th>${t('tasks.csvStatus')}</th></tr></thead>
+    <thead><tr><th style="width:70px">${t('tasks.segIndex')}</th><th>${t('files.mergeNameLabel')}</th><th>${t('tasks.segDuration')}</th><th>${t('tasks.segSize')}</th><th>${t('tasks.csvStatus')}</th></tr></thead>
     <tbody>${segs.map((s) => `<tr>
       <td class="mono" data-label="${t('tasks.segIndex')}">${String(s.segmentIndex || 0).padStart(3, '0')}</td>
-      <td class="mono" style="font-size:12px;word-break:break-all" data-label="${t('tasks.segName')}">${esc(s.name || s.path || '—')}</td>
+      <td class="mono" style="font-size:12px;word-break:break-all" data-label="${t('files.mergeNameLabel')}">${esc(s.name || s.path || '—')}</td>
       <td data-label="${t('tasks.segDuration')}">${esc(formatDuration(s.durationSec || 0))}</td>
       <td data-label="${t('tasks.segSize')}">${esc(formatBytes(s.bytes || 0))}</td>
       <td data-label="${t('tasks.csvStatus')}">${s.status === 'recording' ? '<span class="chip wait"><i class="dot"></i>' + t('common.recording') + '</span>' : esc(s.status || 'done')}${s.endReason && s.endReason !== 'timeout' ? `<span class="chip warn" style="margin-left:6px" title="${esc(t('tasks.segEarlyTip'))}">${esc(SEG_END_TEXT[s.endReason] || t('tasks.segEarlyEnd'))}</span>` : ''}</td>

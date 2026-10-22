@@ -831,12 +831,13 @@ export class Storage {
     }
   }
 
-  /** 文件库勾选合并：按传入顺序把第 2 个起的内容追加到第一个文件，结果沿用第一个文件的
-   *  名称/路径/记录（用户语义：勾 1,2,3 → 2、3 依次接到 1 后面，名字还是 1）。
+  /** 文件库勾选合并：按传入顺序把第 2 个起的内容追加到第一个文件之后，生成全新文件（源文件不动）。
+   *  产物名由调用方指定（name=主名，后端补与源一致的扩展名），并继承第一个文件的场次信息：
+   *  挂该场次 extras（kind='merged'，文件库 tag 显示「合并」），同场次聚合、排在源分段之后。
    *  顺序由调用方按列表展示顺序排好再传入；这里不做重排。
-   *  安全闸：先写同目录临时文件，成功后才原子替换第一个文件；任一步失败源文件一个不动。
-   *  deleteSources=true 时，被追加的源文件（第 2 个起）走 moveToTrash（与删除同回收站策略）。 */
-  async mergePicked(fileIds, { deleteSources = false } = {}) {
+   *  安全闸：先写同目录临时文件，成功后才改名落位为新文件；任一步失败源文件一个不动、只清临时件。
+   *  deleteSources=true 时，全部源文件走 moveToTrash（与删除同回收站策略），只留合并结果。 */
+  async mergePicked(fileIds, { deleteSources = false, name = '' } = {}) {
     const ids = (Array.isArray(fileIds) ? fileIds : []).map(String).filter(Boolean);
     if (ids.length < 2) throw new HttpError('NOT_ENOUGH', '至少需要 2 个文件才能合并', 400);
     if (new Set(ids).size !== ids.length) throw new HttpError('BAD_REQUEST', '合并列表存在重复文件', 400);
@@ -862,10 +863,26 @@ export class Storage {
 
     const first = hits[0].file;
     const dir = path.dirname(first.path);
+
+    // ---- 产物命名：name 是主名（带与源一致的扩展名会去重，不双写）；非法/重名直接拒绝 ----
+    let stem = String(name || '').trim();
+    const badName = () => !stem || stem === '.' || stem === '..' || /[<>:"/\\|?*\x00-\x1f]/.test(stem) || /[. ]$/.test(stem);
+    if (badName()) throw new HttpError('BAD_NAME', '文件名不合法（不能为空、不能包含 / \\ : * ? " < > | 等字符、不能以点或空格结尾）', 400);
+    const sameExtRe = new RegExp(`\\.${ext0}$`, 'i');
+    if (sameExtRe.test(stem)) stem = stem.slice(0, -(ext0.length + 1)); // 允许用户带上与源一致的扩展名
+    else if (/\.(mp4|m4a|ts|flv|mkv|mov|mp3|aac|wav|webm|avi)$/i.test(stem)) {
+      throw new HttpError('BAD_NAME', `扩展名须为 .${ext0}（与源文件一致），也可以不填扩展名`, 400);
+    }
+    if (!stem) throw new HttpError('BAD_NAME', '文件名不合法（不能为空）', 400);
+    const finalName = `${stem}.${ext0 || 'ts'}`;
+    const outPath = path.join(dir, finalName);
+    if (await fsp.stat(outPath).catch(() => null)) {
+      throw new HttpError('NAME_EXISTS', `该文件名已存在：${finalName}`, 409);
+    }
+
     const token = uid('m');
     const listFile = path.join(dir, `.concat_pick_${token}.txt`);
     const tmpOut = path.join(dir, `.merge_tmp_${token}.${ext0 || 'ts'}`);
-    const bakPath = path.join(dir, `.merge_bak_${token}${path.extname(first.path)}`);
     const job = this._jobStart(`合并 ${hits.length} 个文件`);
 
     try {
@@ -879,53 +896,47 @@ export class Storage {
       const st = await fsp.stat(tmpOut).catch(() => null);
       if (!st || st.size <= 0) throw new Error('合并产物为空');
 
-      // 原子替换：第一个文件先挪到备份名，临时产物再挪到第一个文件原位；
-      // 第二步失败立刻回滚备份 —— 任何时刻第一个文件要么是原内容、要么是完整合并产物。
-      await fsp.rename(first.path, bakPath).catch(async () => {
-        await fsp.copyFile(first.path, bakPath);
-        await fsp.rm(first.path, { force: true });
-      });
-      try {
-        await fsp.rename(tmpOut, first.path);
-      } catch (e) {
-        await fsp.rename(bakPath, first.path).catch(() => {});
-        throw e;
-      }
-      await fsp.rm(bakPath, { force: true }).catch(() => {});
+      // 落位：临时产物改名为最终新文件 —— 源文件全程只读，失败也只需清理临时产物
+      await fsp.rename(tmpOut, outPath);
 
-      const probe = await this.media.probeJson(first.path).catch(() => null);
-      first.bytes = st.size;
-      if (probe && Number(probe.durationSec) > 0) first.durationSec = Number(probe.durationSec);
-      else first.durationSec = hits.reduce((a, h) => a + (Number(h.file.durationSec) || 0), 0);
-      if (probe) {
-        first.width = probe.width || first.width || 0;
-        first.height = probe.height || first.height || 0;
-      }
-      first.status = 'ok';
+      const probe = await this.media.probeJson(outPath).catch(() => null);
+      const item = {
+        id: uid('f'), sessionId: hits[0].session ? hits[0].session.id : null, kind: 'merged', name: finalName,
+        path: outPath, relPath: this.rel(outPath), ext: ext0, bytes: st.size,
+        durationSec: (probe && Number(probe.durationSec) > 0) ? Number(probe.durationSec) : hits.reduce((a, h) => a + (Number(h.file.durationSec) || 0), 0),
+        width: probe?.width || 0, height: probe?.height || 0,
+        createdAt: nowIso(), completedAt: nowIso(), status: 'ok', segmentIndex: 0,
+      };
 
-      const touched = new Set();
-      for (const { session } of hits) {
-        if (session && !touched.has(session.id)) { touched.add(session.id); await this._recalcSession(session); }
+      // 继承第一个文件的场次信息：挂该场次 extras（kind='merged' → 文件库 tag「合并」），
+      // 行上沿用该场次的平台/主播/开播时间，同场次聚合、排在源分段之后（与 mergeSession 同口径）。
+      const session = hits[0].session || null;
+      if (session) {
+        session.extras = session.extras || [];
+        session.extras.push(item);
+        this._dropExternalByPath(outPath); // 清掉可能已存在的同名"未登记"条目
+        await this._dropOrphanSessionByPath(outPath); // 独立场次让位（同 remux 收编）
+        await this._recalcSession(session);
+        await this.store.saveSession(session);
+      } else {
+        // 第一个文件无场次（外部登记）时退化为独立场次（与扫描登记同通道）
+        item.kind = 'unregistered';
+        await this._registerUnregistered(item, st);
       }
-      await this.store.persist();
-      this.logger.info(`勾选合并完成：${first.name}（${formatBytes(st.size)}，${hits.length} 个文件）`);
-      this._jobDone(job, { fileId: first.id, name: first.name });
+      this.logger.info(`勾选合并完成：${finalName}（${formatBytes(st.size)}，${hits.length} 个文件）`);
+      this._jobDone(job, { fileId: item.id, name: item.name });
 
       let deletedSources = 0;
       if (deleteSources) {
-        // 追加源（第 2 个起）合并成功后才清理；失败路径已在上面整体回退，绝不误删唯一副本
-        const r = await this.moveToTrash({ fileIds: ids.slice(1) });
+        // 全部源文件删除：合并结果是独立新文件（不同 id/路径），不受影响；失败路径已整体回退，绝不误删
+        const r = await this.moveToTrash({ fileIds: ids });
         deletedSources = Number(r && r.movedToTrash) || 0;
       }
       this.onEvent({ type: 'files' });
-      return { item: first, merged: hits.length, deletedSources };
+      return { item, merged: hits.length, deletedSources };
     } catch (e) {
       await fsp.rm(listFile, { force: true }).catch(() => {});
       await fsp.rm(tmpOut, { force: true }).catch(() => {});
-      // 替换流程中断的兜底：第一个文件不在原位时把备份挪回去
-      const origGone = !(await fsp.stat(first.path).catch(() => null));
-      if (origGone) await fsp.rename(bakPath, first.path).catch(() => {});
-      else await fsp.rm(bakPath, { force: true }).catch(() => {});
       this.logger.error(`勾选合并失败：${errText(e)}`);
       this._jobFail(job, e.message);
       throw e instanceof HttpError ? e : new HttpError('MERGE_FAILED', `合并失败：${e.message}`, 500);
