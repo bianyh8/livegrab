@@ -357,10 +357,14 @@ function stripOrVariant(url) {
 export async function resolveStream({ roomId, quality, settings, logger }) {
   const { room, cookie, shortId } = await enterRoom(roomId, settings, logger);
   const keys = QUALITY_KEYS[quality] || QUALITY_KEYS.origin;
+  // liveStatus 与 URL 解析同一次调用返回（StreamGet 的 StreamData.is_live 模式）：
+  // 录制器缓存后断流时优先用它判下播，避免独立探播的时序错位。
+  const roomSt = room.status ?? room.room_status;
+  const liveStatus = roomSt === 2 ? 'live' : (roomSt == null ? 'unknown' : 'offline');
   if (room._fallback) {
     if (!room.urls.length) throw new HttpError('NO_STREAM', '主播未开播或未拿到流地址', 502);
     const list = room.urls.map((u) => ({ url: u, key: '', proto: /\.m3u8/.test(u) ? 'hls' : 'flv', heuristic: false }));
-    return { url: list[0].url, candidates: list, resolution: '', headers: headers(cookie, roomId), qualityActual: quality };
+    return { url: list[0].url, candidates: list, resolution: '', headers: headers(cookie, roomId), qualityActual: quality, liveStatus };
   }
   const su = room.stream_url || {};
   // HLS 优先：抖音 flv 边缘节点在本网络常 404/超时，HLS(m3u8) 可稳定拉流
@@ -421,5 +425,6 @@ export async function resolveStream({ roomId, quality, settings, logger }) {
     qualityActual: quality,
     qualityKey: first.key,
     proto: first.proto,
+    liveStatus,
   };
 }

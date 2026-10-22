@@ -160,14 +160,17 @@ export async function probeLive(input, ctx = {}) {
   });
 }
 
-/** 按 task.quality → settings.qualityFallback 依次尝试，返回第一个可用流 */
+/** 按 task.quality → 回退链 依次尝试，返回第一个可用流。
+ *  回退链优先用 task.qualityFallback（recorder._reResolveArgs 已按 qualityCursor 收缩，只含更低档），
+ *  避免与 recorder 的降档游标叠加成「双重降级」；无该字段（其它调用方）才回落 settings.qualityFallback。 */
 export async function resolveStream(task, ctx = {}) {
   const p = getPlatform(task.platform);
   if (!p?.handler) throw new HttpError('NOT_IMPLEMENTED', `${p?.name || task.platform} 暂未接入`, 400);
   const settings = ctx.settings || {};
   const proxy = effectiveProxyForPlatform(task.platform, settings);
   return runWithProxy(proxy, async () => {
-    const order = [task.quality, ...(settings.qualityFallback || [])]
+    const chain = Array.isArray(task.qualityFallback) ? task.qualityFallback : (settings.qualityFallback || []);
+    const order = [task.quality, ...chain]
       .filter((v, i, a) => v && a.indexOf(v) === i);
     const tried = [];
     for (const quality of order) {

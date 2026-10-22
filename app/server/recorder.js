@@ -75,6 +75,7 @@ export class Recorder extends EventEmitter {
     this._rawStderr = [];   // 最近若干行 ffmpeg stderr（不过滤）：断流时写进日志才能定性
     this._bytesAtSpawn = 0; // 本次拉流启动时的落盘字节数（算「这次录到没有」）
     this._offlineStreak = 0; // 连续探播 offline 次数（需连续 2 次确认才收尾，防接口瞬时抖动误判下播）
+    this.streamLiveStatus = null; // 解析返回的直播状态（StreamGet StreamData.is_live 模式）：'live'|'offline'|'unknown'
     this.currentBytes = 0;
     this.currentSegment = null;
     this._rateBits = 0;       // 各任务实时下载速率（bit/s）
@@ -92,6 +93,8 @@ export class Recorder extends EventEmitter {
      单 URL 重试会在同一个不可拉的表示上烧光重连额度。这里把它们收成阶梯，失败时降级下一个。
      兼容：平台未给 candidates（如直链/B 站）时退化为单地址阶梯，行为与旧版一致。 */
   _setStream(stream, keepIndex = 0) {
+    // 缓存解析返回的直播状态（StreamGet StreamData.is_live 模式）：断流时优先用它判下播，避免独立探播的时序错位
+    if (stream.liveStatus) this.streamLiveStatus = stream.liveStatus;
     const raw = Array.isArray(stream.candidates) && stream.candidates.length
       ? stream.candidates.map((c) => (typeof c === 'string' ? { url: c } : { ...c }))
       : [{ url: stream.url }];
@@ -391,24 +394,37 @@ export class Recorder extends EventEmitter {
     // 主播已下播导致的流中断：正常收尾（reason=offline），不进入断流重连、不报"录制异常结束"。
     // 403/401/429 是平台侧明确拒绝（风控/限流），不是下播：跳过探活，避免风控期间再加接口压力。
     // heuristic 候选（去 _orN 兜底）常 404/无数据，跳过探活：否则每次都「offline 误判」→ 提前收尾。
-    if (!blocked && !curCand.heuristic && this.probeOffline) {
-      try {
-        const offline = await this.probeOffline();
-        if (offline === true) {
-          this._offlineStreak += 1;
-          // 连续 2 次确认才收尾：抖音接口瞬时抖动/字段缺失会误判 offline，单次即收会把整场直播拦腰砍断
-          if (this._offlineStreak >= 2) {
-            this.logger.info(`连续 ${this._offlineStreak} 次探播确认已下播，正常结束录制（ffmpeg exit=${code}）`, this._meta());
-            this.reconnectAttempt = 0;
-            this._offlineStreak = 0;
-            await this._finalize('offline');
-            return;
-          }
-          this.logger.info(`探播判定已下播（第 ${this._offlineStreak}/2 次确认），继续重连观察：${this._meta().taskName}`, this._meta());
-        } else {
-          this._offlineStreak = 0; // 探到仍在直播 → 清零确认计数
+    if (!blocked && !curCand.heuristic) {
+      // 优先用解析返回的 liveStatus（StreamGet StreamData.is_live 模式）：与 URL 同一调用、同一次取房，
+      // 没有时序错位，可信度高于事后独立探播（独立探播可能与断流时刻错位/接口抖动）。
+      // 缓存只信本次解析的值；'unknown'（接口抖动/字段缺失）不判 offline，继续走独立探播。
+      let offline = null;
+      if (this.streamLiveStatus === 'offline') {
+        offline = true;
+      } else if (this.streamLiveStatus === 'live') {
+        offline = false;
+      } else if (this.probeOffline) {
+        // 无缓存或缓存为 unknown → 回退独立探播
+        try {
+          const r = await this.probeOffline();
+          if (r === true) offline = true;
+          else if (r === false) offline = false;
+        } catch { /* 探活失败按仍在直播处理，走重连 */ }
+      }
+      if (offline === true) {
+        this._offlineStreak += 1;
+        // 连续 2 次确认才收尾：抖音接口瞬时抖动/字段缺失会误判 offline，单次即收会把整场直播拦腰砍断
+        if (this._offlineStreak >= 2) {
+          this.logger.info(`连续 ${this._offlineStreak} 次确认已下播，正常结束录制（ffmpeg exit=${code}）`, this._meta());
+          this.reconnectAttempt = 0;
+          this._offlineStreak = 0;
+          await this._finalize('offline');
+          return;
         }
-      } catch { /* 探活失败按仍在直播处理，走重连 */ this._offlineStreak = 0; }
+        this.logger.info(`判定已下播（第 ${this._offlineStreak}/2 次确认，来源：${this.streamLiveStatus ? '解析 liveStatus' : '独立探播'}），继续重连观察：${this._meta().taskName}`, this._meta());
+      } else if (offline === false) {
+        this._offlineStreak = 0; // 探到仍在直播 → 清零确认计数
+      }
     }
     const max = Number(this.task.reconnectMax ?? this.settings.reconnectMax) || 5;
     // grew = 本次拉流新增字节（spawn 时磁盘总字节 → ffmpeg 退出时磁盘总字节的差值）

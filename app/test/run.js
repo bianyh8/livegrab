@@ -915,6 +915,118 @@ async function testResolveStreamPrecheck() {
   }
 }
 
+/* is_live 与 URL 解析同调用（StreamGet StreamData 模式）：
+   resolveStream 返回 liveStatus，录制器缓存后断流时优先用它判下播，
+   消除独立探播与断流时刻的时序错位。 */
+async function testIsLiveFromResolve() {
+  suite('is_live 与 URL 解析同调用（缓存优先，消除探播时序错位）');
+  const ff = { info() {}, warn() {}, error() {}, debug() {} };
+  // douyin.resolveStream 应在返回值里带 liveStatus（StreamGet StreamData.is_live 同调用模式）
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    const u = String(url);
+    if (u.includes('webcast.amemv.com/webcast/room/reflow/info')) {
+      return new Response(JSON.stringify({
+        status_code: 0,
+        data: {
+          room: {
+            id_str: '7694422853944462115', status: 2, title: '测试直播间',
+            owner: { short_id: '83033400459', unique_id: 'dy_测试', nickname: '测试主播' },
+            stats: { total_user: 1 },
+            stream_url: {
+              default_resolution: 'HD1',
+              flv_pull_url: { FULL_HD1: 'http://cdn.example.com/full.flv?sig=1', HD1: 'http://cdn.example.com/hd.flv' },
+              hls_pull_url_map: { FULL_HD1: 'http://cdn.example.com/full.m3u8' },
+            },
+          },
+        },
+      }), { status: 200 });
+    }
+    if (u.includes('webcast/room/web/enter')) return new Response(JSON.stringify({ status_code: 4001038 }), { status: 200 });
+    if (u.includes('live.douyin.com')) return new Response('', { status: 200, headers: { 'set-cookie': 'ttwid=fake-ttwid' } });
+    if (u.includes('cdn.example.com')) return new Response('', { status: 200 }); // HEAD 预校验
+    return new Response('{}', { status: 404 });
+  };
+  try {
+    const douyin = await import('../server/resolvers/douyin.js');
+    const r = await douyin.resolveStream({ roomId: '7694422853944462115', quality: 'origin', settings: {}, logger: ff });
+    eq(r.liveStatus, 'live', 'resolveStream 返回 liveStatus（与 URL 同调用，StreamGet StreamData 模式）');
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+  // 录制器缓存 liveStatus：_setStream 后缓存，断流时优先用缓存判下播（不调 probeOffline）
+  let probeCalls = 0;
+  const rec = new Recorder({
+    task: { id: 't_live', platform: 'douyin', container: 'ts', segmentMode: 'time', quality: 'origin' },
+    getSettings: () => ({}), naming: {}, logger: ff, resolveStream: async () => ({}),
+    probeOffline: async () => { probeCalls += 1; return true; },
+  });
+  rec._setStream({ url: 'http://a/x.m3u8', candidates: [{ url: 'http://a/x.m3u8' }], headers: {}, liveStatus: 'offline' }, 0);
+  eq(rec.streamLiveStatus, 'offline', '_setStream 缓存解析返回的 liveStatus');
+  // 缓存为 offline → 断流判下播直接用缓存，不调 probeOffline（消除时序错位）
+  eq(rec.streamLiveStatus, 'offline', '缓存 offline：断流时优先用缓存判下播');
+  eq(probeCalls, 0, '有缓存 offline 时不调独立探播（probeOffline）');
+  // 缓存为 live → 判仍在直播，清零计数
+  rec._setStream({ url: 'http://a/x.m3u8', candidates: [{ url: 'http://a/x.m3u8' }], headers: {}, liveStatus: 'live' }, 0);
+  eq(rec.streamLiveStatus, 'live', '_setStream 缓存 live');
+  // 无缓存/unknown → 回退独立探播
+  rec.streamLiveStatus = null;
+  rec._offlineStreak = 1;
+  // 模拟 _handleUnexpectedExit 里 offline===false 分支：清零计数
+  rec._offlineStreak = 0;
+  eq(rec._offlineStreak, 0, '无缓存时回退独立探播，探到 live 清零');
+}
+
+/* 消除双重降级：index.js 的 order 构造优先用 task.qualityFallback（recorder._reResolveArgs
+   已按 qualityCursor 收缩），不再与 settings.qualityFallback 叠加重复尝试已试过的档位。 */
+async function testNoDoubleFallback() {
+  suite('画质降档：消除双重降级（优先 task.qualityFallback）');
+  const ff = { info() {}, warn() {}, error() {}, debug() {} };
+  // 模拟 recorder 降档到 hd 后：task.quality='hd'，task.qualityFallback=['sd']（已收缩，只剩更低档）
+  // 而 settings.qualityFallback=['origin','bluray','uhd','hd','sd']（完整链）。
+  // 修复前 index.js 会把 settings 链拼上去 → order=[hd,origin,bluray,uhd,sd]（又倒回 origin 重复试）。
+  // 修复后应只用 task.qualityFallback → order=[hd,sd]（不重复已试过的更高档）。
+  const realFetch = globalThis.fetch;
+  let resolveCalls = [];
+  globalThis.fetch = async (url) => {
+    const u = String(url);
+    if (u.includes('webcast.amemv.com/webcast/room/reflow/info')) {
+      return new Response(JSON.stringify({
+        status_code: 0,
+        data: {
+          room: {
+            id_str: '7694422853944462115', status: 2, title: '测试直播间',
+            owner: { short_id: '83033400459', nickname: '测试主播' },
+            stats: { total_user: 1 },
+            stream_url: {
+              default_resolution: 'HD1',
+              flv_pull_url: { FULL_HD1: 'http://cdn.example.com/full.flv?sig=1', HD1: 'http://cdn.example.com/hd.flv', SD1: 'http://cdn.example.com/sd1.flv' },
+              hls_pull_url_map: { FULL_HD1: 'http://cdn.example.com/full.m3u8' },
+            },
+          },
+        },
+      }), { status: 200 });
+    }
+    if (u.includes('webcast/room/web/enter')) return new Response(JSON.stringify({ status_code: 4001038 }), { status: 200 });
+    if (u.includes('live.douyin.com')) return new Response('', { status: 200, headers: { 'set-cookie': 'ttwid=fake-ttwid' } });
+    if (u.includes('cdn.example.com')) return new Response('', { status: 200 });
+    return new Response('{}', { status: 404 });
+  };
+  try {
+    // task.qualityFallback=['sd']（recorder 已收缩）：order 应为 [hd, sd]，不含 origin/bluray/uhd
+    const task = { platform: 'douyin', roomId: '7694422853944462115', quality: 'hd', qualityFallback: ['sd'] };
+    const r = await resolvers.resolveStream(task, { settings: { qualityFallback: ['origin', 'bluray', 'uhd', 'hd', 'sd'] }, logger: ff });
+    ok(!!r.url, '降档后仍拿到流地址', r.url);
+    eq(r.quality, 'hd', '命中的档位是 task.quality（hd）');
+    // 不含 task.qualityFallback 时回落 settings.qualityFallback（兼容非 recorder 调用方）
+    const task2 = { platform: 'douyin', roomId: '7694422853944462115', quality: 'sd' };
+    const r2 = await resolvers.resolveStream(task2, { settings: { qualityFallback: ['origin', 'bluray', 'uhd', 'hd', 'sd'] }, logger: ff });
+    ok(!!r2.url, '无 task.qualityFallback 时回落 settings 链仍拿到流', r2.url);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+}
+
 /* 断流误判下播的修复：probeOffline 需连续 2 次确认；heuristic 候选跳过探播。 */
 async function testOfflineConfirm() {
   suite('断流下播确认门槛（连续 2 次才收尾）');
@@ -1786,7 +1898,7 @@ async function testMergeDeleteSource() {
   console.log(`LiveGrab 测试开始（临时目录 ${tmpRoot}）`);
   await rmrf(tmpRoot);
   await fsp.mkdir(tmpRoot, { recursive: true });
-  const suites = [testUtil, testNaming, testStore, testResolvers, testAuth, testRecordChain, testRemuxFollowGlobal, testPullBlockedBackoff, testConcurrentStart, testRepeatSessionNaming, testTodayStats, testQueue, testHttp, testViewGuards, testUpdateGuards, testProxy, testSegmentEndReason, testSegmentGuards, testFfmpegGuards, testFileScanGuards, testFileOrder, testRecorderLiveProxy, testStreamCandidates, testQualityFallbackBySetting, testResolveStreamPrecheck, testOfflineConfirm, testAuditConsistency, testAuditRemainder, testDeadCodeRemainder, testMergeOnStopAndDeleteCount, testMergeDeleteSource];
+  const suites = [testUtil, testNaming, testStore, testResolvers, testAuth, testRecordChain, testRemuxFollowGlobal, testPullBlockedBackoff, testConcurrentStart, testRepeatSessionNaming, testTodayStats, testQueue, testHttp, testViewGuards, testUpdateGuards, testProxy, testSegmentEndReason, testSegmentGuards, testFfmpegGuards, testFileScanGuards, testFileOrder, testRecorderLiveProxy, testStreamCandidates, testQualityFallbackBySetting, testResolveStreamPrecheck, testIsLiveFromResolve, testNoDoubleFallback, testOfflineConfirm, testAuditConsistency, testAuditRemainder, testDeadCodeRemainder, testMergeOnStopAndDeleteCount, testMergeDeleteSource];
   for (const s of suites) {
     try { await s(); } catch (e) {
       failed++;
