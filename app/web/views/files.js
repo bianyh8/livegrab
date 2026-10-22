@@ -24,7 +24,7 @@ const state = {
   /* 已生效的筛选条件（点「查询」才提交）；输入框草稿暂存在上面的 q/platform/dateFrom/dateTo/ext */
   filters: { q: '', platform: '', dateFrom: '', dateTo: '', ext: '' },
   defaultsSet: false,
-  filterOpen: true, // 查询条件默认展开（文件库以搜索为主）；点标题行可收起，收起后标题行显示条件摘要
+  filterOpen: false, // 查询条件默认收起（与任务管理一致），条件改由折叠栏右侧摘要交代
   picked: new Set(),
   merging: new Set(), // 正在合并中的文件 id（行状态显示「合并中」，期间禁止再合并/删除）
   page: 1,
@@ -51,8 +51,8 @@ function bytesHint() {
   return `${t('files.videoCount', state.total)} · ${formatBytes(state.bytes)}`;
 }
 
-/* 头部摘要：查询条件收起后，用一行文字交代当前生效的条件
-   （与任务管理的「折叠头 + 摘要」同一套写法，只是这里复用文件库自己的标题行）。
+/* 折叠栏摘要：用一行文字交代当前生效的条件（与任务管理的「查询条件 + 摘要」同一套写法，
+   文案、样式 class（.tq-toggle/.tq-title/.tq-summary/.tq-arrow）都复用那边的）。
    用草稿值 state.q/...——它们就是筛选控件里渲染出来的内容，防抖提交后与 filters 必然同步。 */
 function querySummary() {
   const parts = [];
@@ -233,11 +233,17 @@ function paint(ctx, force) {
 
   root.innerHTML = `
     <div class="card">
-      <div class="card-h fl-head" id="flHead" role="button" aria-expanded="${state.filterOpen ? 'true' : 'false'}">
+      <div class="card-h">
         <h3>${t('files.libraryTitle')}</h3>
         <span class="hint" data-files-bytes>${esc(bytesHint())}</span>
         <div class="spacer"></div>
-        ${state.filterOpen ? '' : `<span class="fl-head-sum" id="flHeadSum">${esc(querySummary())}</span>`}
+      </div>
+      <!-- 查询条件折叠栏：与任务管理同一个组件（.tq-toggle），标题「查询条件」+ 当前条件摘要 + 箭头。
+           摘要常显（收起时它就是唯一的条件说明，展开时与控件互为印证），不随展开状态增删节点，
+           免得切换时布局抖一下。 -->
+      <div class="tq-toggle" id="flFilterToggle" role="button" aria-expanded="${state.filterOpen ? 'true' : 'false'}">
+        <span class="tq-title">${t('tasks.filterTitle')}</span>
+        <span class="tq-summary" id="flHeadSum">${esc(querySummary())}</span>
         <span class="tq-arrow">${state.filterOpen ? '▴' : '▾'}</span>
       </div>
       <div class="toolbar fl-filter" id="flFilterBar" style="${state.filterOpen ? '' : 'display:none'}">
@@ -326,10 +332,10 @@ function bind(ctx) {
   const root = boundRoot;
   if (!root) return;
 
-  /* 点标题行收起/展开查询条件（与任务管理的折叠头同一套交互：箭头朝下=收起、朝上=展开）。
+  /* 点折叠栏收起/展开查询条件（与任务管理的折叠头同一套交互：箭头朝下=收起、朝上=展开）。
      只重绘本视图（paint），不重新请求：条件没变，数据也不用重拉。 */
-  const head = root.querySelector('#flHead');
-  if (head) head.onclick = () => { state.filterOpen = !state.filterOpen; paint(ctx, true); };
+  const filterToggle = root.querySelector('#flFilterToggle');
+  if (filterToggle) filterToggle.onclick = () => { state.filterOpen = !state.filterOpen; paint(ctx, true); };
 
   /* 与任务管理一致：搜索框输入即查询（300ms 防抖，给足连续输入/中文组词时间），
      不再单独设「查询」按钮——草稿/提交两套状态本就重复，且「还没输完就查询」的体验也更顺。

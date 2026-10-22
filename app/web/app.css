@@ -480,12 +480,15 @@ td .sub{font-size:11.5px;color:var(--txt-3);margin-top:3px}
    与上面一行查询条件分开，避免「全选」被挤到筛选控件堆里。 */
 /* 左内边距 = #flBody 的 16px + .fl-item 的 16px：让「全选」框与下方每行行首的
    复选框左边缘落在同一条竖线上（勾选栏不随行内容缩进）。 */
-.fl-selbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:0 32px 12px 32px;border-bottom:1px solid var(--line)}
+/* 勾选栏：上内边距 10px——收起查询条件时，它上面就是「查询条件」折叠栏（border-bottom），
+   展开时上面是筛选行（自带 10px 上内边距）；两种状态与上方内容的间距都保持 10px，
+   不会因为筛选行 display:none 而贴到折叠栏/卡片标题上。 */
+.fl-selbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:10px 32px 12px 32px;border-bottom:1px solid var(--line)}
 /* 筛选行：右内边距 32px = #flBody 的 16px + .fl-item 的 16px，
    让行尾的「清除条件」与下方每行行尾「删除」按钮的右边缘落在同一条竖线上。
    空处相当：列间距统一 18px，多出来的宽度全给搜索框（flex:1），
    于是各处空隙一样宽，多余的空白不会堆在「清除条件」前面；换行时保持左对齐、不留空洞。 */
-.fl-filter{padding:10px 32px 8px 16px;flex-wrap:wrap;border-bottom:0;justify-content:flex-start;row-gap:10px;column-gap:18px}
+.fl-filter{padding:10px 32px 0 16px;flex-wrap:wrap;border-bottom:0;justify-content:flex-start;row-gap:10px;column-gap:18px}
 /* 搜索框：基准窄（160px），多余宽度先给它吸收、最多 420px。
    基准决定换行点——flex-wrap 按基准算行宽、先换行再收缩，所以原来 320px 的基准
    要 ~1024px 宽的卡片才放得下整行，窄一点「清除条件」就掉到第二行；降到 160px 后
@@ -494,11 +497,6 @@ td .sub{font-size:11.5px;color:var(--txt-3);margin-top:3px}
 .fl-filter #flQ{flex:1 1 160px;min-width:140px;max-width:420px}
 .fl-filter #flClear{margin-left:auto}
 .fl-selall{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--txt-2);cursor:pointer;user-select:none}
-/* 文件库标题行：兼任查询条件的折叠开关（点它收起/展开 .fl-filter）。
-   收起后筛选控件整行隐藏，条件改为右侧摘要交代；箭头沿用任务管理的 .tq-arrow。 */
-.fl-head{cursor:pointer;user-select:none;transition:.15s}
-.fl-head:hover{background:rgba(255,255,255,.025)}
-.fl-head .fl-head-sum{flex:0 1 auto;min-width:0;max-width:46%;font-size:11.5px;color:var(--txt-3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 
 /* 日期区间：起止两个 date 输入合进同一个外壳，中间用「至」+ 竖线分隔，
    看起来是一个控件而不是两个独立输入框（原生 date 的边框/背景全部去掉）。 */
@@ -809,8 +807,6 @@ table.tight th{padding:8px 12px}
   .btn{padding:8px 11px}
   .tq-toggle{padding:11px 12px}
   .tq-toggle .tq-summary{max-width:52%}
-  /* 手机端标题行不留摘要（宽度不够，摘要会把「N 个视频文件」挤掉），只保留箭头 */
-  .fl-head .fl-head-sum{display:none}
   #tkSelAll{display:inline-flex}
   .pager{padding:10px 12px;gap:6px;justify-content:center}
   .pager-go{display:none}
@@ -820,8 +816,8 @@ table.tight th{padding:8px 12px}
   .thumb{width:58px;height:36px;flex:0 0 58px}
   .tk-avatar{width:46px;height:30px;flex:0 0 46px}
   .fl-item{gap:10px;padding:11px 12px;flex-wrap:wrap}
-  .fl-selbar{padding:0 28px 10px 28px;gap:8px}
-  .fl-filter{padding:10px 28px 8px 16px}
+  .fl-selbar{padding:10px 28px 10px 28px;gap:8px}
+  .fl-filter{padding:10px 28px 0 16px}
   .fl-range{height:32px;padding:0 2px 0 8px}
   .fl-range-in{width:96px;font-size:12px}
   .fl-range-sep{padding:0 6px}

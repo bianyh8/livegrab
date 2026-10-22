@@ -117,6 +117,9 @@ console.log(`\n[环境] 文件库列表已渲染=${shown}`);
 if (!shown) console.log((await ev('document.body.innerText')).slice(0, 1200));
 
 console.log('\n【A】录制中文件变大 → 大小自动跟新（不重建整表，焦点不丢）');
+// 查询条件默认收起（与任务管理一致）：先点折叠栏展开，否则 #flQ 不可聚焦，探针失效
+await ev('document.querySelector("#flFilterToggle").click()');
+await sleep(250);
 const sizeBefore = await ev('JSON.stringify([...document.querySelectorAll("[data-file-size]")].map(e=>e.textContent))');
 await ev('document.querySelector("#flQ").focus(); document.activeElement && document.activeElement.id');
 const focusBefore = await ev('document.activeElement && document.activeElement.id');
@@ -176,8 +179,15 @@ for (let i = 0; i < 60; i++) {
 }
 const hitUrls = reqLog.slice(reqBefore).map((r) => r.url);
 check(hitUrls.some((u) => /\/api\/files\/scan/.test(u)), '点「扫描磁盘」调用了 POST /api/files/scan', hitUrls.filter((u) => /scan/.test(u))[0] || `${hitUrls.length} 次请求`);
-await sleep(300);
-check(reqLog.slice(reqBefore).some((r) => /\/api\/files\?/.test(r.url)), '扫描后重新拉取了文件列表', `${reqLog.length - reqBefore} 次请求`);
+await sleep(200);
+/* 扫描是 POST 返回后才回拉列表：固定 300ms 太脆（扫描耗时随目录大小变），
+   改成最多等 4s，出现 /api/files? 即通过。 */
+let pulled = false;
+for (let i = 0; i < 133; i++) {
+  if (reqLog.slice(reqBefore).some((r) => /\/api\/files\?/.test(r.url))) { pulled = true; break; }
+  await sleep(30);
+}
+check(pulled, '扫描后重新拉取了文件列表', `${reqLog.length - reqBefore} 次请求`);
 
 console.log('\n【D】控制台无报错');
 check(consoleErrors.length === 0, '无 console error', consoleErrors.slice(0, 3).join(' | '));
