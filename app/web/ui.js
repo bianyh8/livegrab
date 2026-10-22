@@ -552,7 +552,7 @@ export async function openPlayer(ctx, opts) {
   if (mergeBtn) mergeBtn.onclick = async () => {
     if (!opts.session || !opts.session.id) { toast(t('ui.mergeInvalid'), 'warn'); return; }
     try { await ctx.api.merge(opts.session.id); toast(t('ui.mergeQueued')); if (opts.onChanged) opts.onChanged(); }
-    catch (e) { toast(e.message || t('ui.mergeFail'), 'err'); }
+    catch (e) { toast(e.message || t('files.mergeFailed'), 'err'); }
   };
   mask.querySelectorAll('[data-seg]').forEach((node) => {
     node.onclick = () => {

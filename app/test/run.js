@@ -1633,13 +1633,13 @@ function testViewGuards() {
   ok(/function syncPickedBar\s*\(/.test(filesSrc), '勾选计数单独同步（勾选不整表重绘）');
 
   /* 勾选合并（用户要「删除所选」旁加合并，按列表顺序追加到第一个文件、沿用第一个文件名）：
-     按钮紧挨删除所选且 <2 项禁用；弹框两动作「合并 / 合并后删除源文件」；
+     按钮紧挨删除所选且 <2 项禁用；弹框两动作「合并(保留源文件) / 合并(删除源文件)」；
      顺序必须取列表展示顺序（fetchAllRows），不能用勾选顺序（勾选先后不代表播放顺序）。 */
   ok(/id="flDelPicked"[\s\S]{0,200}?id="flMergePicked"/.test(filesSrc), '「合并」按钮紧挨「删除所选」其后');
   ok(/state\.picked\.size >= 2/.test(filesSrc) && /#flMergePicked/.test(filesSrc) && /mg\.disabled = state\.picked\.size < 2/.test(filesSrc), '合并按钮 <2 项禁用（syncPickedBar 同步）');
   ok(/function mergeFiles\s*\(/.test(filesSrc) && /filesMergeSelected/.test(filesSrc), '合并走 filesMergeSelected API');
   ok(/fetchAllRows\(\)/.test(filesSrc) && /state\.picked\.has\(f\.id\)/.test(filesSrc), '合并顺序取列表展示顺序（不是勾选顺序）');
-  ok(/files\.mergeKeep/.test(filesSrc) && /files\.mergeDeleteSource/.test(filesSrc), '弹框提供「合并」与「合并后删除源文件」两个动作');
+  ok(/files\.mergeKeep/.test(filesSrc) && /files\.mergeDeleteSource/.test(filesSrc), '弹框提供「合并(保留源文件)」与「合并(删除源文件)」两个动作');
   ok(/deleteSources/.test(filesSrc), '合并后删除源文件作为显式选项传后端');
 
   /* 工具栏/徽标一致性（用户三连反馈：刷新位置、合并按钮样式、同为 .mp4 徽标不一致）：
@@ -1651,6 +1651,23 @@ function testViewGuards() {
   ok(iClear > 0 && iRefresh > iClear, '「刷新」按钮在「清除」按钮后边');
   ok(/class="btn sm danger" id="flMergePicked"/.test(filesSrc) && /class="btn sm danger" id="flDelPicked"/.test(filesSrc), '「合并」与「删除所选」按钮同款样式（btn sm danger）');
   ok(/<span class="chip">\$\{esc\(extLabel\)\}<\/span>/.test(filesSrc) && !/\$\{tag \?/.test(filesSrc), '类型徽标统一按 extLabel 渲染（不按 tag 归属，同类型文件显示一致）');
+
+  /* 弹框动作按钮统一 + 回收站按钮统一 + 合并中状态（用户三连反馈）：
+     弹框「合并(保留源文件)」「合并(删除源文件)」都用合并同款 btn primary（不再一红一暗）；
+     回收站「全部还原」「清空回收站」用「新建任务」同款 btn sm primary；
+     合并进行中行状态显示「合并中」，期间禁用合并/删除（防中途删源把合并搞坏）。
+     文案以 zh-CN.json 真源为准（i18n.js 是 build 生成物）。 */
+  const zhJson = JSON.parse(fs.readFileSync(path.join(APP_DIR, 'web', 'i18n', 'zh-CN.json'), 'utf8'));
+  ok(zhJson['files.mergeKeep'] === '合并(保留源文件)' && zhJson['files.mergeDeleteSource'] === '合并(删除源文件)', '弹框动作文案 = 合并(保留源文件) / 合并(删除源文件)');
+  ok(zhJson['files.merging'] === '合并中', '有「合并中」状态文案');
+  ok(/el\('button', 'btn primary', t\('files\.mergeKeep'\)\)/.test(filesSrc) && /el\('button', 'btn primary', t\('files\.mergeDeleteSource'\)\)/.test(filesSrc), '弹框两动作按钮同款 btn primary（合并样式）');
+  ok(!/el\('button', 'btn danger', t\('files\.mergeDeleteSource'\)\)/.test(filesSrc), '「合并(删除源文件)」不再用 btn danger（与另一动作样式分叉）');
+  const trashSrc = fs.readFileSync(path.join(APP_DIR, 'web', 'views', 'trash.js'), 'utf8');
+  ok(/class="btn sm primary" id="trRestoreAll"/.test(trashSrc) && /class="btn sm primary" id="trEmpty"/.test(trashSrc), '回收站「全部还原」「清空回收站」同款 btn sm primary（新建任务样式）');
+  ok(/merging: new Set\(\)/.test(filesSrc), 'state.merging 跟踪合并中文件');
+  ok(/state\.merging\.has\(f\.id\)[\s\S]{0,120}?t\('files\.merging'\)/.test(filesSrc), '合并中的文件行状态显示「合并中」');
+  ok(/ids\.forEach\(\(id\) => state\.merging\.add\(id\)\)/.test(filesSrc) && /ids\.forEach\(\(id\) => state\.merging\.delete\(id\)\)/.test(filesSrc), 'runMerge 开始标记、结束（成功/失败两路）清除合并中');
+  ok(/mg\.disabled = state\.picked\.size < 2 \|\| state\.merging\.size > 0/.test(filesSrc), '合并进行中禁用合并/删除所选按钮（syncPickedBar 同步）');
 
   /* 播放器进度条（用户报「只能点击、不能拖动」）：必须 Pointer Events +
      setPointerCapture，不得退回 onclick；拖动中只回绘预览、松手才写 currentTime；

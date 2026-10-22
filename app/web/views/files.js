@@ -24,6 +24,7 @@ const state = {
   filters: { q: '', platform: '', dateFrom: '', dateTo: '', ext: '' },
   defaultsSet: false,
   picked: new Set(),
+  merging: new Set(), // 正在合并中的文件 id（行状态显示「合并中」，期间禁止再合并/删除）
   page: 1,
   pages: 1,
   hash: '',
@@ -234,8 +235,8 @@ function paint(ctx, force) {
         <div class="spacer"></div>
         <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--txt-2);cursor:pointer"><input type="checkbox" class="cb" id="flSelAll"${allSel ? ' checked' : ''} /> ${t('files.selectAll')}</label>
         <span class="chip ${state.picked.size ? 'on' : ''}" id="flPickChip"><i class="dot"></i>${t('files.selectedCount', state.picked.size)}</span>
-        <button class="btn sm danger" id="flDelPicked"${state.picked.size ? '' : ' disabled'}>${t('files.deleteSelected')}</button>
-        <button class="btn sm danger" id="flMergePicked"${state.picked.size >= 2 ? '' : ' disabled'}>${t('files.mergeSelected')}</button>
+        <button class="btn sm danger" id="flDelPicked"${state.picked.size && !state.merging.size ? '' : ' disabled'}>${t('files.deleteSelected')}</button>
+        <button class="btn sm danger" id="flMergePicked"${state.picked.size >= 2 && !state.merging.size ? '' : ' disabled'}>${t('files.mergeSelected')}</button>
       </div>
       <div style="padding:0 16px 16px" id="flBody">
         ${list.length ? list.map(filenameRow).join('') : emptyBox(t('files.noFilteredFiles'))}
@@ -268,7 +269,7 @@ function filenameRow({ f, s, tag }) {
       <div style="flex:1;min-width:0">
         <div style="font-size:13px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(f.name || f.relPath || '—')}
           <span class="chip">${esc(extLabel)}</span>
-          ${playing ? `<span class="chip wait" style="margin-left:6px"><i class="dot"></i>${t('common.recording')}</span>` : missing ? `<span class="chip err" style="margin-left:6px">${t('files.missing')}</span>` : `<span class="chip on" style="margin-left:6px"><i class="dot"></i>${t('common.recorded')}</span>`}
+          ${state.merging.has(f.id) ? `<span class="chip wait" style="margin-left:6px"><i class="dot"></i>${t('files.merging')}</span>` : playing ? `<span class="chip wait" style="margin-left:6px"><i class="dot"></i>${t('common.recording')}</span>` : missing ? `<span class="chip err" style="margin-left:6px">${t('files.missing')}</span>` : `<span class="chip on" style="margin-left:6px"><i class="dot"></i>${t('common.recorded')}</span>`}
         </div>
         <div style="display:flex;gap:10px;align-items:center;margin-top:5px;font-size:11.5px;color:var(--txt-3);flex-wrap:wrap">
           ${platBadge(s.platform, s.platformName)}
@@ -279,9 +280,9 @@ function filenameRow({ f, s, tag }) {
         </div>
       </div>
       <div class="acts">
-        <button class="btn sm ghost" data-file-act="play" data-id="${esc(f.id)}"${missing ? ' disabled' : ''}>${t('files.play')}</button>
+        <button class="btn sm ghost" data-file-act="play" data-id="${esc(f.id)}"${missing || state.merging.has(f.id) ? ' disabled' : ''}>${t('files.play')}</button>
         <a class="btn sm ghost" href="${esc(api.downloadUrl(f.id))}" download>${t('files.download')}</a>
-        <button class="btn sm danger" data-file-act="delete" data-id="${esc(f.id)}"${playing || missing ? ' disabled' : ''}>${t('common.delete')}</button>
+        <button class="btn sm danger" data-file-act="delete" data-id="${esc(f.id)}"${playing || missing || state.merging.has(f.id) ? ' disabled' : ''}>${t('common.delete')}</button>
       </div>
     </div>`;
 }
@@ -426,9 +427,9 @@ function syncPickedBar() {
     chip.innerHTML = `<i class="dot"></i>${t('files.selectedCount', state.picked.size)}`;
   }
   const del = root.querySelector('#flDelPicked');
-  if (del) del.disabled = state.picked.size === 0;
+  if (del) del.disabled = state.picked.size === 0 || state.merging.size > 0;
   const mg = root.querySelector('#flMergePicked');
-  if (mg) mg.disabled = state.picked.size < 2;
+  if (mg) mg.disabled = state.picked.size < 2 || state.merging.size > 0;
   const selAll = root.querySelector('#flSelAll');
   if (selAll) {
     const list = state.rows;
@@ -496,8 +497,9 @@ async function trashEnabled() {
 }
 
 /* 勾选合并：按列表顺序把后面的文件内容追加到第一个文件，结果沿用第一个文件名。
-   弹框提供「合并」（保留全部源文件）与「合并后删除源文件」（被追加的文件移入回收站）两个动作。 */
+   弹框提供「合并(保留源文件)」（保留全部源文件）与「合并(删除源文件)」（被追加的文件移入回收站）两个动作。 */
 async function mergeFiles(ctx) {
+  if (state.merging.size) return; // 已有合并在进行，按钮也已禁用，双保险
   // 顺序 = 文件列表展示顺序（fetchAllRows 返回后端 sortFileRows 稳定序），
   // 不用勾选顺序——勾选先后是用户操作痕迹，不代表「第 1、2、3 集」的播放顺序。
   const all = await fetchAllRows();
@@ -521,7 +523,7 @@ async function mergeFiles(ctx) {
     footer: (close) => {
       const b1 = el('button', 'btn ghost', t('common.cancel'));
       const b2 = el('button', 'btn primary', t('files.mergeKeep'));
-      const b3 = el('button', 'btn danger', t('files.mergeDeleteSource'));
+      const b3 = el('button', 'btn primary', t('files.mergeDeleteSource'));
       b1.onclick = close;
       b2.onclick = () => { close(); void runMerge(ordered, false, ctx); };
       b3.onclick = () => { close(); void runMerge(ordered, true, ctx); };
@@ -531,12 +533,20 @@ async function mergeFiles(ctx) {
 }
 
 async function runMerge(ids, deleteSources, ctx) {
+  ids.forEach((id) => state.merging.add(id));
+  paint(ctx, true); // 先亮「合并中」行状态（指纹不含合并态，须强制重绘）
   try {
     const r = await api.filesMergeSelected(ids, deleteSources);
     const name = (r && r.item && r.item.name) || '';
-    toast(t('files.mergedDone') + (name ? `：${name}` : ''));
     if (deleteSources) ids.slice(1).forEach((id) => state.picked.delete(id)); // 被追加源已移除
+    ids.forEach((id) => state.merging.delete(id));
     state.hash = '';
     await tick(ctx, true);
-  } catch (e) { toast(e.message || t('files.mergeFailed'), 'err'); }
+    toast(t('files.mergedDone') + (name ? `：${name}` : ''));
+  } catch (e) {
+    ids.forEach((id) => state.merging.delete(id));
+    state.hash = '';
+    await tick(ctx, true); // 失败也复位重绘：状态还原、按钮恢复可用
+    toast(e.message || t('files.mergeFailed'), 'err');
+  }
 }

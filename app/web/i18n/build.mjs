@@ -90,6 +90,20 @@ const ADD = {
   'files.deletedCount': '（{0} 项）', 'files.deletedCountBytes': '（{0} 项 / {1}）',
   'files.deleteFailed': '删除失败', 'files.readTrashSettingFailed': '读取删除设置失败，请重试',
 
+  // files（勾选合并 + 查询反馈 + 合并中状态；2026-10-22 补登此前直接写进生成物的孤儿键）
+  'files.mergeSelected': '合并',
+  'files.mergeTitle': '合并所选文件',
+  'files.mergeKeep': '合并(保留源文件)',
+  'files.mergeDeleteSource': '合并(删除源文件)',
+  'files.mergeText': '将按列表顺序把后面 <b>{0}</b> 个文件的内容依次追加到 <b>{1}</b>，结果保留第一个文件的名称。<br><span style=\"color:var(--txt-3)\">「合并(保留源文件)」保留全部源文件；「合并(删除源文件)」会把被追加的文件移出磁盘（受「删除时移入回收站」开关控制）。</span>',
+  'files.mergeNeedTwo': '至少选择 2 个文件才能合并',
+  'files.mergeMixedExt': '仅支持合并相同格式的文件',
+  'files.mergeFailed': '合并失败',
+  'files.mergedDone': '合并完成',
+  'files.merging': '合并中',
+  'files.queryApplied': '已按当前条件查询',
+  'files.refreshed': '已刷新',
+
   // logs
   'logs.loading': '正在加载日志…', 'logs.loadFailed': '日志加载失败：{0}',
   'logs.levelAll': '全部级别', 'logs.taskAll': '全部任务', 'logs.taskLocked': '已锁定任务 {0}',

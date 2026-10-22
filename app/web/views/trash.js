@@ -63,8 +63,8 @@ function paint(ctx, force) {
         <h3>${t('nav.trash')}</h3>
         <span class="hint">${state.total} ${t('trash.itemUnit')} · ${esc(formatBytes(state.bytes))}</span>
         <div class="spacer"></div>
-        <button class="btn sm" id="trRestoreAll"${state.total ? '' : ' disabled'}>${t('trash.restoreAll')}</button>
-        <button class="btn sm danger" id="trEmpty"${state.total ? '' : ' disabled'}>${t('trash.purgeAll')}</button>
+        <button class="btn sm primary" id="trRestoreAll"${state.total ? '' : ' disabled'}>${t('trash.restoreAll')}</button>
+        <button class="btn sm primary" id="trEmpty"${state.total ? '' : ' disabled'}>${t('trash.purgeAll')}</button>
       </div>
       <div class="card-b">
         ${state.total
