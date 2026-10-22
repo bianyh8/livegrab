@@ -1,13 +1,24 @@
 /* LiveGrab · merge-dialog.js —— 合并所选文件（弹框）
    文件库勾选 ≥2 个文件点「合并」后弹出：按文件库原有排序列出这些文件，
    按住左侧 ⋮⋮ 拖动可调整顺序（鼠标 / 触屏同一套 pointer 事件），
-   填文件名、决定是否删源，点「合并」按当前顺序把后面的内容依次追加到第一个文件之后。
-   顺序只由这里决定：勾选先后是操作痕迹，不代表第 1、2、3 集的播放顺序。 */
+   行尾 ✕ 可把该文件移出本次合并；填文件名、决定是否删源，点「合并」
+   按当前顺序把后面的内容依次追加到第一个文件之后。
+   顺序只由这里决定：勾选先后是操作痕迹，不代表第 1、2、3 集的播放顺序。
+
+   布局（2026-10-22）：弹框改三段式 ——
+     ① 说明行（固定）② 文件列表（可视 5 行，超出在列表内部滚动）
+     ③ 文件名 + 删源勾选（固定，不随列表滚动）。弹框本身不滚动。 */
 
 import { t } from './i18n.js';
 import { esc, el, formatBytes, formatDuration, toast, openDialog } from './ui.js';
 
+/** 列表默认可见行数：第 6 行起在列表内部滚动（高度由 CSS 的 --mg-rows 同步） */
+const VISIBLE_ROWS = 5;
+
 const stemOf = (name) => String(name || '').replace(/\.[A-Za-z0-9]{1,8}$/, '');
+
+/** 产物名默认值：第一个文件名去扩展名 +「(合并)」 */
+const defaultNameOf = (row) => `${stemOf(row && row.f && (row.f.name || row.f.relPath))}(合并)`;
 
 function metaOf(row) {
   const f = row.f || {};
@@ -27,6 +38,7 @@ function rowHTML(row, i) {
     <span class="mg-idx">${i + 1}</span>
     <span class="mg-nm">${esc(f.name || f.relPath || '')}</span>
     <span class="mg-meta">${esc(metaOf(row))}</span>
+    <button type="button" class="mg-x" data-act="del" title="${t('merge.remove')}" aria-label="${t('merge.remove')}">✕</button>
   </div>`;
 }
 
@@ -89,54 +101,94 @@ export function openMergeDialog({ rows, deleteSources = false, onSubmit }) {
   let order = list;
   let del = !!deleteSources;
   let busy = false;
-
-  const defName = `${stemOf(list[0].f && (list[0].f.name || list[0].f.relPath))}(合并)`;
+  let nameDirty = false; // 用户改过文件名后，删除行不再覆盖它
 
   return openDialog({
     title: t('merge.title'),
     width: 'min(560px,92vw)',
-    body: `<div class="hintline" style="margin-top:0">${t('merge.count', list.length)} · ${t('merge.dragHint')}</div>
-      <div class="mg-list" id="mgList">${order.map(rowHTML).join('')}</div>
-      <div class="form-row" style="margin-top:12px">
-        <label class="fl">${t('files.mergeNameLabel')}</label>
-        <input class="input" id="mgName" value="${esc(defName)}" />
-        <div class="hintline">${t('files.mergeNameHint')}</div>
+    cls: 'mg-modal', // 三段式布局 + 弹框自身不滚动（只有列表滚）
+    body: `<div class="mg-body">
+      <div class="hintline mg-hint" style="margin-top:0">
+        <span id="mgCount">${t('merge.count', list.length)}</span> · ${t('merge.dragHint')}
       </div>
-      <label class="mg-del">
-        <input type="checkbox" class="cb" id="mgDel"${del ? ' checked' : ''} />
-        <span>${t('merge.deleteSources')}</span>
-      </label>`,
+      <div class="mg-list" id="mgList" style="--mg-rows:${VISIBLE_ROWS}">${order.map(rowHTML).join('')}</div>
+      <div class="hintline mg-empty" id="mgEmpty" style="display:none">${t('merge.empty')}</div>
+      <div class="mg-form">
+        <div class="form-row" style="margin-top:12px">
+          <label class="fl">${t('files.mergeNameLabel')}</label>
+          <input class="input" id="mgName" value="${esc(defaultNameOf(list[0]))}" />
+          <div class="hintline">${t('files.mergeNameHint')}</div>
+        </div>
+        <label class="mg-del">
+          <input type="checkbox" class="cb" id="mgDel"${del ? ' checked' : ''} />
+          <span>${t('merge.deleteSources')}</span>
+        </label>
+      </div>
+    </div>`,
     footer: (close, body) => {
       const listEl = body.querySelector('#mgList');
+      const countEl = body.querySelector('#mgCount');
+      const emptyEl = body.querySelector('#mgEmpty');
       const nameEl = body.querySelector('#mgName');
       const delEl = body.querySelector('#mgDel');
       if (delEl) delEl.onchange = () => { del = !!delEl.checked; };
+      if (nameEl) nameEl.addEventListener('input', () => { nameDirty = true; });
       bindDrag(listEl, () => order, (next) => { order = next; });
 
       const cancel = el('button', 'btn ghost', t('common.cancel'));
       const go = el('button', 'btn primary', t('files.mergeSelected'));
       cancel.onclick = close;
+
+      /* 列表状态同步：文件数文案、空态提示、「合并」可用性。
+         删行只动弹框内的待合并清单，不影响文件库里的勾选与磁盘文件。 */
+      const refresh = () => {
+        if (countEl) countEl.textContent = t('merge.count', order.length);
+        if (emptyEl) emptyEl.style.display = order.length ? 'none' : '';
+        go.disabled = busy || order.length < 2; // 不足 2 个直接不可点，不用点了才报错
+      };
+
+      /* 行尾 ✕：把该文件移出本次合并（不删文件、不改勾选），序号重排、计数刷新 */
+      if (listEl) {
+        listEl.addEventListener('click', (ev) => {
+          const btn = ev.target && ev.target.closest ? ev.target.closest('.mg-x') : null;
+          if (!btn || busy) return;
+          const node = btn.closest('.mg-row');
+          const id = node && node.dataset.id;
+          const i = order.findIndex((r) => String(r.f.id) === String(id));
+          if (i < 0) return;
+          ev.preventDefault();
+          ev.stopPropagation(); // 别让行上的拖动/点击逻辑接住这次点击
+          order = order.slice(0, i).concat(order.slice(i + 1));
+          if (node) node.remove();
+          renumber(listEl);
+          // 文件名还停在默认值（用户没手改过）时，跟着第一个文件一起更新
+          if (!nameDirty && nameEl && order.length) nameEl.value = defaultNameOf(order[0]);
+          refresh();
+        });
+      }
+
       go.onclick = async () => {
-        if (busy) return;
+        if (busy || order.length < 2) return;
         const name = String((nameEl && nameEl.value) || '').trim();
         if (!name) { toast(t('files.mergeNameRequired'), 'warn'); if (nameEl) nameEl.focus(); return; }
-        if (order.length < 2) { toast(t('files.mergeNeedTwo'), 'warn'); return; }
 
         busy = true;
-        go.disabled = true;
         go.textContent = t('merge.submitting');
         if (listEl) listEl.classList.add('mg-busy');
+        refresh();
         let ok = false;
         try {
           ok = await onSubmit({ ids: order.map((r) => r.f.id), name, deleteSources: del });
         } finally {
           busy = false;
-          go.disabled = false;
           go.textContent = t('files.mergeSelected');
           if (listEl) listEl.classList.remove('mg-busy');
+          refresh();
         }
         if (ok) close(); // 失败留在弹框：顺序与输入都保留，可直接重试
       };
+
+      refresh();
       if (nameEl) setTimeout(() => { nameEl.focus(); nameEl.select(); }, 30);
       return [cancel, go];
     },

@@ -655,9 +655,28 @@ table.tight th{padding:8px 12px}
 .mvbtn:hover{background:var(--line);color:var(--txt-1)}
 .mvbtn:disabled{opacity:.35;cursor:default}
 
-/* ---- 合并弹框（文件库勾选后点「合并」）：勾选文件的合并顺序，可拖动手柄调整 ---- */
-.mg-list{display:flex;flex-direction:column;gap:6px;margin-top:8px;max-height:300px;overflow:auto}
-.mg-row{display:flex;align-items:center;gap:10px;padding:9px 11px;border:1px solid var(--line);border-radius:8px;background:#0d1219}
+/* ---- 合并弹框（文件库勾选后点「合并」）：勾选文件的合并顺序，可拖动手柄调整 ----
+   布局三段式：说明行 / 文件列表 / 文件名+删源。只有列表滚动，其余固定不动。
+   · 弹框本身不滚（overflow:hidden），height 由内容决定、最高 88vh；
+     空间不够时由 .mg-list 收缩并在内部滚动（min-height:0 + flex-shrink），
+     所以底部的文件名与勾选框永远不会被列表带着跑。
+   · 列表默认露出 5 行：--mg-rows 由 JS 传（与 VISIBLE_ROWS 一致），
+     行高固定 --mg-row-h，超出部分列表内部滚动。 */
+.modal.mg-modal{display:flex;flex-direction:column;overflow:hidden}
+.modal.mg-modal .modal-h,.modal.mg-modal .modal-f{flex:0 0 auto}
+.modal.mg-modal .modal-b{flex:1 1 auto;min-height:0;display:flex;flex-direction:column;overflow:hidden}
+.mg-body{display:flex;flex-direction:column;min-height:0;flex:1 1 auto}
+.mg-hint{flex:0 0 auto}
+/* 说明行别被通用 .hintline 的 nowrap+省略号截掉（删行后文件数会变，提示要看得全） */
+.modal.mg-modal .mg-hint{white-space:normal;overflow:visible;text-overflow:clip}
+.mg-form{flex:0 0 auto}
+.mg-list{
+  --mg-row-h:44px;--mg-gap:6px;--mg-rows:5;
+  flex:0 1 auto;min-height:0;display:flex;flex-direction:column;gap:var(--mg-gap);
+  margin-top:8px;overflow:auto;overscroll-behavior:contain;scrollbar-gutter:stable;
+  max-height:calc(var(--mg-rows) * var(--mg-row-h) + (var(--mg-rows) - 1) * var(--mg-gap));
+}
+.mg-row{display:flex;align-items:center;gap:10px;padding:9px 11px;border:1px solid var(--line);border-radius:8px;background:#0d1219;min-height:var(--mg-row-h);box-sizing:border-box}
 .mg-row:hover{border-color:var(--line-2)}
 .mg-row.mg-dragging{border-color:var(--accent);background:rgba(91,140,255,.10);box-shadow:0 6px 18px rgba(0,0,0,.35);position:relative;z-index:2}
 .mg-handle{flex:0 0 auto;cursor:grab;color:var(--txt-3);font-size:15px;line-height:1;letter-spacing:-2px;padding:2px 4px;user-select:none;touch-action:none}
@@ -665,6 +684,12 @@ table.tight th{padding:8px 12px}
 .mg-idx{flex:0 0 22px;text-align:right;font-size:11.5px;color:var(--txt-3);font-variant-numeric:tabular-nums}
 .mg-nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px}
 .mg-meta{flex:0 0 auto;font-size:11.5px;color:var(--txt-3)}
+/* 行尾 ✕：把该文件移出本次合并清单（不删文件、不动文件库勾选） */
+.mg-x{flex:0 0 auto;display:grid;place-items:center;width:22px;height:22px;padding:0;border:1px solid transparent;border-radius:6px;
+  background:transparent;color:var(--txt-3);font-size:12px;line-height:1;cursor:pointer;transition:background .12s,color .12s,border-color .12s}
+.mg-x:hover{background:rgba(242,84,91,.12);border-color:rgba(242,84,91,.35);color:var(--err)}
+.mg-x:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.mg-empty{margin-top:10px}
 .mg-list.mg-sorting .mg-row{transition:transform .12s ease}
 .mg-list.mg-busy{opacity:.55;pointer-events:none}
 .mg-del{display:flex;align-items:center;gap:8px;margin-top:12px;font-size:12.5px;color:var(--txt-2);cursor:pointer}

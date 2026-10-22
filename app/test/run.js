@@ -1776,6 +1776,22 @@ function testViewGuards() {
   ok(/deleteSources: await mergeDeleteDefault\(\)/.test(filesSrc) && /deleteAfterMerge !== false/.test(filesSrc), '「合并后把源文件移入回收站」默认值取系统设置 deleteAfterMerge');
   ok(/id="mgDel"/.test(mergeSrc) && /el\('button', 'btn primary', t\('files\.mergeSelected'\)\)/.test(mergeSrc) && !/mergeKeep|mergeDeleteSource/.test(mergeSrc), '提交区 = 一个「合并」按钮 + 删源勾选（不再两个合并动作）');
 
+  /* 合并弹框滚动与固定区（2026-10-22）：列表默认露出 5 行、超出在列表内部滚动；
+     下方的文件名 + 删源勾选固定不动（弹框自身不滚，空间不足时只有列表收缩滚动）；
+     行尾 ✕ 把该文件移出本次合并并同步序号/计数/按钮可用性，三者互不影响。 */
+  ok(/const VISIBLE_ROWS = 5;/.test(mergeSrc) && /style="--mg-rows:\$\{VISIBLE_ROWS\}"/.test(mergeSrc), '列表默认可见行数 = 5（JS 常量与样式变量同源）');
+  const mgListCss = (cssSrc.match(/\.mg-list\{[\s\S]*?\}/) || [''])[0];
+  ok(/max-height:calc\(var\(--mg-rows\) \* var\(--mg-row-h\) \+ \(var\(--mg-rows\) - 1\) \* var\(--mg-gap\)\)/.test(mgListCss), '列表高度 = 5 行 × 行高 + 间隙（第 6 行起才滚动）');
+  ok(/overflow:auto/.test(mgListCss) && /min-height:0/.test(mgListCss) && /\.mg-row\{[^}]*min-height:var\(--mg-row-h\)/.test(cssSrc), '只有列表自身滚动，行高固定（可见行数不随内容浮动）');
+  ok(/\.modal\.mg-modal\{[^}]*overflow:hidden/.test(cssSrc) && /\.modal\.mg-modal \.modal-b\{[^}]*overflow:hidden/.test(cssSrc), '弹框与 body 都不滚动（列表滚动不带动底部表单）');
+  ok(/\.mg-form\{flex:0 0 auto\}/.test(cssSrc) && /\.mg-hint\{flex:0 0 auto\}/.test(cssSrc), '说明行与「文件名/删源」区不参与收缩（位置固定）');
+  ok(/cls\s*=\s*''/.test(uiSrc) && /modal\.classList\.add\(\.\.\.String\(cls\)/.test(uiSrc) && /cls: 'mg-modal'/.test(mergeSrc), 'openDialog 支持额外类名，合并弹框挂 mg-modal（不动其他弹框）');
+  ok(/class="mg-x" data-act="del"/.test(mergeSrc) && /id="mgEmpty"/.test(mergeSrc), '每行末尾有删除按钮（✕），并预留清空提示位');
+  ok(/closest\('\.mg-x'\)/.test(mergeSrc) && /order = order\.slice\(0, i\)\.concat\(order\.slice\(i \+ 1\)\)/.test(mergeSrc) && /if \(node\) node\.remove\(\)/.test(mergeSrc), '点 ✕：同时从 order 与 DOM 移除该行（提交顺序不再含它）');
+  ok(/renumber\(listEl\)/.test(mergeSrc) && /if \(!nameDirty && nameEl && order\.length\) nameEl\.value = defaultNameOf\(order\[0\]\)/.test(mergeSrc), '删行后序号重排；文件名未被手改时跟随新的第一个文件');
+  ok(/const refresh = \(\) => \{[\s\S]{0,260}?go\.disabled = busy \|\| order\.length < 2;/.test(mergeSrc) && /refresh\(\);\n      if \(nameEl\) setTimeout/.test(mergeSrc), '删行后同步计数/空态/「合并」可用性（<2 个直接禁用）');
+  ok(/if \(busy \|\| order\.length < 2\) return;/.test(mergeSrc) && /ev\.stopPropagation\(\)/.test(mergeSrc), '删除与拖动互不干扰（拖动手柄限定 + 删除点击不冒泡），忙时忽略删除');
+
   /* 工具栏/徽标一致性（用户三连反馈：刷新位置、合并按钮样式、同为 .mp4 徽标不一致）：
      「刷新」移到「清除」后边（工具栏内）；「合并」与「删除所选」同款（btn sm danger）；
      文件名后的类型徽标整体移除——徽标非用户需求（b7c7195 自行加入），且同为 .mp4
@@ -1803,12 +1819,13 @@ function testViewGuards() {
   /* 合并产物 = 全新命名文件（2026-10-22 语义变更）：弹框录名（预填「第一个文件名(合并)」、可改）；
      「保留源」→ 文件数 = 源数+1；「删源」→ 全部源删除只剩结果；结果继承第一个文件的场次信息。 */
   ok(/id="mgName"/.test(mergeSrc), '弹框有「文件名」输入框');
-  ok(/stemOf\(/.test(mergeSrc) && /\(合并\)/.test(mergeSrc) && /const defName =/.test(mergeSrc), '预填默认名 = 第一个文件名去扩展名 +「(合并)」');
-  ok(/list\[0\]\.f && \(list\[0\]\.f\.name \|\| list\[0\]\.f\.relPath\)/.test(mergeSrc), '合并取文件对象本身（解包行包装 .f，否则预填只剩「(合并)」）');
+  ok(/stemOf\(/.test(mergeSrc) && /\(合并\)/.test(mergeSrc) && /const defaultNameOf =/.test(mergeSrc), '预填默认名 = 第一个文件名去扩展名 +「(合并)」');
+  ok(/row && row\.f && \(row\.f\.name \|\| row\.f\.relPath\)/.test(mergeSrc) && /defaultNameOf\(list\[0\]\)/.test(mergeSrc), '合并取文件对象本身（解包行包装 .f，否则预填只剩「(合并)」）');
   ok(/files\.mergeNameLabel/.test(mergeSrc) && /files\.mergeNameRequired/.test(mergeSrc), '命名输入有标签文案与空值拦截');
   ok(zhJson['files.mergeNameLabel'] === '文件名', '命名输入标签文案沿用「文件名」');
   ok(zhJson['merge.title'] === '合并文件' && !!zhJson['merge.count'] && /拖动/.test(zhJson['merge.dragHint']), '合并弹框文案齐全（标题 / 文件数 / 拖动说明）');
   ok(/默认跟随/.test(zhJson['merge.deleteSources']), '删源勾选框文案写明默认值跟随系统设置');
+  ok(zhJson['merge.remove'] === '移出合并列表' && /移出合并列表/.test(zhJson['merge.empty']), '行尾删除按钮与列表清空提示有文案');
   const srvSrc = fs.readFileSync(path.join(APP_DIR, 'server', 'server.js'), 'utf8');
   ok(/mergePicked\(fileIds, \{ deleteSources, name \}\)/.test(srvSrc), '路由透传 name');
   const storSrc = fs.readFileSync(path.join(APP_DIR, 'server', 'storage.js'), 'utf8');

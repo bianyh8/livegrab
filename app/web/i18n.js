@@ -204,6 +204,8 @@ const DEFAULT_DICT = {
   "merge.deleteSources": "合并后把源文件移入回收站（默认跟随「设置 → 录制 → 合并后删除原始分段」）",
   "merge.dragHint": "按住左侧 ⋮⋮ 拖动可调整顺序；合并会按此顺序把后面的内容依次追加到第一个文件之后。",
   "merge.dragTip": "拖动调整顺序",
+  "merge.empty": "已把全部文件移出合并列表，取消后重新勾选即可再合并。",
+  "merge.remove": "移出合并列表",
   "merge.submitting": "合并中…",
   "merge.title": "合并文件",
   "nav.files": "录制文件",

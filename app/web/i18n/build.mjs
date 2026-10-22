@@ -260,6 +260,8 @@ const ADD = {
   'merge.count': '共 {0} 个文件',
   'merge.dragHint': '按住左侧 ⋮⋮ 拖动可调整顺序；合并会按此顺序把后面的内容依次追加到第一个文件之后。',
   'merge.dragTip': '拖动调整顺序',
+  'merge.remove': '移出合并列表',
+  'merge.empty': '已把全部文件移出合并列表，取消后重新勾选即可再合并。',
   'merge.deleteSources': '合并后把源文件移入回收站（默认跟随「设置 → 录制 → 合并后删除原始分段」）',
   'merge.submitting': '合并中…',
 };

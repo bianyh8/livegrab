@@ -272,13 +272,15 @@ export function promptDialog({ title = t('ui.promptTitle'), label = '', value = 
 }
 
 /** 通用弹窗骨架：body 传 HTML 字符串，footer 传 (close, bodyEl)=>[buttons] */
-export function openDialog({ title = '', body = '', footer = null, wide = false, width = '' }) {
+export function openDialog({ title = '', body = '', footer = null, wide = false, width = '', cls = '' }) {
   const mask = document.getElementById('modalMask');
   if (!mask) return { close() {} };
   mask.innerHTML = '';
   const modal = el('div', 'modal');
   if (wide) modal.style.width = 'min(1000px,94vw)';
   if (width) modal.style.width = width;
+  // 额外类名：给个别弹框挂布局类（如 mg-modal 的三段式固定底栏），不影响其他弹框
+  if (cls) modal.classList.add(...String(cls).split(/\s+/).filter(Boolean));
   const head = el('div', 'modal-h');
   head.innerHTML = `<h3>${esc(title)}</h3><span class="x">✕</span>`;
   const bodyEl = el('div', 'modal-b');
