@@ -67,7 +67,7 @@ Task = {
   namingProfileId: 'default',
   autoRecord: true, pollIntervalSec: 60, startDelaySec: 5, stopDelaySec: 30,
   status: 'idle'|'waiting'|'queued'|'recording'|'stopping'|'merging'|'completed'|'stopped'|'error',
-  statusMessage: '未开播', lastError: null, retryCount: 0, reconnectCount: 0,
+  lastError: null, retryCount: 0, reconnectCount: 0,
   startedAt: null, endedAt: null, totalBytes: 0, totalDurationSec: 0,
   segmentIndex: 0,                                       // 已完成分段数
   currentFile: null,
@@ -275,7 +275,7 @@ ffmpeg -hide_banner -loglevel info -nostats
 | GET | `/api/events` | SSE：`event: log\|task\|files\|status`，15s `:ping` |
 | POST | `/api/notify/test` | |
 
-`TaskLite={id,name,platform,platformName,roomId,quality,qualityLabel,status,statusMessage,bytes,elapsedSec}`。
+`TaskLite={id,name,platform,platformName,roomId,quality,qualityLabel,status,bytes,elapsedSec}`。
 `Task` 在原契约基础上增加：`namingProfileId`、`overrides:{quality?,segmentMode?,namingProfileId?,customText?}`、`queueReason`、`lastError`、`segments[]`、`sessionId`。
 
 ### 6.5.3 Session / FileItem（文件库数据形状）

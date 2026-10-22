@@ -122,7 +122,7 @@ await jput('/api/settings', { diskLimitGB: 99999 });
 await jpost(`/api/tasks/${tD.id}/start`);
 await sleep(1500);
 const dTask = (await tasksAll()).find((t) => t.id === tD.id);
-check(dTask?.status === 'error' && /磁盘/.test(dTask.lastError || dTask.statusMessage || ''), '磁盘低于阈值时拒绝开录并说明原因', dTask?.lastError || dTask?.statusMessage);
+check(dTask?.status === 'error' && /磁盘/.test(dTask.lastError || ''), '磁盘低于阈值时拒绝开录并说明原因', dTask?.lastError);
 await jput('/api/settings', { diskLimitGB: 1 });
 await fetch(`${BASE}/api/tasks/${tD.id}`, { method: 'DELETE' });
 const tA = await mk('真实录制A', '/live1.ts', { segmentMode: 'time', segmentMinutes: 1 });
@@ -136,7 +136,7 @@ line(`   启动返回: ${starts.map((s) => (s.ok ? (s.data?.result?.queued ? 'qu
 await sleep(3000);
 let st = await status();
 if (!st.stats.activeCount) {
-  line('   [诊断] 任务状态: ' + st.tasks.map((t) => `${t.anchorName}=${t.status}${t.lastError ? ' err=' + t.lastError : ''}${t.statusMessage ? ' msg=' + t.statusMessage : ''}`).join(' | '));
+  line('   [诊断] 任务状态: ' + st.tasks.map((t) => `${t.anchorName}=${t.status}${t.lastError ? ' err=' + t.lastError : ''}`).join(' | '));
   line('   [诊断] 服务日志: ' + srvLog.split('\n').filter((l) => /错误|失败|ffmpeg|录制/.test(l)).slice(-8).join(' \\n '));
 }
 const byId = (id) => st.tasks.find((t) => t.id === id);

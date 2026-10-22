@@ -1167,8 +1167,8 @@ async function testPullBlockedBackoff() {
   ok(isPullBlocked(rec.lastStderrError), 'stderr 被识别为平台拒绝', String(rec.lastStderrError || '').slice(0, 60));
   await sleep(3000);
   eq(rec.reconnectAttempt, 1, '403 冷却期内不重试（普通断流此时已第 2 次）');
-  const blockedEvt = e.events.filter((x) => x.type === 'task' && /拉流被平台拒绝/.test(x.task?.statusMessage || ''));
-  ok(blockedEvt.length > 0, '任务状态显示风控/限流提示', blockedEvt[0]?.task?.statusMessage);
+  const blockedEvt = e.events.filter((x) => x.type === 'task' && (x.task?.reconnectCount || 0) >= 1);
+  ok(blockedEvt.length > 0, '403 进入重连后任务状态记录重连次数（可观测，不再是后端文案）', String(blockedEvt[0]?.task?.reconnectCount));
   task.autoRecord = false;
   await e.store.saveTask(task);
   await e.scheduler.stopTask(task.id);
@@ -1363,6 +1363,35 @@ async function testTodayStats() {
   eq(st.todayBytes, 2850, '今日体积按当天文件累加');
   eq(st.todayDurationSec, 540, '今日录制时长 = 当天各分段时长累加（派生文件不重复计时长）');
   eq(e.scheduler.status().stats.todayDurationSec, 540, '总览 stats 使用同一口径');
+}
+
+// 任务状态一律存英文 KEY，显示名由前端 i18n 渲染：DB 不再有 status_message 列，后端不再拼中文文案
+async function testTaskStatusKeys() {
+  suite('任务状态只存 KEY（DB 不再存后端中文文案）');
+  const dir = p('status-keys');
+  await fsp.mkdir(dir, { recursive: true });
+  const store = await openStore(dir);
+
+  const cols = store.db.prepare("SELECT name FROM pragma_table_info('tasks')").all().map((c) => c.name);
+  ok(!cols.includes('status_message'), 'tasks 表不含 status_message 列', `${cols.length} 列`);
+
+  const t = Store.newTask({ platform: 'direct', roomId: 'r1', anchorName: '状态测试' });
+  ok(!('statusMessage' in t), 'newTask 默认形状不含 statusMessage');
+  t.status = 'recording';
+  t.queueReason = '超出全局上限（1/1）';
+  await store.addTask(t);
+  const back = store.getTask(t.id);
+  ok(!Object.prototype.hasOwnProperty.call(back, 'statusMessage'), '落盘回读不含 statusMessage',
+    Object.keys(back).filter((k) => /message/i.test(k)).join(',') || '无 message 字段');
+  eq(back.status, 'recording', '状态本身仍是英文 KEY');
+  eq(back.queueReason, '超出全局上限（1/1）', '排队原因是结构化数据（非 UI 文案字段）');
+
+  // 调度器视图（LITE）同样只透出 KEY 与结构化字段
+  const e = await makeEngine('status-lite');
+  await e.scheduler.createTask({ url: 'https://example.com/s.m3u8', platform: 'direct', anchorName: 'LITE 测试' });
+  const lite = e.scheduler.status().tasks[0];
+  ok(lite && !('statusMessage' in lite), '任务列表 LITE 视图不含 statusMessage', lite && lite.status);
+  ok(['waiting', 'queued'].includes(lite.status), 'LITE 状态为英文 KEY', lite.status);
 }
 
 async function testQueue() {
@@ -2208,7 +2237,7 @@ async function testMergePicked() {
   console.log(`LiveGrab 测试开始（临时目录 ${tmpRoot}）`);
   await rmrf(tmpRoot);
   await fsp.mkdir(tmpRoot, { recursive: true });
-  const suites = [testUtil, testNaming, testStore, testResolvers, testAuth, testRecordChain, testRemuxFollowGlobal, testPullBlockedBackoff, testConcurrentStart, testRepeatSessionNaming, testRepeatSessionSeqContinuation, testRecordingFileRow, testUnregisteredGrouping, testTodayStats, testQueue, testHttp, testViewGuards, testUpdateGuards, testProxy, testSegmentEndReason, testSegmentGuards, testFfmpegGuards, testFileScanGuards, testFileOrder, testRecorderLiveProxy, testStreamCandidates, testQualityFallbackBySetting, testResolveStreamPrecheck, testIsLiveFromResolve, testNoDoubleFallback, testOfflineConfirm, testAuditConsistency, testAuditRemainder, testDeadCodeRemainder, testMergeOnStopAndDeleteCount, testMergeDeleteSource, testMergePicked];
+  const suites = [testUtil, testNaming, testStore, testResolvers, testAuth, testRecordChain, testRemuxFollowGlobal, testPullBlockedBackoff, testConcurrentStart, testRepeatSessionNaming, testRepeatSessionSeqContinuation, testRecordingFileRow, testUnregisteredGrouping, testTodayStats, testTaskStatusKeys, testQueue, testHttp, testViewGuards, testUpdateGuards, testProxy, testSegmentEndReason, testSegmentGuards, testFfmpegGuards, testFileScanGuards, testFileOrder, testRecorderLiveProxy, testStreamCandidates, testQualityFallbackBySetting, testResolveStreamPrecheck, testIsLiveFromResolve, testNoDoubleFallback, testOfflineConfirm, testAuditConsistency, testAuditRemainder, testDeadCodeRemainder, testMergeOnStopAndDeleteCount, testMergeDeleteSource, testMergePicked];
   for (const s of suites) {
     try { await s(); } catch (e) {
       failed++;

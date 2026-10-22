@@ -138,7 +138,6 @@ CREATE TABLE IF NOT EXISTS tasks (
   start_delay_sec     INTEGER,
   stop_delay_sec      INTEGER,
   status              TEXT,
-  status_message      TEXT,
   queue_reason        TEXT,
   last_error          TEXT,
   retry_count         INTEGER,

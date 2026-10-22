@@ -133,7 +133,7 @@ function platName(id) {
 function listHash() {
   const list = state.tasks;
   return JSON.stringify(list.map((t) => [
-    t.id, t.status, t.queueReason, t.retryCount, t.statusMessage, t.qualityLabel,
+    t.id, t.status, t.queueReason, t.retryCount, t.qualityLabel,
     t.live && t.live.elapsedSec, t.live && t.live.bytes, t.live && t.live.segmentIndex, t.updatedAt,
   ])) + '|' + state.q + '|' + state.platform + '|' + state.liveStatus + '|' + state.status + '|' + state.sort + '|' + state.sortDir + '|' + Array.from(state.selected).join(',') + '|p' + state.page + '|tot' + state.total;
 }

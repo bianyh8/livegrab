@@ -65,7 +65,7 @@ console.log('=== 1. 自动录制任务点「停止本场」→ 设 sessionHold�
   check('autoRecord 仍为 true（不改配置）', t.autoRecord === true);
   check('manualHeld 仍为 false', t.manualHeld === false);
   check('状态收尾为 completed', t.status === 'completed', t.status);
-  check('文案提示本场已停止', /本场|不再自动录制/.test(t.statusMessage), t.statusMessage);
+  check('任务对象不存 UI 文案（状态只留 KEY）', !('statusMessage' in t), Object.keys(t).filter((k) => /message/i.test(k)).join(',') || '无 message 字段');
 }
 
 console.log('=== 2. 挂起期间直播中：轮询不再自动拉起录制 ===');
@@ -75,7 +75,7 @@ console.log('=== 2. 挂起期间直播中：轮询不再自动拉起录制 ===')
   await s.tick();
   check('探测执行了（直播状态照常刷新）', calls.probe === 1, `探测 ${calls.probe} 次`);
   check('未自动开始录制', calls.started === 0, `started ${calls.started} 次`);
-  check('状态回到 waiting 且文案明确', t.status === 'waiting' && /不再自动录制/.test(t.statusMessage), `${t.status} · ${t.statusMessage}`);
+  check('状态回到 waiting（挂起期间不自动拉起）', t.status === 'waiting', t.status);
   check('sessionHold 保持', t.sessionHold === true);
 }
 

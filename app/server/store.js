@@ -75,7 +75,7 @@ const TASK_COLS = [
   'quality', 'quality_actual', 'quality_label', 'segment_mode', 'segment_minutes', 'segment_size_mb', 'container',
   'remux_to_mp4', 'keep_source', 'auto_merge', 'reconnect_max', 'naming_profile_id', 'custom_text',
   'auto_record', 'monitor_only', 'manual_held', 'session_hold', 'poll_interval_sec', 'start_delay_sec', 'stop_delay_sec',
-  'status', 'status_message', 'queue_reason', 'last_error', 'retry_count', 'reconnect_count',
+  'status', 'queue_reason', 'last_error', 'retry_count', 'reconnect_count',
   'started_at', 'ended_at', 'total_bytes', 'total_duration_sec', 'segment_index', 'current_file', 'session_id',
   'platform_name', 'next_poll_at', 'fail_count', 'fail_notified', 'live_status', 'name_locked',
   'created_at', 'updated_at',
@@ -192,7 +192,7 @@ function taskToRow(t) {
     reconnect_max: numOrNull(t.reconnectMax), naming_profile_id: strOrNull(t.namingProfileId), custom_text: strOrNull(t.customText),
     auto_record: boolish(t.autoRecord), monitor_only: boolish(t.monitorOnly), manual_held: boolish(t.manualHeld),
     poll_interval_sec: numOrNull(t.pollIntervalSec), start_delay_sec: numOrNull(t.startDelaySec), stop_delay_sec: numOrNull(t.stopDelaySec),
-    status: strOrNull(t.status), status_message: strOrNull(t.statusMessage), queue_reason: strOrNull(t.queueReason), last_error: strOrNull(t.lastError),
+    status: strOrNull(t.status), queue_reason: strOrNull(t.queueReason), last_error: strOrNull(t.lastError),
     session_hold: boolish(t.sessionHold),
     retry_count: num(t.retryCount), reconnect_count: num(t.reconnectCount),
     started_at: strOrNull(t.startedAt), ended_at: strOrNull(t.endedAt),
@@ -216,7 +216,7 @@ function rowToTask(r, overrides = {}) {
     reconnectMax: r.reconnect_max, namingProfileId: r.naming_profile_id, customText: r.custom_text || '',
     autoRecord: !!r.auto_record, monitorOnly: !!r.monitor_only, manualHeld: !!r.manual_held,
     pollIntervalSec: r.poll_interval_sec, startDelaySec: r.start_delay_sec, stopDelaySec: r.stop_delay_sec,
-    status: r.status, statusMessage: r.status_message, queueReason: r.queue_reason, lastError: r.last_error,
+    status: r.status, queueReason: r.queue_reason, lastError: r.last_error,
     sessionHold: !!r.session_hold,
     retryCount: r.retry_count || 0, reconnectCount: r.reconnect_count || 0,
     startedAt: r.started_at, endedAt: r.ended_at, totalBytes: r.total_bytes || 0, totalDurationSec: r.total_duration_sec || 0,
@@ -538,7 +538,6 @@ export class Store {
     for (const t of this.state.tasks) {
       if (['recording', 'queued', 'stopping', 'merging', 'paused'].includes(t.status)) {
         t.status = 'stopped';
-        t.statusMessage = '服务重启，录制已中断';
         t.updatedAt = nowIso();
       }
     }
@@ -1010,7 +1009,7 @@ export class Store {
       container: 'ts', remuxToMp4: true, keepSource: true, autoMerge: false,
       namingProfileId: null, customText: '', overrides: {},
       autoRecord: true, monitorOnly: false, manualHeld: false, pollIntervalSec: 60, startDelaySec: 5, stopDelaySec: 30,
-      status: 'idle', statusMessage: '未开播', queueReason: null, lastError: null,
+      status: 'idle', queueReason: null, lastError: null,
       retryCount: 0, reconnectCount: 0,
       startedAt: null, endedAt: null, totalBytes: 0, totalDurationSec: 0,
       segmentIndex: 0, currentFile: null, sessionId: null,

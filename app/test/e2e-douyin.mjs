@@ -138,8 +138,8 @@ try {
   }, 45000);
   if (!rec) {
     const t = (await tasksAll()).find((x) => x.id === task.id);
-    line(`  任务状态: ${t?.status} / ${t?.statusMessage || t?.lastError || ''}`);
-    check(false, '任务进入录制状态（房间可能刚下播，可重跑）', t?.statusMessage || t?.lastError || '');
+    line(`  任务状态: ${t?.status} / ${t?.lastError || ''}`);
+    check(false, '任务进入录制状态（房间可能刚下播，可重跑）', t?.lastError || '');
   } else {
     check(true, '抖音任务开始录制（免登录）', `${rec.anchorName} · ${rec.title || ''}`);
     check(!rec.lastError, '录制中无解析错误', rec.lastError || '（无）');

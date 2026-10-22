@@ -14,7 +14,7 @@ const LITE = (t) => ({
   id: t.id, name: t.anchorName || t.platformAnchorName || t.title || t.roomId,
   anchorName: t.anchorName || t.platformAnchorName || '', title: t.title, avatar: t.avatarFile || null,
   platform: t.platform, roomId: t.roomId, quality: t.quality, qualityLabel: t.qualityLabel || qualityLabel(t.quality),
-  status: t.status, statusMessage: t.statusMessage, queueReason: t.queueReason,
+  status: t.status, queueReason: t.queueReason,
   bytes: t.totalBytes || 0, elapsedSec: 0, retryCount: t.retryCount || 0,
   startedAt: t.startedAt, sessionId: t.sessionId || null, autoRecord: t.autoRecord,
   monitorOnly: t.monitorOnly, manualHeld: t.manualHeld, sessionHold: !!t.sessionHold, liveStatus: t.liveStatus || (t.status === 'recording' ? 'live' : 'unknown'),
@@ -62,7 +62,6 @@ export class Scheduler {
     for (const t of tasks) {
       if (['recording', 'queued', 'stopping', 'paused'].includes(t.status)) {
         t.status = 'stopped';
-        t.statusMessage = '服务重启，未继续录制';
       }
       t.nextPollAt = 0;
       // 一次性迁移：已有非空主播名的任务一律锁定名称，解析刷新不再覆盖用户设置的名字
@@ -284,7 +283,6 @@ export class Scheduler {
       startDelaySec: Number(input.startDelaySec ?? settings.startDelaySec ?? 5),
       stopDelaySec: Number(input.stopDelaySec ?? settings.stopDelaySec ?? 30),
       status: room?.liveStatus === 'live' ? 'queued' : 'waiting',
-      statusMessage: room?.liveStatus === 'live' ? '检测到开播，排队中' : '等待开播',
       nextPollAt: room?.liveStatus === 'live' ? 0 : Date.now() + 5000,
     });
     // 分段/封装/转封装：任务级显式传了就用手动值，否则跟随全局
@@ -430,14 +428,12 @@ export class Scheduler {
     if (cap.active >= cap.global) {
       task.status = 'queued';
       task.queueReason = `超出全局上限（${cap.active}/${cap.global}）`;
-      task.statusMessage = '排队中';
       await this.store.saveTask(task);
       return { queued: true, reason: task.queueReason };
     }
     if (cap.platformActive >= cap.cap) {
       task.status = 'queued';
       task.queueReason = `超出${task.platformName || task.platform}平台上限（${cap.platformActive}/${cap.cap}），全局 ${cap.active}/${cap.global}`;
-      task.statusMessage = '排队中';
       await this.store.saveTask(task);
       return { queued: true, reason: task.queueReason };
     }
@@ -446,7 +442,6 @@ export class Scheduler {
     if (limit > 0 && disk.freeBytes && disk.freeBytes < limit) {
       task.status = 'error';
       task.lastError = `磁盘剩余 ${formatBytes(disk.freeBytes)} 低于阈值 ${formatBytes(limit)}`;
-      task.statusMessage = task.lastError;
       await this.store.saveTask(task);
       this.logger.error(`拒绝开始录制：${task.lastError}`, { taskId: task.id, taskName: task.anchorName });
       await this.notifier.send('disk', '磁盘空间不足', `${task.lastError}，请清理 /data 后重试。`, { taskId: task.id, taskName: task.anchorName });
@@ -486,11 +481,7 @@ export class Scheduler {
     recorder.on('reconnect', async (info) => {
       task.reconnectCount = (task.reconnectCount || 0) + 1;
       const limit = Number(task.reconnectMax ?? settings.reconnectMax) || 5;
-      // 403/风控场景给出明确文案：用户能看到「不是断流，是平台在限流，正在冷却重试」
-      task.statusMessage = info.blocked
-        ? `拉流被平台拒绝（疑似风控/限流），${info.attempt}/${limit} 次重试`
-        : `断流重连 ${info.attempt}/${limit}`;
-      this.logger.warn(`第 ${info.attempt} 次重连（等待 ${Math.round(info.delayMs / 1000)}s）：${info.error || ''}`, { taskId: task.id, taskName: task.anchorName });
+      this.logger.warn(`第 ${info.attempt}/${limit} 次重连（等待 ${Math.round(info.delayMs / 1000)}s）${info.blocked ? ' [拉流被平台拒绝，疑似风控/限流]' : ''}：${info.error || ''}`, { taskId: task.id, taskName: task.anchorName });
       this.onEvent({ type: 'task', task });
     });
     recorder.on('error', async (err) => {
@@ -508,7 +499,6 @@ export class Scheduler {
       session.quality = started.quality;
       session.qualityLabel = started.qualityLabel;
       task.status = 'recording';
-      task.statusMessage = '录制中';
       task.queueReason = null;
       task.startedAt = nowIso();
       task.endedAt = null;
@@ -527,7 +517,6 @@ export class Scheduler {
       await this.store.removeSession(session.id);
       task.status = 'error';
       task.lastError = e.message;
-      task.statusMessage = e.message;
       task.failCount = (task.failCount || 0) + 1;
       await this.store.saveTask(task);
       this.logger.error(`启动录制失败：${errText(e)}`, { taskId: task.id, taskName: task.anchorName });
@@ -690,7 +679,6 @@ export class Scheduler {
       await this.store.saveSession(session);
     }
     task.status = reason === 'error' ? 'error' : (task.manualHeld ? 'stopped' : 'completed');
-    task.statusMessage = reason === 'error' ? (task.lastError || '录制失败') : (task.manualHeld ? '已手动停止，等待你手动开始' : '已完成');
     task.endedAt = nowIso();
     task.currentFile = null;
     task.totalBytes = session?.bytes || task.totalBytes || 0;
@@ -755,7 +743,6 @@ export class Scheduler {
       if (info.avatar) await this.storage.saveAvatar(task, info.avatar); // 手动开始（开播检测）时刷新头像缓存
       if (info.liveStatus === 'offline' && reason === 'manual') {
         task.status = 'waiting';
-        task.statusMessage = '未直播，等待开播';
         await this.store.saveTask(task);
         return { waiting: true };
       }
@@ -779,20 +766,17 @@ export class Scheduler {
     const rec = this.recorders.get(id) || this.detached.get(id);
     if (!rec) {
       task.status = 'stopped';
-      task.statusMessage = task.monitorOnly ? '已停止本场一次性录制' : (task.sessionHold ? '已停止本场 · 下播前不再自动录制（下次开播照旧自动录）' : '已停止 · 未录制，等手动开始');
       await this.store.saveTask(task);
       this._manualStopLiveRefresh(task).catch(() => {});
       return { stopped: true, already: true };
     }
     task.status = 'stopping';
-    task.statusMessage = '正在收尾分段…';
     await this.store.saveTask(task);
     this.onEvent({ type: 'task', task });
     const payload = await rec.stop(reason);
     if (this.recorders.has(id) || this.detached.has(id)) {
       await this._onFinished(task, payload);
       if (task.sessionHold) {
-        task.statusMessage = '已停止本场 · 下播前不再自动录制（下次开播照旧自动录）';
         await this.store.saveTask(task);
         this.onEvent({ type: 'task', task });
       }
@@ -800,7 +784,6 @@ export class Scheduler {
       // 收尾已被自动最终化抢先执行（recorder 已移除），手动停止仍统一收敛为"已停止"
       // 停止本场（oneShot）：保持 completed，不显示"等手动开始"
       task.status = oneShot ? 'completed' : 'stopped';
-      task.statusMessage = task.sessionHold ? '已停止本场 · 下播前不再自动录制（下次开播照旧自动录）' : (oneShot ? '本场录制已结束' : '已手动停止，等待你手动开始');
       task.currentFile = null;
       task.endedAt = nowIso();
       await this.store.saveTask(task);
@@ -812,18 +795,14 @@ export class Scheduler {
     return { stopped: true, segments: payload.segments?.length || 0, bytes: payload.bytes || 0 };
   }
 
-  /** 手动停止后立即解析一次直播状态，落盘 liveStatus/statusMessage，让界面马上显示"直播中，未录制"或"未开播"，绝不显示"未知" */
+  /** 手动停止后立即解析一次直播状态，落盘 liveStatus，让界面马上显示"直播中，未录制"或"未开播"，绝不显示"未知" */
   async _manualStopLiveRefresh(task) {
     try {
       const info = await resolveRoom(task.sourceUrl || `${task.platform}:${task.roomId}`, { platform: task.platform, settings: this.store.settings, logger: this.logger });
       task.liveStatus = info.liveStatus || 'offline';
-      task.statusMessage = info.liveStatus === 'live'
-        ? '已手动停止 · 直播中未录制，点「开始录制」'
-        : '已手动停止 · 未开播，等你手动开始';
     } catch (e) {
       this.logger?.debug(`手动停止后刷新直播状态失败：${e.message}`, {});
       task.liveStatus = task.liveStatus || 'offline';
-      task.statusMessage = '已手动停止 · 等你手动开始';
     }
     await this.store.saveTask(task);
     this.onEvent({ type: 'task', task });
@@ -837,7 +816,6 @@ export class Scheduler {
     if (!rec) throw new HttpError('NOT_RECORDING', '任务当前没有在录制', 409);
     await rec.pause();
     task.status = 'paused';
-    task.statusMessage = '已暂停（本段已结束，不占用并发）';
     task.currentFile = null;
     const session = this.sessions.get(id);
     if (session) { session.status = 'paused'; await this.store.saveSession(session); }
@@ -865,7 +843,6 @@ export class Scheduler {
       task.queueReason = cap.active >= cap.global
         ? `超出全局上限（${cap.active}/${cap.global}）`
         : `超出${task.platformName || task.platform}平台上限（${cap.platformActive}/${cap.cap}）`;
-      task.statusMessage = '排队中';
       await this.store.saveTask(task);
       return { queued: true, reason: task.queueReason };
     }
@@ -873,7 +850,6 @@ export class Scheduler {
     this.recorders.set(id, rec);
     await rec.resume();
     task.status = 'recording';
-    task.statusMessage = '录制中';
     task.queueReason = null;
     const session = this.sessions.get(id);
     if (session) { session.status = 'recording'; await this.store.saveSession(session); }
@@ -893,7 +869,6 @@ export class Scheduler {
       info = await resolveRoom(task.sourceUrl || `${task.platform}:${task.roomId}`, { platform: task.platform, settings: this.store.settings, logger: this.logger });
     } catch (e) {
       task.failCount = (task.failCount || 0) + 1;
-      task.statusMessage = `刷新失败：${e.message}`;
       await this.store.saveTask(task);
       this.onEvent({ type: 'task', task });
       throw new HttpError('RESOLVE_FAIL', `刷新失败：${e.message}`, 502);
@@ -905,9 +880,6 @@ export class Scheduler {
     if (info.avatar) await this.storage.saveAvatar(task, info.avatar); // 刷新头像落盘缓存
     if (task.platform === 'douyin' && info.shortId) task.shortId = String(info.shortId); // 批量刷新后回写短号（抖音号）
     task.liveStatus = info.liveStatus;
-    task.statusMessage = task.manualHeld
-      ? (info.liveStatus === 'live' ? '已手动停止 · 直播中未录制，等你手动开始' : '已手动停止 · 未开播，等你手动开始')
-      : (info.liveStatus === 'live' ? '正在直播' : '未开播');
     task.failCount = 0;
     task.nextPollAt = Date.now() + Math.max(10, this.pollIntervalOf(task)) * 1000;
     await this.store.saveTask(task);
@@ -927,9 +899,6 @@ export class Scheduler {
       if (info.avatar) await this.storage.saveAvatar(task, info.avatar); // 手动检查时刷新头像缓存
       if (task.platform === 'douyin' && info.shortId) task.shortId = String(info.shortId); // 检查后回写短号（抖音号）
       task.liveStatus = info.liveStatus;
-      task.statusMessage = task.manualHeld
-        ? (info.liveStatus === 'live' ? '已手动停止 · 直播中未录制，等你手动开始' : '已手动停止 · 未开播，等你手动开始')
-        : (info.liveStatus === 'live' ? '正在直播' : '未开播');
       task.failCount = 0;
       if (!task.manualHeld && !task.sessionHold && info.liveStatus === 'live' && !task.monitorOnly && task.autoRecord && !['recording', 'stopping', 'paused'].includes(task.status)) {
         const r = await this._startRecording(task);
@@ -941,7 +910,6 @@ export class Scheduler {
       return { info };
     } catch (e) {
       task.lastError = e.message;
-      task.statusMessage = e.message;
       task.failCount = (task.failCount || 0) + 1;
       await this.store.saveTask(task);
       throw new HttpError(e.code || 'RESOLVE_FAILED', e.message, e.status || 502);
@@ -953,7 +921,6 @@ export class Scheduler {
     if (!task) throw new HttpError('NOT_FOUND', '任务不存在', 404);
     task.status = 'waiting';
     task.lastError = null;
-    task.statusMessage = '已重置，等待开播';
     task.manualHeld = false;
     task.retryCount = 0;
     task.failCount = 0;
@@ -1011,7 +978,6 @@ export class Scheduler {
         if (task.status === 'queued') {
           if (task.monitorOnly || task.manualHeld) {
             task.status = task.manualHeld ? 'stopped' : 'waiting';
-            task.statusMessage = task.manualHeld ? '已手动停止 · 等你手动开始' : '正在直播 · 仅监控不录制';
             this.onEvent({ type: 'task', task });
             await this.store.saveTask(task);
           } else {
@@ -1043,13 +1009,11 @@ export class Scheduler {
           }
           if (task.failCount >= limit) {
             task.status = 'error';
-            task.statusMessage = `${p.name} 解析连续失败 ${task.failCount} 次：${e.message}`;
             task.nextPollAt = now + 10 * 60 * 1000;
-            this.logger.error(`任务转入错误（连续失败 ${task.failCount} 次）：${errText(e)}`, { taskId: task.id, taskName: task.anchorName });
+            this.logger.error(`任务转入错误（${p.name} 解析连续失败 ${task.failCount} 次）：${errText(e)}`, { taskId: task.id, taskName: task.anchorName });
           } else {
             const backoff = Math.min(10 * 60, Math.max(30, this.pollIntervalOf(task)) * 2 ** (task.failCount - 1));
             task.nextPollAt = now + backoff * 1000;
-            task.statusMessage = `解析失败 ${task.failCount}/${limit}，${Math.round(backoff)} 秒后重试`;
           }
           await this.store.saveTask(task);
           this.onEvent({ type: 'task', task });
@@ -1079,11 +1043,7 @@ export class Scheduler {
 
         // 手动停止后的任务：保持"已停止"，只刷新直播状态，绝不自动拉起，等用户点「开始录制」（仅监控任务走下面的 monitor 分支）
         if (task.manualHeld && !task.monitorOnly) {
-          const live = info.liveStatus === 'live';
           task.status = 'stopped';
-          task.statusMessage = live
-            ? '已手动停止 · 直播中未录制，点「开始录制」'
-            : '已手动停止 · 未开播，等你手动开始';
           await this.store.saveTask(task);
           this.onEvent({ type: 'task', task });
           continue;
@@ -1093,18 +1053,15 @@ export class Scheduler {
           if (task.monitorOnly) {
             // 仅监控任务「录制本场」进行中（recording/stopping）不能被重置回 waiting，否则状态显示错乱
             if (!['waiting', 'recording', 'stopping'].includes(task.status)) task.status = 'waiting';
-            if (!['recording', 'stopping'].includes(task.status)) task.statusMessage = '正在直播 · 仅监控不录制';
             await this.store.saveTask(task);
             this.onEvent({ type: 'task', task });
           } else if (task.autoRecord && task.status !== 'recording' && task.status !== 'paused') {
             if (task.sessionHold) {
               // 本场挂起：停止本场后本场不再自动拉起，等下播自动解除
               if (task.status !== 'waiting') task.status = 'waiting';
-              task.statusMessage = '本场已停止 · 下播前不再自动录制（下次开播照旧自动录）';
               await this.store.saveTask(task);
               this.onEvent({ type: 'task', task });
             } else {
-              task.statusMessage = `检测到开播，${task.startDelaySec || 0} 秒后开始`;
               await this.store.saveTask(task);
               this.onEvent({ type: 'task', task });
               const delay = Math.min(30, Number(task.startDelaySec) || 0);
@@ -1114,7 +1071,6 @@ export class Scheduler {
           } else if (task.status !== 'recording' && task.status !== 'stopping') {
             // 手动关掉自动录制后，正在直播就保持"未录制"，等用户点开始
             task.status = 'waiting';
-            task.statusMessage = '正在直播 · 未录制（自动录制已关闭）';
             await this.store.saveTask(task);
             this.onEvent({ type: 'task', task });
           }
@@ -1122,7 +1078,6 @@ export class Scheduler {
           // 主播下播：解除本场挂起（本场结束，下次开播照旧自动录制）
           if (task.sessionHold) {
             task.sessionHold = false;
-            task.statusMessage = '本场已结束 · 下次开播照旧自动录制';
             await this.store.saveTask(task);
             this.onEvent({ type: 'task', task });
           }
@@ -1140,12 +1095,7 @@ export class Scheduler {
             await this.store.saveTask(task);
             continue;
           }
-          if (task.status !== 'waiting') {
-            task.status = 'waiting';
-            task.statusMessage = task.monitorOnly ? '未开播 · 仅监控' : (task.endedAt ? '本场已结束，等待下次开播' : '未直播，等待开播');
-          } else {
-            task.statusMessage = task.monitorOnly ? '未开播 · 仅监控' : '未直播，等待开播';
-          }
+          if (task.status !== 'waiting') task.status = 'waiting';
           await this.store.saveTask(task);
           this.onEvent({ type: 'task', task });
         }
