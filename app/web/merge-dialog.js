@@ -122,8 +122,8 @@ export function openMergeDialog({ rows, deleteSources = false, trashEnabled = tr
           <div class="hintline">${t('files.mergeNameHint')}</div>
         </div>
         <div class="mg-del">
-          <span id="mgDelTxt">${delText()}</span>
           ${switchEl(del, 'id="mgDel"')}
+          <span id="mgDelTxt">${delText()}</span>
         </div>
       </div>
     </div>`,

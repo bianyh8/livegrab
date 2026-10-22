@@ -102,6 +102,7 @@ body{
 .btn.danger{color:#ffb3b8;border-color:rgba(242,84,91,.35);background:rgba(242,84,91,.10)}
 .btn.danger:hover{background:rgba(242,84,91,.18)}
 .btn.ok{color:#9bf3d3;border-color:rgba(46,230,168,.3);background:rgba(46,230,168,.1)}
+.btn.ok:hover{background:rgba(46,230,168,.18);border-color:rgba(46,230,168,.45)}
 .btn:disabled{opacity:.45;cursor:not-allowed}
 
 .card{background:linear-gradient(180deg,var(--panel),var(--bg-2));border:1px solid var(--line);border-radius:var(--r-l);box-shadow:var(--sd)}
@@ -472,12 +473,24 @@ td .sub{font-size:11.5px;color:var(--txt-3);margin-top:3px}
 
 /* 文件列表 */
 .fl-item{display:flex;align-items:center;gap:13px;padding:12px 16px;border-bottom:1px solid var(--line)}
-/* 文件库勾选栏（第二行）：全选 + 已选中 N 项列在左，批量动作靠右；
+/* 文件库勾选栏（第二行）：全选 + 已选中 N 项 + 竖线 + 批量动作紧跟其后（左对齐成一组）；
    与上面一行查询条件分开，避免「全选」被挤到筛选控件堆里。 */
 /* 左内边距 = #flBody 的 16px + .fl-item 的 16px：让「全选」框与下方每行行首的
    复选框左边缘落在同一条竖线上（勾选栏不随行内容缩进）。 */
 .fl-selbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:0 16px 12px 32px;border-bottom:1px solid var(--line)}
 .fl-selall{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--txt-2);cursor:pointer;user-select:none}
+/* 「已选中 N 项」与批量按钮之间的竖线：把状态和动作分成两组，不用留白分隔 */
+.fl-div{flex:0 0 auto;width:1px;height:18px;background:var(--line-2)}
+
+/* 日期区间：起止两个 date 输入合进同一个外壳，中间用「至」+ 竖线分隔，
+   看起来是一个控件而不是两个独立输入框（原生 date 的边框/背景全部去掉）。 */
+.fl-range{display:inline-flex;align-items:center;height:34px;padding:0 4px 0 10px;border:1px solid var(--line-2);border-radius:var(--r-s);background:#0d1219;transition:.15s}
+.fl-range:focus-within{border-color:var(--accent);box-shadow:0 0 0 3px rgba(91,140,255,.14)}
+.fl-range-in{flex:0 0 auto;width:112px;height:32px;padding:0;border:0;background:transparent;color:var(--txt);font:13px/1.5 inherit;outline:none;color-scheme:dark;cursor:pointer}
+.fl-range-in::-webkit-calendar-picker-indicator{opacity:.5;cursor:pointer;margin-left:2px}
+.fl-range-in::-webkit-calendar-picker-indicator:hover{opacity:.85}
+.fl-range-sep{flex:0 0 auto;align-self:stretch;display:flex;align-items:center;padding:0 8px;margin:0 2px;font-size:12px;color:var(--txt-3);
+  border-left:1px solid var(--line);border-right:1px solid var(--line)}
 .fl-item:last-child{border-bottom:0}
 .fl-item:hover{background:rgba(255,255,255,.022)}
 .fl-ico{width:66px;height:40px;flex:0 0 66px;border-radius:8px;display:grid;place-items:center;font-size:10px;font-weight:700;color:#0a0d13;position:relative;overflow:hidden;
@@ -786,6 +799,9 @@ table.tight th{padding:8px 12px}
   .tk-avatar{width:46px;height:30px;flex:0 0 46px}
   .fl-item{gap:10px;padding:11px 12px;flex-wrap:wrap}
   .fl-selbar{padding:0 12px 10px 28px;gap:8px}
+  .fl-range{height:32px;padding:0 2px 0 8px}
+  .fl-range-in{width:96px;font-size:12px}
+  .fl-range-sep{padding:0 6px}
   .fl-ico{width:56px;height:34px;flex:0 0 56px}
   /* 文件/回收站：操作按钮整行下移，避免挤压信息区 */
   .fl-item .acts{flex:1 1 100%;justify-content:flex-end;margin-top:4px;padding-top:8px;border-top:1px dashed var(--line)}

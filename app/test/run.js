@@ -1794,14 +1794,14 @@ function testViewGuards() {
   ok(/if \(busy \|\| order\.length < 2\) return;/.test(mergeSrc) && /ev\.stopPropagation\(\)/.test(mergeSrc), '删除与拖动互不干扰（拖动手柄限定 + 删除点击不冒泡），忙时忽略删除');
 
   /* 工具栏/徽标一致性（用户三连反馈：刷新位置、合并按钮样式、同为 .mp4 徽标不一致）：
-     「刷新」移到「清除」后边（工具栏内）；「合并」与「删除所选」同款（btn sm danger）；
+     「扫描磁盘」在勾选栏那一行；按钮配色按语义分——删除文件危险色，合并/扫描绿色（btn sm ok）；
      文件名后的类型徽标整体移除——徽标非用户需求（b7c7195 自行加入），且同为 .mp4
      有无不一致正是徽标按 tag 归属有条件渲染所致；文件类型看文件名扩展名即可。
      状态徽标（合并中/录制中/已录完/文件缺失）保留。 */
   const iClear = filesSrc.indexOf('id="flClear"');
   const iScan = filesSrc.indexOf('id="flScan"');
   ok(iClear > 0 && iScan > iClear, '「扫描磁盘」在勾选栏那一行（筛选行只留查询控件 + 清除）');
-  ok(/class="btn sm danger" id="flMergePicked"/.test(filesSrc) && /class="btn sm danger" id="flDelPicked"/.test(filesSrc), '「合并」与「删除所选」按钮同款样式（btn sm danger）');
+  ok(/class="btn sm danger" id="flDelPicked"/.test(filesSrc) && !/class="btn sm danger" id="flMergePicked"/.test(filesSrc), '「删除文件」危险色，「合并文件」不再同色（改绿色 btn sm ok）');
   ok(!/<span class="chip">\$\{esc\(extLabel\)\}<\/span>/.test(filesSrc) && !/\$\{tag \? `<span class="chip">/.test(filesSrc), '文件名后不渲染类型徽标（非用户需求，已移除；状态徽标保留）');
 
   /* 回收站按钮统一 + 合并中状态（用户三连反馈）：
@@ -1832,6 +1832,8 @@ function testViewGuards() {
   ok(/const delText = \(\) => \{[\s\S]{0,220}?return trashEnabled \? t\('merge\.deleteTrash'\) : t\('merge\.deleteForever'\)/.test(mergeSrc), '删源文案随 trashEnabled 切换（移入回收站 / 不移入回收站）');
   ok(/if \(!del\) return t\('merge\.keepSources'\)/.test(mergeSrc), '开关关闭时显示「合并后保留源文件」');
   ok(/\$\{switchEl\(del, 'id="mgDel"'\)\}/.test(mergeSrc) && /bindSwitches\(body, \(sw\) => \{/.test(mergeSrc), '删源控件是全局同款开关（click 与 Enter/空格都走 bindSwitches）');
+  /* 开关在左、文案在右：先 switchEl 后 #mgDelTxt（2026-10-22 用户要求把按钮放左边） */
+  ok(/\$\{switchEl\(del, 'id="mgDel"'\)\}\s*<span id="mgDelTxt">/.test(mergeSrc), '删源开关排在文案左侧（先开关后文字）');
   ok(/id="mgDelTxt"/.test(mergeSrc) && /delTxtEl\.textContent = delText\(\)/.test(mergeSrc), '开关切换只换文案节点，不重绘弹框');
   ok(zhJson['merge.deleteTrash'] === '合并后删除文件（移入回收站）' && zhJson['merge.deleteForever'] === '合并后删除文件（不移入回收站）' && zhJson['merge.keepSources'] === '合并后保留源文件', '三条删源文案 = 移入回收站 / 不移入回收站 / 保留源文件');
 
@@ -1848,8 +1850,23 @@ function testViewGuards() {
   ok(iClearBtn > 0 && iSelBar > iClearBtn && iSelAll > iSelBar, '「全选」在筛选条件下方那一行');
   ok(/class="fl-selbar"[\s\S]{0,600}?id="flSelAll"[\s\S]{0,300}?id="flPickChip"[\s\S]{0,300}?id="flDelPicked"[\s\S]{0,200}?id="flMergePicked"[\s\S]{0,200}?id="flScan"/.test(filesSrc), '第二行顺序 = 全选 → 已选中 → 删除文件 → 合并文件 → 扫描磁盘');
   ok(zhJson['files.deleteSelected'] === '删除文件' && zhJson['files.mergeFileBtn'] === '合并文件', '勾选栏按钮文案 = 删除文件 / 合并文件');
-  ok(/id="flQ" style="width:240px"/.test(filesSrc), '搜索框加宽到 240px');
-  ok(/id="flExt"[\s\S]{0,500}?<div class="spacer"><\/div>[\s\S]{0,200}?id="flClear"/.test(filesSrc), '「清除」顶到筛选行最右侧');
+  ok(/id="flQ" style="width:320px"/.test(filesSrc), '搜索框加宽到 320px');
+  /* 筛选行顺序 = 搜索 → 平台 → 类型 → 时间 → 清除条件，且全部左排（不再用 spacer 把「清除」顶到最右） */
+  const iQ = filesSrc.indexOf('id="flQ"');
+  const iPlat = filesSrc.indexOf('id="flPlat"');
+  const iExt = filesSrc.indexOf('id="flExt"');
+  const iRange = filesSrc.indexOf('class="fl-range"');
+  ok(iQ > 0 && iPlat > iQ && iExt > iPlat && iRange > iExt && iClearBtn > iRange, '筛选行顺序 = 搜索 → 平台 → 类型 → 时间 → 清除条件');
+  ok(!/id="flExt"[\s\S]{0,300}?<div class="spacer"><\/div>[\s\S]{0,200}?id="flClear"/.test(filesSrc), '「清除条件」紧跟时间控件，中间不塞 spacer');
+  ok(zhJson['files.clearFilters'] === '清除条件' && /t\('files\.clearFilters'\)/.test(filesSrc), '清除按钮文案 = 清除条件（不与其他「清除」复用同一 key）');
+  /* 起止日期合进同一个外壳：视觉上一个控件，中间「至」两侧有竖线分隔 */
+  ok(/<div class="fl-range">[\s\S]{0,400}?id="flDateFrom"[\s\S]{0,200}?fl-range-sep[\s\S]{0,200}?id="flDateTo"/.test(filesSrc), '起止日期合进同一个外壳（fl-range + 「至」分隔）');
+  ok(/\.fl-range\{[^}]*display:inline-flex/.test(cssSrc) && /\.fl-range-in\{[^}]*border:0/.test(cssSrc), '日期区间外壳有独立边框，内部两个 date 输入去掉原生边框');
+  /* 选完开始日期自动带入结束日期：只补「结束为空」或「结束早于开始」，合法区间不动 */
+  ok(/state\.dateFrom && \(!dateTo\.value \|\| dateTo\.value < state\.dateFrom\)/.test(filesSrc) && /dateTo\.value = state\.dateFrom/.test(filesSrc), '录入开始日期后自动带入结束日期（结束为空或早于开始时）');
+  /* 批量动作配色：删除文件危险色，合并文件/扫描磁盘绿色（btn ok） */
+  ok(/class="btn sm danger" id="flDelPicked"/.test(filesSrc) && /class="btn sm ok" id="flMergePicked"/.test(filesSrc) && /class="btn sm ok" id="flScan"/.test(filesSrc), '删除文件 = 危险色，合并文件 / 扫描磁盘 = 绿色');
+  ok(/<span class="fl-div"><\/span>/.test(filesSrc) && /<div class="spacer"><\/div>/.test(filesSrc), '「已选中 N 项」后跟竖线分隔，批量按钮紧跟其后（spacer 移到按钮之后）');
   ok(/\.fl-selbar\{[^}]*padding:0 16px 12px 32px/.test(cssSrc), '勾选栏左内边距 = 行内复选框缩进（全选框与列表复选框左对齐）');
   ok(/\.fl-selbar\{[^}]*display:flex/.test(cssSrc) && /\.fl-selall\{[^}]*cursor:pointer/.test(cssSrc), '勾选栏有独立样式（不与 toolbar 的边框/内边距打架）');
   ok(zhJson['merge.remove'] === '移出合并列表' && /移出合并列表/.test(zhJson['merge.empty']), '行尾删除按钮与列表清空提示有文案');

@@ -86,6 +86,7 @@ const DEFAULT_DICT = {
   "dashboard.writtenSingle": "单文件 · 已写 {0}",
   "files.allTypes": "全部类型",
   "files.clear": "清除",
+  "files.clearFilters": "清除条件",
   "files.dateFrom": "起始日期",
   "files.dateSep": "至",
   "files.dateTo": "结束日期",

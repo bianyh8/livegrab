@@ -220,27 +220,29 @@ function paint(ctx, force) {
         <div class="spacer"></div>
       </div>
       <div class="toolbar" style="padding:10px 16px 8px;flex-wrap:wrap;border-bottom:0">
-        <input class="input" id="flQ" style="width:240px" placeholder="${t('files.searchPlaceholder')}" value="${esc(state.q)}" />
+        <input class="input" id="flQ" style="width:320px" placeholder="${t('files.searchPlaceholder')}" value="${esc(state.q)}" />
         <select class="select" id="flPlat" style="width:120px">
           <option value="">${t('common.allPlatforms')}</option>
           ${state.platforms.map((p) => `<option value="${esc(p)}"${state.platform === p ? ' selected' : ''}>${esc(platNameOf(p))}</option>`).join('')}
         </select>
-        <input type="date" class="input" id="flDateFrom" style="width:150px" title="${t('files.dateFrom')}" value="${esc(state.dateFrom)}" />
-        <span style="color:var(--txt-3);font-size:12px">${t('files.dateSep')}</span>
-        <input type="date" class="input" id="flDateTo" style="width:150px" title="${t('files.dateTo')}" value="${esc(state.dateTo)}" />
         <select class="select" id="flExt" style="width:120px">
           ${[['', 'files.allTypes'], ['ts', 'files.extTs'], ['mp4', 'files.extMp4'], ['m4a', 'files.extM4a']].map(([v, k]) => `<option value="${v}"${state.ext === v ? ' selected' : ''}>${t(k)}</option>`).join('')}
         </select>
-        <div class="spacer"></div>
-        <button class="btn sm ghost" id="flClear">${t('files.clear')}</button>
+        <div class="fl-range">
+          <input type="date" class="fl-range-in" id="flDateFrom" title="${t('files.dateFrom')}" value="${esc(state.dateFrom)}" />
+          <span class="fl-range-sep">${t('files.dateSep')}</span>
+          <input type="date" class="fl-range-in" id="flDateTo" title="${t('files.dateTo')}" value="${esc(state.dateTo)}" />
+        </div>
+        <button class="btn sm ghost" id="flClear">${t('files.clearFilters')}</button>
       </div>
       <div class="fl-selbar">
         <label class="fl-selall"><input type="checkbox" class="cb" id="flSelAll"${allSel ? ' checked' : ''} /> ${t('files.selectAll')}</label>
         <span class="chip ${state.picked.size ? 'on' : ''}" id="flPickChip"><i class="dot"></i>${t('files.selectedCount', state.picked.size)}</span>
-        <div class="spacer"></div>
+        <span class="fl-div"></span>
         <button class="btn sm danger" id="flDelPicked"${state.picked.size && !state.merging.size ? '' : ' disabled'}>${t('files.deleteSelected')}</button>
-        <button class="btn sm danger" id="flMergePicked"${state.picked.size >= 2 && !state.merging.size ? '' : ' disabled'}>${t('files.mergeFileBtn')}</button>
-        <button class="btn sm ghost" id="flScan">${t('files.scanDisk')}</button>
+        <button class="btn sm ok" id="flMergePicked"${state.picked.size >= 2 && !state.merging.size ? '' : ' disabled'}>${t('files.mergeFileBtn')}</button>
+        <button class="btn sm ok" id="flScan">${t('files.scanDisk')}</button>
+        <div class="spacer"></div>
       </div>
       <div style="padding:0 16px 16px" id="flBody">
         ${list.length ? list.map(filenameRow).join('') : emptyBox(t('files.noFilteredFiles'))}
@@ -322,11 +324,21 @@ function bind(ctx) {
   const plat = root.querySelector('#flPlat');
   if (plat) plat.onchange = () => { state.platform = plat.value; commitFilters(); tick(ctx, true); };
   const dateFrom = root.querySelector('#flDateFrom');
+  const dateTo = root.querySelector('#flDateTo');
   if (dateFrom) {
     bindDatePicker(dateFrom);
-    dateFrom.onchange = () => { state.dateFrom = dateFrom.value; commitFilters(); tick(ctx, true); };
+    dateFrom.onchange = () => {
+      state.dateFrom = dateFrom.value;
+      /* 选完开始日期就顺手补齐结束日期（同一天起止是最常见的一次筛选）：
+         只补「结束为空」或「结束早于开始」这两种不成立的状态；
+         已有的合法区间（如 10/15–10/22）不动，否则改开始日会把用户选的结束日冲掉。 */
+      if (dateTo && state.dateFrom && (!dateTo.value || dateTo.value < state.dateFrom)) {
+        dateTo.value = state.dateFrom;
+        state.dateTo = state.dateFrom;
+      }
+      commitFilters(); tick(ctx, true);
+    };
   }
-  const dateTo = root.querySelector('#flDateTo');
   if (dateTo) {
     bindDatePicker(dateTo);
     dateTo.onchange = () => { state.dateTo = dateTo.value; commitFilters(); tick(ctx, true); };

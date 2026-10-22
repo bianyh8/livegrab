@@ -195,6 +195,7 @@
   "files.searchPlaceholder": "搜索 文件名/主播/标题",
   "files.allTypes": "全部类型",
   "files.clear": "清除",
+  "files.clearFilters": "清除条件",
   "files.query": "查询",
   "files.extTs": ".ts 直播流",
   "files.extMp4": ".mp4 / m4a",
