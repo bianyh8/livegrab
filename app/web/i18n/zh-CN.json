@@ -813,13 +813,14 @@
   "merge.count": "共 {0} 个文件",
   "merge.remove": "移出合并列表",
   "merge.empty": "已把全部文件移出合并列表，取消后重新勾选即可再合并。",
-  "merge.deleteForever": "合并后删除文件（不移入回收站）",
-  "merge.keepSources": "合并后保留源文件",
+  "merge.deleteForever": "回收站已关闭，删除的源文件无法还原",
+  "merge.keepSources": "保留源文件，只新增合并后的文件",
   "files.mergeFileBtn": "合并文件",
-  "merge.deleteTrash": "合并后删除文件（移入回收站）",
+  "merge.deleteTrash": "删除的源文件移入回收站，可从回收站还原",
   "merge.title": "合并所选文件",
   "files.scanDisk": "扫描磁盘",
   "files.scanning": "扫描中…",
   "files.scanDone": "扫描完成：新增 {0} 个、更新 {1} 个、缺失 {2} 个",
-  "files.scanFail": "扫描失败：{0}"
+  "files.scanFail": "扫描失败：{0}",
+  "merge.deleteSources": "合并后删除源文件"
 }

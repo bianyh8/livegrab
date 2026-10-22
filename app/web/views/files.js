@@ -220,7 +220,7 @@ function paint(ctx, force) {
         <div class="spacer"></div>
       </div>
       <div class="toolbar fl-filter">
-        <input class="input" id="flQ" style="width:320px" placeholder="${t('files.searchPlaceholder')}" value="${esc(state.q)}" />
+        <input class="input" id="flQ" placeholder="${t('files.searchPlaceholder')}" value="${esc(state.q)}" />
         <select class="select" id="flPlat" style="width:120px">
           <option value="">${t('common.allPlatforms')}</option>
           ${state.platforms.map((p) => `<option value="${esc(p)}"${state.platform === p ? ' selected' : ''}>${esc(platNameOf(p))}</option>`).join('')}
@@ -238,11 +238,11 @@ function paint(ctx, force) {
       <div class="fl-selbar">
         <label class="fl-selall"><input type="checkbox" class="cb" id="flSelAll"${allSel ? ' checked' : ''} /> ${t('files.selectAll')}</label>
         <span class="chip ${state.picked.size ? 'on' : ''}" id="flPickChip"><i class="dot"></i>${t('files.selectedCount', state.picked.size)}</span>
+        <div class="spacer"></div>
         <span class="fl-div"></span>
         <button class="btn sm danger" id="flDelPicked"${state.picked.size && !state.merging.size ? '' : ' disabled'}>${t('files.deleteSelected')}</button>
         <button class="btn sm ok" id="flMergePicked"${state.picked.size >= 2 && !state.merging.size ? '' : ' disabled'}>${t('files.mergeFileBtn')}</button>
         <button class="btn sm ok" id="flScan">${t('files.scanDisk')}</button>
-        <div class="spacer"></div>
       </div>
       <div style="padding:0 16px 16px" id="flBody">
         ${list.length ? list.map(filenameRow).join('') : emptyBox(t('files.noFilteredFiles'))}

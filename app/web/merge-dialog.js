@@ -97,10 +97,11 @@ export function openMergeDialog({ rows, deleteSources = false, trashEnabled = tr
   let busy = false;
   let nameDirty = false; // 用户改过文件名后，删除行不再覆盖它
 
-  /* 删源开关文案随两件事动态变化：
-     · 开关开/关 → 删不删源文件（关就是全部保留，不存在「进不进回收站」的问题）
-     · 系统「删除时移入回收站」开关 → 删掉之后是进回收站可还原，还是直接从磁盘消失 */
-  const delText = () => {
+  /* 删源开关的语义固定在「删除」上（与系统设置「合并后删除原始分段」一致）：
+     开关只表示「删不删源文件」，文案不再随状态翻转成「保留源文件」——
+     翻转会让同一个开关在开/关两种状态下读起来是两件事。
+     下方的说明行再说清删掉之后去哪（进回收站可还原 / 回收站关着就直接消失）。 */
+  const delHint = () => {
     if (!del) return t('merge.keepSources');
     return trashEnabled ? t('merge.deleteTrash') : t('merge.deleteForever');
   };
@@ -123,8 +124,9 @@ export function openMergeDialog({ rows, deleteSources = false, trashEnabled = tr
         </div>
         <div class="mg-del">
           ${switchEl(del, 'id="mgDel"')}
-          <span id="mgDelTxt">${delText()}</span>
+          <span class="mg-del-label">${t('merge.deleteSources')}</span>
         </div>
+        <div class="hintline mg-del-hint" id="mgDelHint">${delHint()}</div>
       </div>
     </div>`,
     footer: (close, body) => {
@@ -133,12 +135,12 @@ export function openMergeDialog({ rows, deleteSources = false, trashEnabled = tr
       const emptyEl = body.querySelector('#mgEmpty');
       const nameEl = body.querySelector('#mgName');
       const delEl = body.querySelector('#mgDel');
-      const delTxtEl = body.querySelector('#mgDelTxt');
-      // 开关沿用全局 .switch 组件（点击与 Enter/空格都走 bindSwitches），文案只换不改弹框结构
+      const delHintEl = body.querySelector('#mgDelHint');
+      // 开关沿用全局 .switch 组件（点击与 Enter/空格都走 bindSwitches），只换下方说明行
       bindSwitches(body, (sw) => {
         if (!delEl || sw !== delEl) return;
         del = sw.classList.contains('on');
-        if (delTxtEl) delTxtEl.textContent = delText();
+        if (delHintEl) delHintEl.textContent = delHint();
       });
       if (nameEl) nameEl.addEventListener('input', () => { nameDirty = true; });
       bindDrag(listEl, () => order, (next) => { order = next; });

@@ -477,13 +477,13 @@ td .sub{font-size:11.5px;color:var(--txt-3);margin-top:3px}
    与上面一行查询条件分开，避免「全选」被挤到筛选控件堆里。 */
 /* 左内边距 = #flBody 的 16px + .fl-item 的 16px：让「全选」框与下方每行行首的
    复选框左边缘落在同一条竖线上（勾选栏不随行内容缩进）。 */
-.fl-selbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:0 16px 12px 32px;border-bottom:1px solid var(--line)}
+.fl-selbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:0 32px 12px 32px;border-bottom:1px solid var(--line)}
 /* 筛选行：右内边距 32px = #flBody 的 16px + .fl-item 的 16px，
    让行尾的「清除条件」与下方每行行尾「删除」按钮的右边缘落在同一条竖线上。
-   #flClear 用 margin-left:auto 靠到行尾：宁可留白在控件与「清除条件」之间，
-   也要把按钮的右边缘钉在列表按钮那条竖线上。 */
-.fl-filter{padding:10px 32px 8px 16px;flex-wrap:wrap;border-bottom:0}
-.fl-filter #flClear{margin-left:auto}
+   空处相当：列间距统一 18px，多出来的宽度全给搜索框（flex:1），
+   于是各处空隙一样宽，多余的空白不会堆在「清除条件」前面；换行时保持左对齐、不留空洞。 */
+.fl-filter{padding:10px 32px 8px 16px;flex-wrap:wrap;border-bottom:0;justify-content:flex-start;row-gap:10px;column-gap:18px}
+.fl-filter #flQ{flex:1 1 320px;min-width:200px}
 .fl-selall{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--txt-2);cursor:pointer;user-select:none}
 /* 「已选中 N 项」与批量按钮之间的竖线：把状态和动作分成两组，不用留白分隔 */
 .fl-div{flex:0 0 auto;width:1px;height:18px;background:var(--line-2)}
@@ -721,7 +721,9 @@ table.tight th{padding:8px 12px}
 .mg-list.mg-busy{opacity:.55;pointer-events:none}
 /* 删源开关行：左侧是随状态变化的说明文案，右侧是全局同款 .switch 开关 */
 .mg-del{display:flex;align-items:center;gap:10px;margin-top:12px;font-size:12.5px;color:var(--txt-2)}
-.mg-del #mgDelTxt{flex:1;min-width:0}
+.mg-del-label{flex:1;min-width:0}
+/* 删源说明行：左缩进 = 开关 42px + gap 10px，与上面的标签文字左对齐；允许换行（.modal .hintline 默认单行省略） */
+.modal .mg-del-hint{margin:6px 0 0 52px;white-space:normal;overflow:visible;text-overflow:clip}
 @media (max-width:767px){.mg-row{gap:8px;padding:9px}.mg-meta{font-size:11px}}
 
 /* ================= 手机端适配（<768px：底部 Tab + 卡片化；桌面端不受影响） ================= */
@@ -804,7 +806,7 @@ table.tight th{padding:8px 12px}
   .thumb{width:58px;height:36px;flex:0 0 58px}
   .tk-avatar{width:46px;height:30px;flex:0 0 46px}
   .fl-item{gap:10px;padding:11px 12px;flex-wrap:wrap}
-  .fl-selbar{padding:0 12px 10px 28px;gap:8px}
+  .fl-selbar{padding:0 28px 10px 28px;gap:8px}
   .fl-filter{padding:10px 28px 8px 16px}
   .fl-range{height:32px;padding:0 2px 0 8px}
   .fl-range-in{width:96px;font-size:12px}

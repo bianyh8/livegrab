@@ -271,11 +271,13 @@ const ADD = {
   'merge.dragTip': '拖动调整顺序',
   'merge.remove': '移出合并列表',
   'merge.empty': '已把全部文件移出合并列表，取消后重新勾选即可再合并。',
-  /* 删源开关（.switch）：文案随「开关开/关 + 系统是否开启『删除时移入回收站』」动态切换
-     （见 merge-dialog delText）。开关关闭 = 保留源文件，此时「进不进回收站」不成立。 */
-  'merge.deleteTrash': '合并后删除文件（移入回收站）',
-  'merge.deleteForever': '合并后删除文件（不移入回收站）',
-  'merge.keepSources': '合并后保留源文件',
+  /* 删源开关（.switch）语义固定在「删除」上，与系统设置「合并后删除原始分段」一致：
+     标签恒为「合并后删除源文件」，开关只表示删不删；下方说明行随「开关 + 回收站设置」变
+     （见 merge-dialog delHint）。文案翻转会让同一个开关读起来像两件事。 */
+  'merge.deleteSources': '合并后删除源文件',
+  'merge.deleteTrash': '删除的源文件移入回收站，可从回收站还原',
+  'merge.deleteForever': '回收站已关闭，删除的源文件无法还原',
+  'merge.keepSources': '保留源文件，只新增合并后的文件',
   'merge.submitting': '合并中…',
 };
 
@@ -285,8 +287,7 @@ const REMOVE = [
   'files.mergeTitle', 'files.mergeKeep', 'files.mergeDeleteSource', 'files.mergeText',
   // 合并最终定为小弹框（不是独立页）：页面专属文案（副标题/返回/加载中/加载失败）随之下线
   'merge.sub', 'merge.back', 'merge.loading', 'merge.loadFail', 'merge.needTwo',
-  // 删源改为开关 + 新文案（merge.deleteTrash / deleteForever / keepSources），旧的勾选框长文案下线
-  'merge.deleteSources',
+  // 删源勾选框长文案下线（键名 merge.deleteSources 后来复用为开关标签，见 ADD）
   // 文件库「刷新」按钮改为「扫描磁盘」（files.scanDisk 等），旧提示文案下线
   'files.refreshed',
   'dashboard.statMonitor', 'dashboard.statQueued', 'dashboard.statWaiting',
