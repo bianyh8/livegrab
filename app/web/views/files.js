@@ -268,7 +268,6 @@ function filenameRow({ f, s, tag }) {
       </div>
       <div style="flex:1;min-width:0">
         <div style="font-size:13px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(f.name || f.relPath || '—')}
-          <span class="chip">${esc(extLabel)}</span>
           ${state.merging.has(f.id) ? `<span class="chip wait" style="margin-left:6px"><i class="dot"></i>${t('files.merging')}</span>` : playing ? `<span class="chip wait" style="margin-left:6px"><i class="dot"></i>${t('common.recording')}</span>` : missing ? `<span class="chip err" style="margin-left:6px">${t('files.missing')}</span>` : `<span class="chip on" style="margin-left:6px"><i class="dot"></i>${t('common.recorded')}</span>`}
         </div>
         <div style="display:flex;gap:10px;align-items:center;margin-top:5px;font-size:11.5px;color:var(--txt-3);flex-wrap:wrap">

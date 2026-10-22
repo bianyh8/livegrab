@@ -1644,13 +1644,14 @@ function testViewGuards() {
 
   /* 工具栏/徽标一致性（用户三连反馈：刷新位置、合并按钮样式、同为 .mp4 徽标不一致）：
      「刷新」移到「清除」后边（工具栏内）；「合并」与「删除所选」同款（btn sm danger）；
-     类型徽标按文件类型统一渲染（extLabel = tag || 扩展名大写），不再按 tag 归属有条件渲染——
-     否则转封装 MP4（有 tag）与直接录制的 .mp4 分段（无 tag）同为 mp4 却一个有一个没有。 */
+     文件名后的类型徽标整体移除——徽标非用户需求（b7c7195 自行加入），且同为 .mp4
+     有无不一致正是徽标按 tag 归属有条件渲染所致；文件类型看文件名扩展名即可。
+     状态徽标（合并中/录制中/已录完/文件缺失）保留。 */
   const iClear = filesSrc.indexOf('id="flClear"');
   const iRefresh = filesSrc.indexOf('id="flRefresh"');
   ok(iClear > 0 && iRefresh > iClear, '「刷新」按钮在「清除」按钮后边');
   ok(/class="btn sm danger" id="flMergePicked"/.test(filesSrc) && /class="btn sm danger" id="flDelPicked"/.test(filesSrc), '「合并」与「删除所选」按钮同款样式（btn sm danger）');
-  ok(/<span class="chip">\$\{esc\(extLabel\)\}<\/span>/.test(filesSrc) && !/\$\{tag \?/.test(filesSrc), '类型徽标统一按 extLabel 渲染（不按 tag 归属，同类型文件显示一致）');
+  ok(!/<span class="chip">\$\{esc\(extLabel\)\}<\/span>/.test(filesSrc) && !/\$\{tag \? `<span class="chip">/.test(filesSrc), '文件名后不渲染类型徽标（非用户需求，已移除；状态徽标保留）');
 
   /* 弹框动作按钮统一 + 回收站按钮统一 + 合并中状态（用户三连反馈）：
      弹框「合并(保留源文件)」「合并(删除源文件)」都用合并同款 btn primary（不再一红一暗）；
