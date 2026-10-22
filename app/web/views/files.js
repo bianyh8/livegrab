@@ -329,10 +329,9 @@ function bind(ctx) {
     bindDatePicker(dateFrom);
     dateFrom.onchange = () => {
       state.dateFrom = dateFrom.value;
-      /* 选完开始日期就顺手补齐结束日期（同一天起止是最常见的一次筛选）：
-         只补「结束为空」或「结束早于开始」这两种不成立的状态；
-         已有的合法区间（如 10/15–10/22）不动，否则改开始日会把用户选的结束日冲掉。 */
-      if (dateTo && state.dateFrom && (!dateTo.value || dateTo.value < state.dateFrom)) {
+      /* 选完开始日期后「无条件」把结束日期覆盖成同一个值（用户明确要求：同一天的起止区间最多），
+         改完再单独去调结束日期即可把区间拉长。清空开始日期时不动结束日期。 */
+      if (dateTo && state.dateFrom) {
         dateTo.value = state.dateFrom;
         state.dateTo = state.dateFrom;
       }

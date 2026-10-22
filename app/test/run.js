@@ -1862,8 +1862,8 @@ function testViewGuards() {
   /* 起止日期合进同一个外壳：视觉上一个控件，中间「至」两侧有竖线分隔 */
   ok(/<div class="fl-range">[\s\S]{0,400}?id="flDateFrom"[\s\S]{0,200}?fl-range-sep[\s\S]{0,200}?id="flDateTo"/.test(filesSrc), '起止日期合进同一个外壳（fl-range + 「至」分隔）');
   ok(/\.fl-range\{[^}]*display:inline-flex/.test(cssSrc) && /\.fl-range-in\{[^}]*border:0/.test(cssSrc), '日期区间外壳有独立边框，内部两个 date 输入去掉原生边框');
-  /* 选完开始日期自动带入结束日期：只补「结束为空」或「结束早于开始」，合法区间不动 */
-  ok(/state\.dateFrom && \(!dateTo\.value \|\| dateTo\.value < state\.dateFrom\)/.test(filesSrc) && /dateTo\.value = state\.dateFrom/.test(filesSrc), '录入开始日期后自动带入结束日期（结束为空或早于开始时）');
+  /* 选完开始日期无条件覆盖结束日期（用户明确：不要「只在为空/早于开始时补」那套判断） */
+  ok(/if \(dateTo && state\.dateFrom\) \{[\s\S]{0,120}?dateTo\.value = state\.dateFrom/.test(filesSrc) && !/dateTo\.value < state\.dateFrom/.test(filesSrc), '录入开始日期后无条件覆盖结束日期（不保留原区间）');
   /* 批量动作配色：删除文件危险色，合并文件/扫描磁盘绿色（btn ok） */
   ok(/class="btn sm danger" id="flDelPicked"/.test(filesSrc) && /class="btn sm ok" id="flMergePicked"/.test(filesSrc) && /class="btn sm ok" id="flScan"/.test(filesSrc), '删除文件 = 危险色，合并文件 / 扫描磁盘 = 绿色');
   ok(/<span class="fl-div"><\/span>/.test(filesSrc) && /<div class="spacer"><\/div>/.test(filesSrc), '「已选中 N 项」后跟竖线分隔，批量按钮紧跟其后（spacer 移到按钮之后）');
