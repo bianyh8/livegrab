@@ -258,11 +258,14 @@ const ADD = {
   // merge（合并弹框：按文件库排序列出勾选文件，可拖动调整顺序）
   'merge.title': '合并文件',
   'merge.count': '共 {0} 个文件',
-  'merge.dragHint': '按住左侧 ⋮⋮ 拖动可调整顺序；合并会按此顺序把后面的内容依次追加到第一个文件之后。',
+  'merge.dragHint': '按住左侧 ⋮⋮ 拖动可调整顺序；合并会按此顺序生成新的文件。',
   'merge.dragTip': '拖动调整顺序',
   'merge.remove': '移出合并列表',
   'merge.empty': '已把全部文件移出合并列表，取消后重新勾选即可再合并。',
-  'merge.deleteSources': '合并后把源文件移入回收站（默认跟随「设置 → 录制 → 合并后删除原始分段」）',
+  /* 删源勾选框：文案随「勾没勾 + 系统是否开启『删除时移入回收站』」动态切换（见 merge-dialog delText） */
+  'merge.deleteSources': '合并后把源文件移入回收站（删除后可在回收站还原）',
+  'merge.deleteForever': '合并后直接删除源文件（「设置 → 存储 → 删除时移入回收站」已关闭，删除后无法还原）',
+  'merge.keepSources': '合并后保留源文件（不移入回收站）',
   'merge.submitting': '合并中…',
 };
 

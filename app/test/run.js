@@ -1773,7 +1773,8 @@ function testViewGuards() {
   ok(/class="mg-handle"/.test(mergeSrc) && /addEventListener\('pointerdown'/.test(mergeSrc) && /list\.insertBefore\(row/.test(mergeSrc), '拖动排序：左侧手柄 + pointer 事件 + insertBefore 改 DOM 顺序（鼠标/触屏同一套）');
   ok(/const byId = new Map\(getOrder\(\)/.test(mergeSrc) && /setOrder\(next\)/.test(mergeSrc), '松手后 DOM 顺序回写成新的合并顺序（提交按它走）');
   ok(/ids: order\.map\(\(r\) => r\.f\.id\), name, deleteSources: del/.test(mergeSrc), '提交按列表当前顺序调用 filesMergeSelected');
-  ok(/deleteSources: await mergeDeleteDefault\(\)/.test(filesSrc) && /deleteAfterMerge !== false/.test(filesSrc), '「合并后把源文件移入回收站」默认值取系统设置 deleteAfterMerge');
+  ok(/\.\.\.\(await mergeOptions\(\)\)/.test(filesSrc) && /deleteSources: s\.deleteAfterMerge !== false/.test(filesSrc), '「合并后把源文件移入回收站」默认值取系统设置 deleteAfterMerge');
+  ok(/trashEnabled: s\.deleteToTrash !== false/.test(filesSrc) && /trashEnabled = true, onSubmit/.test(mergeSrc), '删源文案用的「回收站开关」取系统设置 deleteToTrash');
   ok(/id="mgDel"/.test(mergeSrc) && /el\('button', 'btn primary', t\('files\.mergeSelected'\)\)/.test(mergeSrc) && !/mergeKeep|mergeDeleteSource/.test(mergeSrc), '提交区 = 一个「合并」按钮 + 删源勾选（不再两个合并动作）');
 
   /* 合并弹框滚动与固定区（2026-10-22）：列表默认露出 5 行、超出在列表内部滚动；
@@ -1824,7 +1825,25 @@ function testViewGuards() {
   ok(/files\.mergeNameLabel/.test(mergeSrc) && /files\.mergeNameRequired/.test(mergeSrc), '命名输入有标签文案与空值拦截');
   ok(zhJson['files.mergeNameLabel'] === '文件名', '命名输入标签文案沿用「文件名」');
   ok(zhJson['merge.title'] === '合并文件' && !!zhJson['merge.count'] && /拖动/.test(zhJson['merge.dragHint']), '合并弹框文案齐全（标题 / 文件数 / 拖动说明）');
-  ok(/默认跟随/.test(zhJson['merge.deleteSources']), '删源勾选框文案写明默认值跟随系统设置');
+  ok(zhJson['merge.dragHint'].endsWith('合并会按此顺序生成新的文件。'), '说明行文案 = 共 N 个文件 · 拖动调整顺序；按此顺序生成新文件', zhJson['merge.dragHint']);
+
+  /* 删源勾选框文案动态化：勾没勾决定「保不保留」，系统「删除时移入回收站」决定「移入回收站 / 直接删除」 */
+  ok(/const delText = \(\) => \{[\s\S]{0,220}?return trashEnabled \? t\('merge\.deleteSources'\) : t\('merge\.deleteForever'\)/.test(mergeSrc), '删源文案随 trashEnabled 切换（移入回收站 / 直接删除）');
+  ok(/if \(!del\) return t\('merge\.keepSources'\)/.test(mergeSrc) && /delTxtEl\.textContent = delText\(\)/.test(mergeSrc), '取消勾选显示「保留源文件」，勾选变化即时换文案');
+  ok(/id="mgDelTxt"/.test(mergeSrc), '勾选框文案在独立节点上（可局部更新，不重绘整框）');
+  ok(/回收站/.test(zhJson['merge.deleteSources']) && /无法还原/.test(zhJson['merge.deleteForever']) && /保留源文件/.test(zhJson['merge.keepSources']), '三条删源文案齐全');
+
+  /* 合并列表行只放文件名：完整显示（可换行），不再挤平台/主播/大小/时长 */
+  ok(!/mg-meta/.test(mergeSrc) && !/mg-meta/.test(cssSrc), '列表行不再渲染右侧平台/大小/时长（宽度全给文件名）');
+  ok(/class="mg-nm" title="\$\{esc\(name\)\}"/.test(mergeSrc) && /\.mg-nm\{[^}]*white-space:normal/.test(cssSrc) && /\.mg-nm\{[^}]*word-break:break-all/.test(cssSrc), '文件名完整显示：可换行、不省略号，悬停可看全名');
+
+  /* 文件库工具栏拆两行：第一行筛选条件，第二行「全选 + 已选中 N 项 + 批量动作」 */
+  const iFilterRow = filesSrc.indexOf('id="flRefresh"');
+  const iSelBar = filesSrc.indexOf('class="fl-selbar"');
+  const iSelAll = filesSrc.indexOf('id="flSelAll"');
+  ok(iFilterRow > 0 && iSelBar > iFilterRow && iSelAll > iSelBar, '「全选」移到筛选条件下方那一行（不再和查询控件挤一起）');
+  ok(/class="fl-selbar"[\s\S]{0,600}?id="flSelAll"[\s\S]{0,300}?id="flPickChip"[\s\S]{0,300}?id="flDelPicked"[\s\S]{0,200}?id="flMergePicked"/.test(filesSrc), '第二行顺序 = 全选 → 已选中 → 删除所选 → 合并');
+  ok(/\.fl-selbar\{[^}]*display:flex/.test(cssSrc) && /\.fl-selall\{[^}]*cursor:pointer/.test(cssSrc), '勾选栏有独立样式（不与 toolbar 的边框/内边距打架）');
   ok(zhJson['merge.remove'] === '移出合并列表' && /移出合并列表/.test(zhJson['merge.empty']), '行尾删除按钮与列表清空提示有文案');
   const srvSrc = fs.readFileSync(path.join(APP_DIR, 'server', 'server.js'), 'utf8');
   ok(/mergePicked\(fileIds, \{ deleteSources, name \}\)/.test(srvSrc), '路由透传 name');

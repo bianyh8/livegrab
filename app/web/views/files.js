@@ -219,7 +219,7 @@ function paint(ctx, force) {
         <span class="hint" data-files-bytes>${esc(bytesHint())}</span>
         <div class="spacer"></div>
       </div>
-      <div class="toolbar" style="padding:10px 16px 12px;flex-wrap:wrap">
+      <div class="toolbar" style="padding:10px 16px 8px;flex-wrap:wrap;border-bottom:0">
         <input class="input" id="flQ" style="width:180px" placeholder="${t('files.searchPlaceholder')}" value="${esc(state.q)}" />
         <select class="select" id="flPlat" style="width:120px">
           <option value="">${t('common.allPlatforms')}</option>
@@ -233,9 +233,11 @@ function paint(ctx, force) {
         </select>
         <button class="btn sm ghost" id="flClear">${t('files.clear')}</button>
         <button class="btn sm ghost" id="flRefresh">${t('common.refresh')}</button>
-        <div class="spacer"></div>
-        <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--txt-2);cursor:pointer"><input type="checkbox" class="cb" id="flSelAll"${allSel ? ' checked' : ''} /> ${t('files.selectAll')}</label>
+      </div>
+      <div class="fl-selbar">
+        <label class="fl-selall"><input type="checkbox" class="cb" id="flSelAll"${allSel ? ' checked' : ''} /> ${t('files.selectAll')}</label>
         <span class="chip ${state.picked.size ? 'on' : ''}" id="flPickChip"><i class="dot"></i>${t('files.selectedCount', state.picked.size)}</span>
+        <div class="spacer"></div>
         <button class="btn sm danger" id="flDelPicked"${state.picked.size && !state.merging.size ? '' : ' disabled'}>${t('files.deleteSelected')}</button>
         <button class="btn sm danger" id="flMergePicked"${state.picked.size >= 2 && !state.merging.size ? '' : ' disabled'}>${t('files.mergeSelected')}</button>
       </div>
@@ -518,15 +520,19 @@ async function mergeFiles(ctx) {
 
   openMergeDialog({
     rows,
-    deleteSources: await mergeDeleteDefault(),
+    ...(await mergeOptions()),
     onSubmit: (payload) => runMerge({ ...payload }, ctx),
   });
 }
 
-/* 「合并后把源文件移入回收站」默认值：取系统设置（设置 → 录制 →「合并后删除原始分段」） */
-async function mergeDeleteDefault() {
-  try { const s = await api.settings(); return s.deleteAfterMerge !== false; }
-  catch { return true; }
+/* 合并弹框的两个与系统设置相关的初值：
+   · deleteSources = 「合并后删除原始分段」（设置 → 录制），决定勾选框默认勾不勾
+   · trashEnabled  = 「删除时移入回收站」（设置 → 存储），决定删源文案是「移入回收站」还是「直接删除」 */
+async function mergeOptions() {
+  try {
+    const s = await api.settings();
+    return { deleteSources: s.deleteAfterMerge !== false, trashEnabled: s.deleteToTrash !== false };
+  } catch { return { deleteSources: true, trashEnabled: true }; }
 }
 
 /* 执行合并：标记「合并中」（行状态 + 禁用行内操作），成功后清掉已删源的勾选。

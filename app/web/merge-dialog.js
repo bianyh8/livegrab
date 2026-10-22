@@ -10,7 +10,7 @@
      ③ 文件名 + 删源勾选（固定，不随列表滚动）。弹框本身不滚动。 */
 
 import { t } from './i18n.js';
-import { esc, el, formatBytes, formatDuration, toast, openDialog } from './ui.js';
+import { esc, el, toast, openDialog } from './ui.js';
 
 /** 列表默认可见行数：第 6 行起在列表内部滚动（高度由 CSS 的 --mg-rows 同步） */
 const VISIBLE_ROWS = 5;
@@ -20,24 +20,15 @@ const stemOf = (name) => String(name || '').replace(/\.[A-Za-z0-9]{1,8}$/, '');
 /** 产物名默认值：第一个文件名去扩展名 +「(合并)」 */
 const defaultNameOf = (row) => `${stemOf(row && row.f && (row.f.name || row.f.relPath))}(合并)`;
 
-function metaOf(row) {
-  const f = row.f || {};
-  const s = row.s || {};
-  return [
-    s.platformName || s.platform || '',
-    s.streamer || '',
-    formatBytes(f.bytes || 0),
-    f.durationSec ? formatDuration(f.durationSec) : '',
-  ].filter(Boolean).join(' · ');
-}
-
+/* 行内只放文件名：完整显示（可换行），不再挤平台/主播/大小/时长——
+   那些信息在文件库里看，这里的第一诉求是「确认这一行是哪个文件」。 */
 function rowHTML(row, i) {
   const f = row.f || {};
+  const name = f.name || f.relPath || '';
   return `<div class="mg-row" data-id="${esc(f.id)}">
     <span class="mg-handle" title="${t('merge.dragTip')}" aria-label="${t('merge.dragTip')}">⋮⋮</span>
     <span class="mg-idx">${i + 1}</span>
-    <span class="mg-nm">${esc(f.name || f.relPath || '')}</span>
-    <span class="mg-meta">${esc(metaOf(row))}</span>
+    <span class="mg-nm" title="${esc(name)}">${esc(name)}</span>
     <button type="button" class="mg-x" data-act="del" title="${t('merge.remove')}" aria-label="${t('merge.remove')}">✕</button>
   </div>`;
 }
@@ -91,10 +82,11 @@ function bindDrag(list, getOrder, setOrder) {
 /**
  * 打开合并弹框。
  * @param rows          合并顺序初值（文件库现有排序）：[{ f, s, tag }]
- * @param deleteSources 「合并后把源文件移入回收站」的默认值（由调用方取系统设置）
+ * @param deleteSources 「合并后把源文件移入回收站」的默认值（由调用方取系统设置 deleteAfterMerge）
+ * @param trashEnabled  系统是否开启「删除时移入回收站」（deleteToTrash）：决定删源文案是「移入回收站」还是「直接删除」
  * @param onSubmit      ({ ids, name, deleteSources }) => Promise<boolean>，返回 true 才关闭弹框
  */
-export function openMergeDialog({ rows, deleteSources = false, onSubmit }) {
+export function openMergeDialog({ rows, deleteSources = false, trashEnabled = true, onSubmit }) {
   const list = Array.isArray(rows) ? rows.slice() : [];
   if (list.length < 2) { toast(t('files.mergeNeedTwo'), 'warn'); return null; }
 
@@ -102,6 +94,14 @@ export function openMergeDialog({ rows, deleteSources = false, onSubmit }) {
   let del = !!deleteSources;
   let busy = false;
   let nameDirty = false; // 用户改过文件名后，删除行不再覆盖它
+
+  /* 删源文案随两件事动态变化：
+     · 勾没勾 → 保不保留源文件（不勾就是全部保留，不存在「进不进回收站」的问题）
+     · 系统「删除时移入回收站」开关 → 删掉之后是进回收站可还原，还是直接从磁盘消失 */
+  const delText = () => {
+    if (!del) return t('merge.keepSources');
+    return trashEnabled ? t('merge.deleteSources') : t('merge.deleteForever');
+  };
 
   return openDialog({
     title: t('merge.title'),
@@ -121,7 +121,7 @@ export function openMergeDialog({ rows, deleteSources = false, onSubmit }) {
         </div>
         <label class="mg-del">
           <input type="checkbox" class="cb" id="mgDel"${del ? ' checked' : ''} />
-          <span>${t('merge.deleteSources')}</span>
+          <span id="mgDelTxt">${delText()}</span>
         </label>
       </div>
     </div>`,
@@ -131,7 +131,13 @@ export function openMergeDialog({ rows, deleteSources = false, onSubmit }) {
       const emptyEl = body.querySelector('#mgEmpty');
       const nameEl = body.querySelector('#mgName');
       const delEl = body.querySelector('#mgDel');
-      if (delEl) delEl.onchange = () => { del = !!delEl.checked; };
+      const delTxtEl = body.querySelector('#mgDelTxt');
+      if (delEl) {
+        delEl.onchange = () => {
+          del = !!delEl.checked;
+          if (delTxtEl) delTxtEl.textContent = delText(); // 勾/取消勾选即时换文案
+        };
+      }
       if (nameEl) nameEl.addEventListener('input', () => { nameDirty = true; });
       bindDrag(listEl, () => order, (next) => { order = next; });
 
