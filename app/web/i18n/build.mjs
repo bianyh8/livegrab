@@ -76,7 +76,7 @@ const ADD = {
   'files.searchPlaceholder': '搜索 文件名/主播/标题', 'files.anchorPlaceholder': '主播名称',
   'files.allTypes': '全部类型', 'files.clear': '清除', 'files.extTs': '.ts 直播流', 'files.extMp4': '.mp4 / m4a',
   'files.extM4a': '.m4a 音频', 'files.selectAll': '全选', 'files.selectedCount': '已选中 {0} 项',
-  'files.deleteSelected': '删除所选', 'files.noFilteredFiles': '没有符合筛选条件的录制文件',
+  'files.deleteSelected': '删除文件', 'files.noFilteredFiles': '没有符合筛选条件的录制文件',
   'files.selectThisFile': '选择该文件', 'files.missing': '文件缺失',
   'files.duration': '时长 {0}', 'files.play': '播放', 'files.query': '查询', 'files.download': '下载',
   'files.recordNotFound': '找不到该文件记录', 'files.recordingCannotDelete': '录制中的分段不可删除',
@@ -92,6 +92,8 @@ const ADD = {
 
   // files（勾选合并 + 查询反馈 + 合并中状态；2026-10-22 补登此前直接写进生成物的孤儿键）
   'files.mergeSelected': '合并',
+  /* 文件库勾选栏按钮文案（与弹框内的提交按钮分开：弹框里叫「合并」，外面叫「合并文件」） */
+  'files.mergeFileBtn': '合并文件',
   'files.mergeNameLabel': '文件名',
   'files.mergeNameHint': '扩展名自动使用源文件格式；合并结果继承第一个文件的场次信息（平台/主播/开播时间）',
   'files.mergeNameRequired': '请填写合并后的文件名',
@@ -101,7 +103,12 @@ const ADD = {
   'files.mergedDone': '合并完成',
   'files.merging': '合并中',
   'files.queryApplied': '已按当前条件查询',
-  'files.refreshed': '已刷新',
+  /* 文件库工具栏右侧按钮：把原来的「刷新」（只重拉列表）换成「扫描磁盘」——
+     真的重扫录制目录（登记新文件、标缺失、归位改名），扫完再整表刷新。 */
+  'files.scanDisk': '扫描磁盘',
+  'files.scanning': '扫描中…',
+  'files.scanDone': '扫描完成：新增 {0} 个、更新 {1} 个、缺失 {2} 个',
+  'files.scanFail': '扫描失败：{0}',
 
   // logs
   'logs.loading': '正在加载日志…', 'logs.loadFailed': '日志加载失败：{0}',
@@ -256,16 +263,19 @@ const ADD = {
   'files.dateSep': '至',
 
   // merge（合并弹框：按文件库排序列出勾选文件，可拖动调整顺序）
-  'merge.title': '合并文件',
+  /* 标题刻意不叫「合并文件」：那是勾选栏按钮的文案（files.mergeFileBtn）。
+     同文案的键会被 build 的 dedupe 合并改名，标题写成「合并所选文件」既更多一层信息也不会撞车。 */
+  'merge.title': '合并所选文件',
   'merge.count': '共 {0} 个文件',
   'merge.dragHint': '按住左侧 ⋮⋮ 拖动可调整顺序；合并会按此顺序生成新的文件。',
   'merge.dragTip': '拖动调整顺序',
   'merge.remove': '移出合并列表',
   'merge.empty': '已把全部文件移出合并列表，取消后重新勾选即可再合并。',
-  /* 删源勾选框：文案随「勾没勾 + 系统是否开启『删除时移入回收站』」动态切换（见 merge-dialog delText） */
-  'merge.deleteSources': '合并后把源文件移入回收站（删除后可在回收站还原）',
-  'merge.deleteForever': '合并后直接删除源文件（「设置 → 存储 → 删除时移入回收站」已关闭，删除后无法还原）',
-  'merge.keepSources': '合并后保留源文件（不移入回收站）',
+  /* 删源开关（.switch）：文案随「开关开/关 + 系统是否开启『删除时移入回收站』」动态切换
+     （见 merge-dialog delText）。开关关闭 = 保留源文件，此时「进不进回收站」不成立。 */
+  'merge.deleteTrash': '合并后删除文件（移入回收站）',
+  'merge.deleteForever': '合并后删除文件（不移入回收站）',
+  'merge.keepSources': '合并后保留源文件',
   'merge.submitting': '合并中…',
 };
 
@@ -275,6 +285,10 @@ const REMOVE = [
   'files.mergeTitle', 'files.mergeKeep', 'files.mergeDeleteSource', 'files.mergeText',
   // 合并最终定为小弹框（不是独立页）：页面专属文案（副标题/返回/加载中/加载失败）随之下线
   'merge.sub', 'merge.back', 'merge.loading', 'merge.loadFail', 'merge.needTwo',
+  // 删源改为开关 + 新文案（merge.deleteTrash / deleteForever / keepSources），旧的勾选框长文案下线
+  'merge.deleteSources',
+  // 文件库「刷新」按钮改为「扫描磁盘」（files.scanDisk 等），旧提示文案下线
+  'files.refreshed',
   'dashboard.statMonitor', 'dashboard.statQueued', 'dashboard.statWaiting',
   'dashboard.waitSlot', 'dashboard.pollSec', 'dashboard.unnamed', 'dashboard.room',
   'dashboard.checkLiveTip', 'dashboard.diskTrash',

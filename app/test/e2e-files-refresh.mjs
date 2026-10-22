@@ -1,7 +1,7 @@
 // 端到端验证「录制文件库」的三件事：
 //   ① 录制中的文件变大 → 行内大小自动跟新，且不重建整表（搜索框焦点不丢）
 //   ② 新增/变动 → 服务端 SSE 的 files 事件把页面在 ~300ms 内刷新（不必等 2s 轮询）
-//   ③ 头部「刷新」按钮确实会打 /api/files
+//   ③ 工具栏「扫描磁盘」按钮确实会打 POST /api/files/scan 并把列表回拉一遍
 // 用法：node app/test/e2e-files-refresh.mjs （需要 Chrome/Edge；EDGE_PATH 或 CHROME_PATH 指定可执行文件，找不到则跳过）
 // 真实 Chromium（headless）→ 真实服务 → 造文件 → 改大小/新增 → 读 DOM 与网络时序
 import fs from 'node:fs';
@@ -81,7 +81,7 @@ ws.onmessage = (ev) => {
   if (m.method === 'Runtime.consoleAPICalled' && ['error'].includes(m.params.type)) {
     consoleErrors.push((m.params.args || []).map((a) => a.value || a.description || '').join(' ').slice(0, 300));
   }
-  if (m.method === 'Network.requestWillBeSent' && /\/api\/files(\?|$)/.test(m.params.request.url)) {
+  if (m.method === 'Network.requestWillBeSent' && /\/api\/files(\/scan)?(\?|$)/.test(m.params.request.url)) {
     reqLog.push({ t: Date.now(), url: m.params.request.url });
   }
 };
@@ -166,18 +166,23 @@ if (seen2 && sse2.length > sseBefore2) {
   check(tSeen2 - tScan2 < 2500, '总体反应时间', `${tSeen2 - tScan2}ms`);
 }
 
-console.log('\n【C】刷新按钮真的会打接口');
+console.log('\n【C】「扫描磁盘」按钮真的会打扫描接口 + 回拉列表');
 await sleep(600);
 const reqBefore = reqLog.length;
-await ev('document.querySelector("#flRefresh").click()');
-let reqHit = 0;
-for (let i = 0; i < 30; i++) { if (reqLog.length > reqBefore) { reqHit = reqLog.length - reqBefore; break; } await sleep(30); }
-check(reqHit >= 1, '点「刷新」后 1s 内发出了 /api/files 请求', `${reqHit} 次`);
+await ev('document.querySelector("#flScan").click()');
+for (let i = 0; i < 60; i++) {
+  if (reqLog.slice(reqBefore).some((r) => /\/api\/files\/scan/.test(r.url))) break;
+  await sleep(30);
+}
+const hitUrls = reqLog.slice(reqBefore).map((r) => r.url);
+check(hitUrls.some((u) => /\/api\/files\/scan/.test(u)), '点「扫描磁盘」调用了 POST /api/files/scan', hitUrls.filter((u) => /scan/.test(u))[0] || `${hitUrls.length} 次请求`);
+await sleep(300);
+check(reqLog.slice(reqBefore).some((r) => /\/api\/files\?/.test(r.url)), '扫描后重新拉取了文件列表', `${reqLog.length - reqBefore} 次请求`);
 
 console.log('\n【D】控制台无报错');
 check(consoleErrors.length === 0, '无 console error', consoleErrors.slice(0, 3).join(' | '));
 
-const stop = await ev('document.querySelector("#flRefresh") ? "ok" : "gone"');
+const stop = await ev('document.querySelector("#flScan") ? "ok" : "gone"');
 console.log(`\n[收尾] 页面状态=${stop}  结果：${bad === 0 ? '全部通过 ✅' : `${bad} 项失败 ❌`}`);
 ws.close(); chrome.kill(); srv.kill();
 process.exit(bad === 0 ? 0 : 1);

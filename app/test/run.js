@@ -1756,7 +1756,7 @@ function testViewGuards() {
   ok(/function paintResults\s*\(/.test(filesSrc), '文件库有 paintResults()（只重绘结果区，不重建搜索框）');
   ok(/setTimeout\(\(\) => \{[\s\S]{0,80}?commitFilters\(\);[\s\S]{0,80}?tick\(ctx, true\);[\s\S]{0,40}?\}, 300\)/.test(filesSrc), '文件库查询防抖 = 300ms + commitFilters + tick（不再一输就查、不抢焦点）');
   ok(!/id="flQuery"/.test(filesSrc) && !/flQuery/.test(filesSrc), '文件库不再有「查询」按钮（草稿/提交两套状态重复）');
-  ok(/toast\(t\('files\.refreshed'\)\)/.test(filesSrc), '「刷新」给 toast 反馈（避免点了不知道生效没）');
+  ok(/toast\(t\('files\.scanDone',/.test(filesSrc) && /toast\(t\('files\.scanFail'/.test(filesSrc), '「扫描磁盘」给结果/失败 toast 反馈（避免点了不知道生效没）');
   ok(/function bindRows\s*\(/.test(filesSrc) && /bindRows\(ctx\)/.test(filesSrc), '局部重绘后重绑行内按钮（换数据不换操作）');
   ok(/function syncPickedBar\s*\(/.test(filesSrc), '勾选计数单独同步（勾选不整表重绘）');
 
@@ -1799,8 +1799,8 @@ function testViewGuards() {
      有无不一致正是徽标按 tag 归属有条件渲染所致；文件类型看文件名扩展名即可。
      状态徽标（合并中/录制中/已录完/文件缺失）保留。 */
   const iClear = filesSrc.indexOf('id="flClear"');
-  const iRefresh = filesSrc.indexOf('id="flRefresh"');
-  ok(iClear > 0 && iRefresh > iClear, '「刷新」按钮在「清除」按钮后边');
+  const iScan = filesSrc.indexOf('id="flScan"');
+  ok(iClear > 0 && iScan > iClear, '「扫描磁盘」在勾选栏那一行（筛选行只留查询控件 + 清除）');
   ok(/class="btn sm danger" id="flMergePicked"/.test(filesSrc) && /class="btn sm danger" id="flDelPicked"/.test(filesSrc), '「合并」与「删除所选」按钮同款样式（btn sm danger）');
   ok(!/<span class="chip">\$\{esc\(extLabel\)\}<\/span>/.test(filesSrc) && !/\$\{tag \? `<span class="chip">/.test(filesSrc), '文件名后不渲染类型徽标（非用户需求，已移除；状态徽标保留）');
 
@@ -1824,27 +1824,42 @@ function testViewGuards() {
   ok(/row && row\.f && \(row\.f\.name \|\| row\.f\.relPath\)/.test(mergeSrc) && /defaultNameOf\(list\[0\]\)/.test(mergeSrc), '合并取文件对象本身（解包行包装 .f，否则预填只剩「(合并)」）');
   ok(/files\.mergeNameLabel/.test(mergeSrc) && /files\.mergeNameRequired/.test(mergeSrc), '命名输入有标签文案与空值拦截');
   ok(zhJson['files.mergeNameLabel'] === '文件名', '命名输入标签文案沿用「文件名」');
-  ok(zhJson['merge.title'] === '合并文件' && !!zhJson['merge.count'] && /拖动/.test(zhJson['merge.dragHint']), '合并弹框文案齐全（标题 / 文件数 / 拖动说明）');
+  ok(zhJson['merge.title'] === '合并所选文件' && !!zhJson['merge.count'] && /拖动/.test(zhJson['merge.dragHint']), '合并弹框文案齐全（标题 / 文件数 / 拖动说明）');
   ok(zhJson['merge.dragHint'].endsWith('合并会按此顺序生成新的文件。'), '说明行文案 = 共 N 个文件 · 拖动调整顺序；按此顺序生成新文件', zhJson['merge.dragHint']);
 
-  /* 删源勾选框文案动态化：勾没勾决定「保不保留」，系统「删除时移入回收站」决定「移入回收站 / 直接删除」 */
-  ok(/const delText = \(\) => \{[\s\S]{0,220}?return trashEnabled \? t\('merge\.deleteSources'\) : t\('merge\.deleteForever'\)/.test(mergeSrc), '删源文案随 trashEnabled 切换（移入回收站 / 直接删除）');
-  ok(/if \(!del\) return t\('merge\.keepSources'\)/.test(mergeSrc) && /delTxtEl\.textContent = delText\(\)/.test(mergeSrc), '取消勾选显示「保留源文件」，勾选变化即时换文案');
-  ok(/id="mgDelTxt"/.test(mergeSrc), '勾选框文案在独立节点上（可局部更新，不重绘整框）');
-  ok(/回收站/.test(zhJson['merge.deleteSources']) && /无法还原/.test(zhJson['merge.deleteForever']) && /保留源文件/.test(zhJson['merge.keepSources']), '三条删源文案齐全');
+  /* 删源改为开关（.switch）+ 三态文案：关 = 保留源文件；开时由系统「删除时移入回收站」
+     决定是「（移入回收站）」还是「（不移入回收站）」——回收站关掉时删了就真没了，文案必须说清。 */
+  ok(/const delText = \(\) => \{[\s\S]{0,220}?return trashEnabled \? t\('merge\.deleteTrash'\) : t\('merge\.deleteForever'\)/.test(mergeSrc), '删源文案随 trashEnabled 切换（移入回收站 / 不移入回收站）');
+  ok(/if \(!del\) return t\('merge\.keepSources'\)/.test(mergeSrc), '开关关闭时显示「合并后保留源文件」');
+  ok(/\$\{switchEl\(del, 'id="mgDel"'\)\}/.test(mergeSrc) && /bindSwitches\(body, \(sw\) => \{/.test(mergeSrc), '删源控件是全局同款开关（click 与 Enter/空格都走 bindSwitches）');
+  ok(/id="mgDelTxt"/.test(mergeSrc) && /delTxtEl\.textContent = delText\(\)/.test(mergeSrc), '开关切换只换文案节点，不重绘弹框');
+  ok(zhJson['merge.deleteTrash'] === '合并后删除文件（移入回收站）' && zhJson['merge.deleteForever'] === '合并后删除文件（不移入回收站）' && zhJson['merge.keepSources'] === '合并后保留源文件', '三条删源文案 = 移入回收站 / 不移入回收站 / 保留源文件');
 
-  /* 合并列表行只放文件名：完整显示（可换行），不再挤平台/主播/大小/时长 */
-  ok(!/mg-meta/.test(mergeSrc) && !/mg-meta/.test(cssSrc), '列表行不再渲染右侧平台/大小/时长（宽度全给文件名）');
+  /* 行内保留「大小 · 时长」，只去掉平台/主播名（用户明确：让去掉的是名称，不是大小/时长） */
+  ok(/formatBytes\(f\.bytes \|\| 0\)/.test(mergeSrc) && /f\.durationSec \? formatDuration\(f\.durationSec\)/.test(mergeSrc) && /class="mg-meta"/.test(mergeSrc), '行内保留大小 · 时长');
+  ok(!/s\.platformName/.test(mergeSrc) && !/s\.streamer/.test(mergeSrc), '行内不再渲染平台/主播名');
+  ok(/\.mg-meta\{[^}]*flex:0 0 auto/.test(cssSrc) && /\.mg-meta\{[^}]*white-space:nowrap/.test(cssSrc), '大小 · 时长固定在行尾，不参与文件名换行挤压');
   ok(/class="mg-nm" title="\$\{esc\(name\)\}"/.test(mergeSrc) && /\.mg-nm\{[^}]*white-space:normal/.test(cssSrc) && /\.mg-nm\{[^}]*word-break:break-all/.test(cssSrc), '文件名完整显示：可换行、不省略号，悬停可看全名');
 
-  /* 文件库工具栏拆两行：第一行筛选条件，第二行「全选 + 已选中 N 项 + 批量动作」 */
-  const iFilterRow = filesSrc.indexOf('id="flRefresh"');
+  /* 文件库工具栏拆两行：第一行筛选条件（清除靠右），第二行「全选 + 已选中 N 项 + 批量动作」 */
+  const iClearBtn = filesSrc.indexOf('id="flClear"');
   const iSelBar = filesSrc.indexOf('class="fl-selbar"');
   const iSelAll = filesSrc.indexOf('id="flSelAll"');
-  ok(iFilterRow > 0 && iSelBar > iFilterRow && iSelAll > iSelBar, '「全选」移到筛选条件下方那一行（不再和查询控件挤一起）');
-  ok(/class="fl-selbar"[\s\S]{0,600}?id="flSelAll"[\s\S]{0,300}?id="flPickChip"[\s\S]{0,300}?id="flDelPicked"[\s\S]{0,200}?id="flMergePicked"/.test(filesSrc), '第二行顺序 = 全选 → 已选中 → 删除所选 → 合并');
+  ok(iClearBtn > 0 && iSelBar > iClearBtn && iSelAll > iSelBar, '「全选」在筛选条件下方那一行');
+  ok(/class="fl-selbar"[\s\S]{0,600}?id="flSelAll"[\s\S]{0,300}?id="flPickChip"[\s\S]{0,300}?id="flDelPicked"[\s\S]{0,200}?id="flMergePicked"[\s\S]{0,200}?id="flScan"/.test(filesSrc), '第二行顺序 = 全选 → 已选中 → 删除文件 → 合并文件 → 扫描磁盘');
+  ok(zhJson['files.deleteSelected'] === '删除文件' && zhJson['files.mergeFileBtn'] === '合并文件', '勾选栏按钮文案 = 删除文件 / 合并文件');
+  ok(/id="flQ" style="width:240px"/.test(filesSrc), '搜索框加宽到 240px');
+  ok(/id="flExt"[\s\S]{0,500}?<div class="spacer"><\/div>[\s\S]{0,200}?id="flClear"/.test(filesSrc), '「清除」顶到筛选行最右侧');
+  ok(/\.fl-selbar\{[^}]*padding:0 16px 12px 32px/.test(cssSrc), '勾选栏左内边距 = 行内复选框缩进（全选框与列表复选框左对齐）');
   ok(/\.fl-selbar\{[^}]*display:flex/.test(cssSrc) && /\.fl-selall\{[^}]*cursor:pointer/.test(cssSrc), '勾选栏有独立样式（不与 toolbar 的边框/内边距打架）');
   ok(zhJson['merge.remove'] === '移出合并列表' && /移出合并列表/.test(zhJson['merge.empty']), '行尾删除按钮与列表清空提示有文案');
+
+  /* 扫描磁盘（替代原「刷新」）：不再只是重拉列表，而是真的 POST /api/files/scan 重扫录制目录，
+     扫完整表刷新，并把「新增 / 更新 / 缺失」回显到提示里。 */
+  ok(/const r = await api\.filesScan\(\)/.test(filesSrc) && /t\('files\.scanDone',/.test(filesSrc), '「扫描磁盘」真的调 POST /api/files/scan 并回显结果');
+  ok(/scanBtn\.disabled = true/.test(filesSrc) && /t\('files\.scanning'\)/.test(filesSrc) && /scanBtn\.textContent = oldTxt/.test(filesSrc), '扫描期间按钮禁用并显示「扫描中…」，结束后复原');
+  ok(!/id="flRefresh"/.test(filesSrc) && !/files\.refreshed/.test(filesSrc), '旧「刷新」按钮与「已刷新」提示已下线');
+  ok(zhJson['files.scanDisk'] === '扫描磁盘' && /新增/.test(zhJson['files.scanDone']) && /缺失/.test(zhJson['files.scanDone']) && /扫描失败/.test(zhJson['files.scanFail']), '扫描按钮与结果/失败提示文案齐全');
   const srvSrc = fs.readFileSync(path.join(APP_DIR, 'server', 'server.js'), 'utf8');
   ok(/mergePicked\(fileIds, \{ deleteSources, name \}\)/.test(srvSrc), '路由透传 name');
   const storSrc = fs.readFileSync(path.join(APP_DIR, 'server', 'storage.js'), 'utf8');

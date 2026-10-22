@@ -220,7 +220,7 @@ function paint(ctx, force) {
         <div class="spacer"></div>
       </div>
       <div class="toolbar" style="padding:10px 16px 8px;flex-wrap:wrap;border-bottom:0">
-        <input class="input" id="flQ" style="width:180px" placeholder="${t('files.searchPlaceholder')}" value="${esc(state.q)}" />
+        <input class="input" id="flQ" style="width:240px" placeholder="${t('files.searchPlaceholder')}" value="${esc(state.q)}" />
         <select class="select" id="flPlat" style="width:120px">
           <option value="">${t('common.allPlatforms')}</option>
           ${state.platforms.map((p) => `<option value="${esc(p)}"${state.platform === p ? ' selected' : ''}>${esc(platNameOf(p))}</option>`).join('')}
@@ -231,15 +231,16 @@ function paint(ctx, force) {
         <select class="select" id="flExt" style="width:120px">
           ${[['', 'files.allTypes'], ['ts', 'files.extTs'], ['mp4', 'files.extMp4'], ['m4a', 'files.extM4a']].map(([v, k]) => `<option value="${v}"${state.ext === v ? ' selected' : ''}>${t(k)}</option>`).join('')}
         </select>
+        <div class="spacer"></div>
         <button class="btn sm ghost" id="flClear">${t('files.clear')}</button>
-        <button class="btn sm ghost" id="flRefresh">${t('common.refresh')}</button>
       </div>
       <div class="fl-selbar">
         <label class="fl-selall"><input type="checkbox" class="cb" id="flSelAll"${allSel ? ' checked' : ''} /> ${t('files.selectAll')}</label>
         <span class="chip ${state.picked.size ? 'on' : ''}" id="flPickChip"><i class="dot"></i>${t('files.selectedCount', state.picked.size)}</span>
         <div class="spacer"></div>
         <button class="btn sm danger" id="flDelPicked"${state.picked.size && !state.merging.size ? '' : ' disabled'}>${t('files.deleteSelected')}</button>
-        <button class="btn sm danger" id="flMergePicked"${state.picked.size >= 2 && !state.merging.size ? '' : ' disabled'}>${t('files.mergeSelected')}</button>
+        <button class="btn sm danger" id="flMergePicked"${state.picked.size >= 2 && !state.merging.size ? '' : ' disabled'}>${t('files.mergeFileBtn')}</button>
+        <button class="btn sm ghost" id="flScan">${t('files.scanDisk')}</button>
       </div>
       <div style="padding:0 16px 16px" id="flBody">
         ${list.length ? list.map(filenameRow).join('') : emptyBox(t('files.noFilteredFiles'))}
@@ -354,11 +355,28 @@ function bind(ctx) {
     })();
   };
 
-  const ref = root.querySelector('#flRefresh');
-  if (ref) ref.onclick = () => {
-    state.hash = '';
-    tick(ctx, true);
-    toast(t('files.refreshed'));
+  /* 扫描磁盘：真的走 POST /api/files/scan 重扫录制目录（重新登记未入库文件、标出缺失、
+     顺带归位改名的文件），再整表刷新。不是「重新请求一次列表」——那个用翻页/筛选就会做。 */
+  const scanBtn = root.querySelector('#flScan');
+  if (scanBtn) scanBtn.onclick = async () => {
+    if (scanBtn.disabled) return;
+    scanBtn.disabled = true;
+    const oldTxt = scanBtn.textContent;
+    scanBtn.textContent = t('files.scanning');
+    try {
+      const r = await api.filesScan();
+      state.hash = '';
+      await tick(ctx, true);
+      toast(t('files.scanDone',
+        Number(r && r.added) || 0,
+        Number(r && r.updated) || 0,
+        Number(r && r.missing) || 0));
+    } catch (e) {
+      toast(t('files.scanFail', (e && e.message) || t('common.unknownError')), 'err');
+    } finally {
+      scanBtn.disabled = false;
+      scanBtn.textContent = oldTxt; // 整表重绘后这个节点已被替换，赋值只为「未重绘」的异常分支兜底
+    }
   };
 
   const del = root.querySelector('#flDelPicked');

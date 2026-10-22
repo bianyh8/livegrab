@@ -474,7 +474,9 @@ td .sub{font-size:11.5px;color:var(--txt-3);margin-top:3px}
 .fl-item{display:flex;align-items:center;gap:13px;padding:12px 16px;border-bottom:1px solid var(--line)}
 /* 文件库勾选栏（第二行）：全选 + 已选中 N 项列在左，批量动作靠右；
    与上面一行查询条件分开，避免「全选」被挤到筛选控件堆里。 */
-.fl-selbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:0 16px 12px;border-bottom:1px solid var(--line)}
+/* 左内边距 = #flBody 的 16px + .fl-item 的 16px：让「全选」框与下方每行行首的
+   复选框左边缘落在同一条竖线上（勾选栏不随行内容缩进）。 */
+.fl-selbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:0 16px 12px 32px;border-bottom:1px solid var(--line)}
 .fl-selall{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--txt-2);cursor:pointer;user-select:none}
 .fl-item:last-child{border-bottom:0}
 .fl-item:hover{background:rgba(255,255,255,.022)}
@@ -687,8 +689,9 @@ table.tight th{padding:8px 12px}
 .mg-handle:active{cursor:grabbing;color:var(--txt-1)}
 .mg-idx{flex:0 0 22px;text-align:right;font-size:11.5px;color:var(--txt-3);font-variant-numeric:tabular-nums}
 /* 文件名是这一行的主角：给足宽度并允许换行，超过一行就把行撑高，不再「…」截断
-   （右侧的平台/主播/大小/时长已移除，那些信息在文件库列表里看） */
+   （平台/主播名已移除；大小 · 时长留在右侧，合并前要能确认分量） */
 .mg-nm{flex:1;min-width:0;font-size:13px;line-height:1.35;white-space:normal;word-break:break-all}
+.mg-meta{flex:0 0 auto;font-size:11.5px;color:var(--txt-3);white-space:nowrap;font-variant-numeric:tabular-nums}
 /* 行尾 ✕：把该文件移出本次合并清单（不删文件、不动文件库勾选） */
 .mg-x{flex:0 0 auto;display:grid;place-items:center;width:22px;height:22px;padding:0;border:1px solid transparent;border-radius:6px;
   background:transparent;color:var(--txt-3);font-size:12px;line-height:1;cursor:pointer;transition:background .12s,color .12s,border-color .12s}
@@ -697,8 +700,10 @@ table.tight th{padding:8px 12px}
 .mg-empty{margin-top:10px}
 .mg-list.mg-sorting .mg-row{transition:transform .12s ease}
 .mg-list.mg-busy{opacity:.55;pointer-events:none}
-.mg-del{display:flex;align-items:center;gap:8px;margin-top:12px;font-size:12.5px;color:var(--txt-2);cursor:pointer}
-@media (max-width:767px){.mg-row{gap:8px;padding:9px}}
+/* 删源开关行：左侧是随状态变化的说明文案，右侧是全局同款 .switch 开关 */
+.mg-del{display:flex;align-items:center;gap:10px;margin-top:12px;font-size:12.5px;color:var(--txt-2)}
+.mg-del #mgDelTxt{flex:1;min-width:0}
+@media (max-width:767px){.mg-row{gap:8px;padding:9px}.mg-meta{font-size:11px}}
 
 /* ================= 手机端适配（<768px：底部 Tab + 卡片化；桌面端不受影响） ================= */
 .tabbar{display:none} /* 桌面隐藏，手机显示 */
@@ -780,7 +785,7 @@ table.tight th{padding:8px 12px}
   .thumb{width:58px;height:36px;flex:0 0 58px}
   .tk-avatar{width:46px;height:30px;flex:0 0 46px}
   .fl-item{gap:10px;padding:11px 12px;flex-wrap:wrap}
-  .fl-selbar{padding:0 12px 10px;gap:8px}
+  .fl-selbar{padding:0 12px 10px 28px;gap:8px}
   .fl-ico{width:56px;height:34px;flex:0 0 56px}
   /* 文件/回收站：操作按钮整行下移，避免挤压信息区 */
   .fl-item .acts{flex:1 1 100%;justify-content:flex-end;margin-top:4px;padding-top:8px;border-top:1px dashed var(--line)}
