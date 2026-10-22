@@ -74,6 +74,7 @@ export class Recorder extends EventEmitter {
     this._stderrTail = [];
     this._rawStderr = [];   // 最近若干行 ffmpeg stderr（不过滤）：断流时写进日志才能定性
     this._bytesAtSpawn = 0; // 本次拉流启动时的落盘字节数（算「这次录到没有」）
+    this._offlineStreak = 0; // 连续探播 offline 次数（需连续 2 次确认才收尾，防接口瞬时抖动误判下播）
     this.currentBytes = 0;
     this.currentSegment = null;
     this._rateBits = 0;       // 各任务实时下载速率（bit/s）
@@ -242,7 +243,8 @@ export class Recorder extends EventEmitter {
     });
     this.logger.info(`启动 ffmpeg（第 ${startNumber} 段起 · ${this.qualityLabelText} · 流地址 ${this.streamUrl}）`, this._meta());
     this.child = this.media.spawnFfmpeg({ args, onStderr: (line) => this._onStderr(line) });
-    this._bytesAtSpawn = await this._bytesOnDisk();
+    this._bytesAtSpawn = await this._bytesOnDisk(); // spawn 时刻磁盘总字节基线
+    this._offlineStreak = 0; // 每次拉流重置下播确认计数（新拉流 = 新的探测上下文）
     this.child.on('close', (code, signal) => this._onClose(code, signal));
     this.child.on('error', (e) => {
       // 带上最近一条 ffmpeg stderr（如有）：ENOENT 之外的「启动即失败」，stderr 往往是唯一线索
@@ -388,18 +390,28 @@ export class Recorder extends EventEmitter {
     const blocked = isPullBlocked(tail) && !curCand.heuristic;
     // 主播已下播导致的流中断：正常收尾（reason=offline），不进入断流重连、不报"录制异常结束"。
     // 403/401/429 是平台侧明确拒绝（风控/限流），不是下播：跳过探活，避免风控期间再加接口压力。
-    if (!blocked && this.probeOffline) {
+    // heuristic 候选（去 _orN 兜底）常 404/无数据，跳过探活：否则每次都「offline 误判」→ 提前收尾。
+    if (!blocked && !curCand.heuristic && this.probeOffline) {
       try {
         const offline = await this.probeOffline();
         if (offline === true) {
-          this.logger.info(`检测到主播已下播，正常结束录制（ffmpeg exit=${code}）`, this._meta());
-          this.reconnectAttempt = 0;
-          await this._finalize('offline');
-          return;
+          this._offlineStreak += 1;
+          // 连续 2 次确认才收尾：抖音接口瞬时抖动/字段缺失会误判 offline，单次即收会把整场直播拦腰砍断
+          if (this._offlineStreak >= 2) {
+            this.logger.info(`连续 ${this._offlineStreak} 次探播确认已下播，正常结束录制（ffmpeg exit=${code}）`, this._meta());
+            this.reconnectAttempt = 0;
+            this._offlineStreak = 0;
+            await this._finalize('offline');
+            return;
+          }
+          this.logger.info(`探播判定已下播（第 ${this._offlineStreak}/2 次确认），继续重连观察：${this._meta().taskName}`, this._meta());
+        } else {
+          this._offlineStreak = 0; // 探到仍在直播 → 清零确认计数
         }
-      } catch { /* 探活失败按仍在直播处理，走重连 */ }
+      } catch { /* 探活失败按仍在直播处理，走重连 */ this._offlineStreak = 0; }
     }
     const max = Number(this.task.reconnectMax ?? this.settings.reconnectMax) || 5;
+    // grew = 本次拉流新增字节（spawn 时磁盘总字节 → ffmpeg 退出时磁盘总字节的差值）
     const grew = Math.max(0, (await this._bytesOnDisk()) - (this._bytesAtSpawn || 0));
     const plan = planReconnect({ blocked, attempt: this.reconnectAttempt, max, bytesSinceSpawn: grew });
     this.reconnectAttempt = plan.attempt;

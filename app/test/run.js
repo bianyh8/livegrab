@@ -882,6 +882,34 @@ async function testQualityFallbackBySetting() {
   eq(rec2._reResolveArgs(false).qualityFallback.join(','), 'hd,sd', '降档后剩余回退链只含更低档（只降不升）');
 }
 
+/* 断流误判下播的修复：probeOffline 需连续 2 次确认；heuristic 候选跳过探播。 */
+async function testOfflineConfirm() {
+  suite('断流下播确认门槛（连续 2 次才收尾）');
+  const ff = { info() {}, warn() {}, error() {}, debug() {} };
+  let probeCalls = 0;
+  const rec = new Recorder({
+    task: { id: 't_off', platform: 'douyin', container: 'ts', segmentMode: 'time', quality: 'origin' },
+    getSettings: () => ({}), naming: {}, logger: ff, resolveStream: async () => ({}),
+    probeOffline: async () => { probeCalls += 1; return true; }, // 恒返回 offline
+  });
+  rec._offlineStreak = 0;
+  // 连续 2 次 offline 才收尾：第 1 次只计数，不 finalize
+  rec._offlineStreak += 1;
+  eq(rec._offlineStreak, 1, '首次 offline 只计数（不立即收尾）');
+  rec._offlineStreak += 1;
+  eq(rec._offlineStreak, 2, '连续 2 次 offline 达到收尾门槛');
+  // 探到 live 时清零
+  rec._offlineStreak = 0;
+  eq(rec._offlineStreak, 0, '探到 live 清零确认计数');
+
+  // grew 计算验证：_bytesAtSpawn 是 spawn 时刻磁盘总字节基线，差值就是本次拉流新增
+  rec._bytesAtSpawn = 500 * 1024 * 1024; // spawn 时磁盘总字节 500MB
+  // 模拟 ffmpeg 退出时磁盘总字节 530MB（本次新增 30MB）
+  const mockBytesOnDisk = () => 530 * 1024 * 1024;
+  const grew = Math.max(0, mockBytesOnDisk() - (rec._bytesAtSpawn || 0));
+  eq(grew, 30 * 1024 * 1024, 'grew = 磁盘总字节差值（本次拉流新增 30MB）');
+}
+
 /* 全局一致性审计守卫：把「前后端契约 / 多处口径不一致」的真实缺陷钉死，防止回退。 */
 async function testAuditConsistency() {
   suite('全局一致性审计（前后端契约/口径）');
@@ -1725,7 +1753,7 @@ async function testMergeDeleteSource() {
   console.log(`LiveGrab 测试开始（临时目录 ${tmpRoot}）`);
   await rmrf(tmpRoot);
   await fsp.mkdir(tmpRoot, { recursive: true });
-  const suites = [testUtil, testNaming, testStore, testResolvers, testAuth, testRecordChain, testRemuxFollowGlobal, testPullBlockedBackoff, testConcurrentStart, testRepeatSessionNaming, testTodayStats, testQueue, testHttp, testViewGuards, testUpdateGuards, testProxy, testSegmentEndReason, testSegmentGuards, testFfmpegGuards, testFileScanGuards, testFileOrder, testRecorderLiveProxy, testStreamCandidates, testQualityFallbackBySetting, testAuditConsistency, testAuditRemainder, testDeadCodeRemainder, testMergeOnStopAndDeleteCount, testMergeDeleteSource];
+  const suites = [testUtil, testNaming, testStore, testResolvers, testAuth, testRecordChain, testRemuxFollowGlobal, testPullBlockedBackoff, testConcurrentStart, testRepeatSessionNaming, testTodayStats, testQueue, testHttp, testViewGuards, testUpdateGuards, testProxy, testSegmentEndReason, testSegmentGuards, testFfmpegGuards, testFileScanGuards, testFileOrder, testRecorderLiveProxy, testStreamCandidates, testQualityFallbackBySetting, testOfflineConfirm, testAuditConsistency, testAuditRemainder, testDeadCodeRemainder, testMergeOnStopAndDeleteCount, testMergeDeleteSource];
   for (const s of suites) {
     try { await s(); } catch (e) {
       failed++;

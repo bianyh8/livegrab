@@ -265,12 +265,15 @@ export async function resolveRoom({ roomId, url = '', settings, logger, probe = 
   const finalId = await normalizeDouyinId(url || roomId, settings, logger);
   const { room, source, note, shortId: webRid } = await enterRoom(finalId || roomId, settings, logger);
   if (room._fallback) {
+    // liveStatus 口径对齐探播路径：status===2 → live；null/undefined → unknown（接口抖动/字段缺失，绝不能判 offline）；
+    // 只有明确非 2（且非 null）才 offline。urls.length 不能用来判直播状态——解析失败时 urls 空但主播可能还在播。
+    const st = room.status ?? room.room_status;
     return {
       roomId: String(finalId || roomId),
       anchorName: stripEmoji(room.nickname || '抖音直播间'),
       title: room.title || '',
       avatar: '',
-      liveStatus: room.urls.length ? 'live' : 'offline',
+      liveStatus: st === 2 ? 'live' : (st == null ? 'unknown' : 'offline'),
       online: null,
       qualityOptions: [{ id: 'origin', label: '原画', note: '最高可用' }, { id: 'hd', label: '高清', note: '' }, { id: 'audio', label: '仅音频', note: '' }],
       note: note ? `解析方式：${source}（${note}）` : `解析方式：页面兜底（${source}）`,
