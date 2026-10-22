@@ -24,6 +24,7 @@ const state = {
   /* 已生效的筛选条件（点「查询」才提交）；输入框草稿暂存在上面的 q/platform/dateFrom/dateTo/ext */
   filters: { q: '', platform: '', dateFrom: '', dateTo: '', ext: '' },
   defaultsSet: false,
+  filterOpen: true, // 查询条件默认展开（文件库以搜索为主）；点标题行可收起，收起后标题行显示条件摘要
   picked: new Set(),
   merging: new Set(), // 正在合并中的文件 id（行状态显示「合并中」，期间禁止再合并/删除）
   page: 1,
@@ -36,6 +37,9 @@ const state = {
 /* 分页：默认每页 10 条（任务/文件/回收站统一） */
 const PAGE_SIZE = 10;
 
+/* 类型下拉的「值 → 文案 key」，下拉选项与头部摘要共用一份，避免两处各写一套映射 */
+const EXT_LABEL = { ts: 'files.extTs', mp4: 'files.extMp4', m4a: 'files.extM4a' };
+
 let boundRoot = null;
 let offFiles = null;   // SSE files 事件的退订函数
 let offRefresh = null; // 2s 轮询回调的退订函数
@@ -47,8 +51,20 @@ function bytesHint() {
   return `${t('files.videoCount', state.total)} · ${formatBytes(state.bytes)}`;
 }
 
-/* 默认查询区间：近 7 天（7 天前 → 今天） */
-function defaultDateRange() {
+/* 头部摘要：查询条件收起后，用一行文字交代当前生效的条件
+   （与任务管理的「折叠头 + 摘要」同一套写法，只是这里复用文件库自己的标题行）。
+   用草稿值 state.q/...——它们就是筛选控件里渲染出来的内容，防抖提交后与 filters 必然同步。 */
+function querySummary() {
+  const parts = [];
+  const q = String(state.q || '').trim();
+  if (q) parts.push(`「${q}」`);
+  if (state.platform) parts.push(platNameOf(state.platform));
+  if (state.ext) parts.push(t(EXT_LABEL[state.ext] || 'files.allTypes'));
+  if (state.dateFrom || state.dateTo) parts.push(`${state.dateFrom || '…'} ${t('files.dateSep')} ${state.dateTo || '…'}`);
+  return parts.length ? parts.join(' · ') : t('files.allFiles');
+}
+
+/* 默认查询区间：近 7 天（7 天前 → 今天） */function defaultDateRange() {
   const fmt = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
   return { from: fmt(new Date(Date.now() - 7 * 864e5)), to: fmt(new Date()) };
 }
@@ -195,6 +211,9 @@ function paintResults(ctx) {
   if (body) body.innerHTML = list.length ? list.map(filenameRow).join('') : emptyBox(t('files.noFilteredFiles'));
   const pagerEl = root.querySelector('#flPager');
   if (pagerEl) pagerEl.outerHTML = pagerHTML('flPager', state.page, state.pages, state.total);
+  /* 摘要只在局部重绘里补一下：轮询/翻页不重建头部，但条件可能刚变过 */
+  const sumEl = root.querySelector('#flHeadSum');
+  if (sumEl) sumEl.textContent = querySummary();
   bindRows(ctx);
   bindPager(root, 'flPager', state, () => { state.hash = ''; tick(ctx, false); });
   syncPickedBar();
@@ -214,12 +233,14 @@ function paint(ctx, force) {
 
   root.innerHTML = `
     <div class="card">
-      <div class="card-h">
+      <div class="card-h fl-head" id="flHead" role="button" aria-expanded="${state.filterOpen ? 'true' : 'false'}">
         <h3>${t('files.libraryTitle')}</h3>
         <span class="hint" data-files-bytes>${esc(bytesHint())}</span>
         <div class="spacer"></div>
+        ${state.filterOpen ? '' : `<span class="fl-head-sum" id="flHeadSum">${esc(querySummary())}</span>`}
+        <span class="tq-arrow">${state.filterOpen ? '▴' : '▾'}</span>
       </div>
-      <div class="toolbar fl-filter">
+      <div class="toolbar fl-filter" id="flFilterBar" style="${state.filterOpen ? '' : 'display:none'}">
         <input class="input" id="flQ" placeholder="${t('files.searchPlaceholder')}" value="${esc(state.q)}" />
         <select class="select" id="flPlat" style="width:120px">
           <option value="">${t('common.allPlatforms')}</option>
@@ -304,6 +325,11 @@ function bindDatePicker(input) {
 function bind(ctx) {
   const root = boundRoot;
   if (!root) return;
+
+  /* 点标题行收起/展开查询条件（与任务管理的折叠头同一套交互：箭头朝下=收起、朝上=展开）。
+     只重绘本视图（paint），不重新请求：条件没变，数据也不用重拉。 */
+  const head = root.querySelector('#flHead');
+  if (head) head.onclick = () => { state.filterOpen = !state.filterOpen; paint(ctx, true); };
 
   /* 与任务管理一致：搜索框输入即查询（300ms 防抖，给足连续输入/中文组词时间），
      不再单独设「查询」按钮——草稿/提交两套状态本就重复，且「还没输完就查询」的体验也更顺。

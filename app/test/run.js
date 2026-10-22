@@ -1899,6 +1899,20 @@ function testViewGuards() {
   ok(/id="flPickChip"[\s\S]{0,120}?<div class="spacer"><\/div>[\s\S]{0,200}?id="flDelPicked"/.test(filesSrc), '批量按钮组靠右：已选中 → spacer → 删除文件/合并文件/扫描磁盘');
   ok(!/fl-div/.test(filesSrc) && !/\.fl-div\{/.test(cssSrc), '「已选中」与批量按钮之间不再有竖线分隔符（DOM 与 CSS 都已移除）');
   ok(/\.fl-selbar\{[^}]*padding:0 32px 12px 32px/.test(cssSrc), '勾选栏左右内边距 32px（左对齐行内复选框、右对齐行内「删除」按钮）');
+
+  /* 文件库查询条件可折叠（2026-10-22 用户要求与任务管理一致）：
+     复用「标题行 + 摘要 + 箭头」的折叠写法，但**不再单加一条「查询条件」栏**——
+     那样收起后只省 6px（多出来的栏本身就把省下的高度吃掉了），所以让文件库标题行
+     自己当开关：收起时整行筛选控件隐藏，条件改由右侧摘要交代。 */
+  ok(/filterOpen: true/.test(filesSrc), '查询条件默认展开（文件库以搜索为主，收起是可选动作）');
+  ok(/<div class="card-h fl-head" id="flHead" role="button" aria-expanded="\$\{state\.filterOpen \? 'true' : 'false'\}">/.test(filesSrc), '标题行兼任折叠开关（role=button + aria-expanded 反映状态）');
+  ok(/id="flFilterBar" style="\$\{state\.filterOpen \? '' : 'display:none'\}"/.test(filesSrc), '筛选行按 filterOpen 显隐（收起时整行 display:none）');
+  ok(/head\.onclick = \(\) => \{ state\.filterOpen = !state\.filterOpen; paint\(ctx, true\); \}/.test(filesSrc), '点标题行切换并只重绘本视图（不重新请求接口）');
+  ok(/state\.filterOpen \? '' : `<span class="fl-head-sum" id="flHeadSum">/.test(filesSrc), '摘要只在收起时渲染（展开时筛选控件本身就在，不重复显示条件）');
+  ok(/function querySummary\(\)/.test(filesSrc) && /t\('files\.allFiles'\)/.test(filesSrc) && /state\.dateFrom \|\| '…'/.test(filesSrc), '摘要汇总关键词/平台/类型/日期，无条件时显示「全部文件」');
+  ok(/querySummary\(\)/.test(filesSrc.slice(filesSrc.indexOf('function paintResults'), filesSrc.indexOf('function paint('))) && /#flHeadSum/.test(filesSrc), '局部重绘也会刷新摘要（轮询/翻页后不残留旧条件）');
+  ok(/\.fl-head\{cursor:pointer/.test(cssSrc) && /\.fl-head \.fl-head-sum\{[^}]*text-overflow:ellipsis/.test(cssSrc), '标题行有可点击指针，摘要超长省略');
+  ok(zhJson['files.allFiles'] === '全部文件', '摘要兜底文案 = 全部文件');
   ok(/\.fl-selbar\{[^}]*display:flex/.test(cssSrc) && /\.fl-selall\{[^}]*cursor:pointer/.test(cssSrc), '勾选栏有独立样式（不与 toolbar 的边框/内边距打架）');
   ok(zhJson['merge.remove'] === '移出合并列表' && /移出合并列表/.test(zhJson['merge.empty']), '行尾删除按钮与列表清空提示有文案');
 

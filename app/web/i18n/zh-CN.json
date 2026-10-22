@@ -822,5 +822,6 @@
   "files.scanning": "扫描中…",
   "files.scanDone": "扫描完成：新增 {0} 个、更新 {1} 个、缺失 {2} 个",
   "files.scanFail": "扫描失败：{0}",
-  "merge.deleteSources": "合并后删除源文件"
+  "merge.deleteSources": "合并后删除源文件",
+  "files.allFiles": "全部文件"
 }

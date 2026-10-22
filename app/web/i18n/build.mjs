@@ -109,6 +109,8 @@ const ADD = {
   'files.scanning': '扫描中…',
   'files.scanDone': '扫描完成：新增 {0} 个、更新 {1} 个、缺失 {2} 个',
   'files.scanFail': '扫描失败：{0}',
+  /* 查询条件收起后标题行右侧的摘要：没有生效条件时显示这一句（对齐任务管理的 logs.taskAll） */
+  'files.allFiles': '全部文件',
 
   // logs
   'logs.loading': '正在加载日志…', 'logs.loadFailed': '日志加载失败：{0}',

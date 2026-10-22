@@ -494,6 +494,11 @@ td .sub{font-size:11.5px;color:var(--txt-3);margin-top:3px}
 .fl-filter #flQ{flex:1 1 160px;min-width:140px;max-width:420px}
 .fl-filter #flClear{margin-left:auto}
 .fl-selall{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--txt-2);cursor:pointer;user-select:none}
+/* 文件库标题行：兼任查询条件的折叠开关（点它收起/展开 .fl-filter）。
+   收起后筛选控件整行隐藏，条件改为右侧摘要交代；箭头沿用任务管理的 .tq-arrow。 */
+.fl-head{cursor:pointer;user-select:none;transition:.15s}
+.fl-head:hover{background:rgba(255,255,255,.025)}
+.fl-head .fl-head-sum{flex:0 1 auto;min-width:0;max-width:46%;font-size:11.5px;color:var(--txt-3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 
 /* 日期区间：起止两个 date 输入合进同一个外壳，中间用「至」+ 竖线分隔，
    看起来是一个控件而不是两个独立输入框（原生 date 的边框/背景全部去掉）。 */
@@ -804,6 +809,8 @@ table.tight th{padding:8px 12px}
   .btn{padding:8px 11px}
   .tq-toggle{padding:11px 12px}
   .tq-toggle .tq-summary{max-width:52%}
+  /* 手机端标题行不留摘要（宽度不够，摘要会把「N 个视频文件」挤掉），只保留箭头 */
+  .fl-head .fl-head-sum{display:none}
   #tkSelAll{display:inline-flex}
   .pager{padding:10px 12px;gap:6px;justify-content:center}
   .pager-go{display:none}
