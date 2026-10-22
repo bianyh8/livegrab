@@ -1747,6 +1747,12 @@ function testViewGuards() {
   ok(/setTimeout\(\(\) => \{ state\.page = 1; tick\(ctx, false\); \}, 300\)/.test(tasksSrc), '任务查询防抖 = 局部重绘 tick(ctx,false) + 300ms（不再一输就查、不抢焦点）');
   ok(/ctx\.onRefresh\(\(\) => tick\(ctx, false\)\)/.test(tasksSrc), '任务视图 2s 轮询走局部重绘（不得抢走搜索框焦点）');
   ok(/function bindTable\s*\(/.test(tasksSrc) && /bindTable\(ctx\)/.test(tasksSrc), '局部重绘后重绑表格行内按钮（换数据不换操作）');
+  /* 「导出」按钮下线（2026-10-22 用户要求删除）：按钮、绑定、exportCsv 一并删掉，
+     不留半截（原先 button + onclick + exportCsv 三处，少删一处就是死代码或报错）。
+     腾出的宽度交给搜索框吸收（.toolbar.tq .input flex:1 1 170px），查询条件行保持铺满。 */
+  ok(!/tkExport/.test(tasksSrc) && !/function exportCsv/.test(tasksSrc) && !/downloadText/.test(tasksSrc), '任务查询条件不再有「导出」按钮（按钮/绑定/exportCsv/无用导入都已移除）');
+  ok(/\.toolbar\.tq \.input\{flex:1 1 170px;min-width:120px;max-width:440px\}/.test(cssSrc), '任务搜索框吸收剩余宽度（基准 170、最小 120、上限 440）');
+  ok(!/id="tkQ" style="width:170px"/.test(tasksSrc), '搜索框宽度交给 CSS 的 flex-basis，不再写内联 width');
 
   /* 批量条配色 + 总览录制卡片的「停止本场」（2026-10-22 用户反馈）：
      批量刷新 / 开始录制 = 绿色（btn sm ok），停止录制 = 红色（btn sm danger）；
@@ -1887,9 +1893,11 @@ function testViewGuards() {
   ok(/\.fl-filter\{[^}]*column-gap:18px/.test(cssSrc), '筛选行列间距统一 18px（各处空处相当）');
   ok(/\.fl-filter #flClear\{margin-left:auto\}/.test(cssSrc), '超宽屏搜索框触到上限后，余宽由 margin-left:auto 推走，「清除条件」仍贴行尾');
   ok(/class="btn sm danger" id="flDelPicked"/.test(filesSrc) && /class="btn sm ok" id="flMergePicked"/.test(filesSrc) && /class="btn sm ok" id="flScan"/.test(filesSrc), '删除文件 = 危险色，合并文件 / 扫描磁盘 = 绿色');
-  /* 勾选栏：左边「全选 + 已选中 N 项」，spacer 之后是「竖线 + 三个批量按钮」，
-     按钮组右对齐；右内边距 32px 让「扫描磁盘」右边缘与行内「删除」按钮对齐。 */
-  ok(/id="flPickChip"[\s\S]{0,120}?<div class="spacer"><\/div>[\s\S]{0,120}?<span class="fl-div"><\/span>[\s\S]{0,200}?id="flDelPicked"/.test(filesSrc), '批量按钮组靠右：已选中 → spacer → 竖线 → 删除文件/合并文件/扫描磁盘');
+  /* 勾选栏：左边「全选 + 已选中 N 项」，spacer 之后是三个批量按钮（2026-10-22 用户要求
+     去掉「已选中」与按钮之间的竖线分隔符）；按钮组右对齐，右内边距 32px 让「扫描磁盘」
+     右边缘与行内「删除」按钮对齐。 */
+  ok(/id="flPickChip"[\s\S]{0,120}?<div class="spacer"><\/div>[\s\S]{0,200}?id="flDelPicked"/.test(filesSrc), '批量按钮组靠右：已选中 → spacer → 删除文件/合并文件/扫描磁盘');
+  ok(!/fl-div/.test(filesSrc) && !/\.fl-div\{/.test(cssSrc), '「已选中」与批量按钮之间不再有竖线分隔符（DOM 与 CSS 都已移除）');
   ok(/\.fl-selbar\{[^}]*padding:0 32px 12px 32px/.test(cssSrc), '勾选栏左右内边距 32px（左对齐行内复选框、右对齐行内「删除」按钮）');
   ok(/\.fl-selbar\{[^}]*display:flex/.test(cssSrc) && /\.fl-selall\{[^}]*cursor:pointer/.test(cssSrc), '勾选栏有独立样式（不与 toolbar 的边框/内边距打架）');
   ok(zhJson['merge.remove'] === '移出合并列表' && /移出合并列表/.test(zhJson['merge.empty']), '行尾删除按钮与列表清空提示有文案');

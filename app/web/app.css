@@ -376,7 +376,10 @@ select.select.ph{color:var(--txt-3)}
 /* 任务管理查询条件强制一行：不换行，控件可收缩 */
 .toolbar.tq{flex-wrap:nowrap}
 .toolbar.tq .input,.toolbar.tq .select{flex:0 1 auto;min-width:52px;padding:6px 7px}
-.toolbar.tq .input{flex:1 1 auto}
+/* 搜索框吸收查询条件的剩余宽度（「导出」按钮移除后不再需要 spacer）：
+   基准 170px 与原来一致，最小 120、上限 440 —— 窄屏优先压缩它，
+   宽屏触到上限后余白留在行尾，不会把输入框拉成一根长条。 */
+.toolbar.tq .input{flex:1 1 170px;min-width:120px;max-width:440px}
 /* 任务管理查询条件折叠头 */
 .tq-toggle{
   display:flex;align-items:center;gap:10px;padding:11px 16px;border-bottom:1px solid var(--line);
@@ -491,8 +494,6 @@ td .sub{font-size:11.5px;color:var(--txt-3);margin-top:3px}
 .fl-filter #flQ{flex:1 1 160px;min-width:140px;max-width:420px}
 .fl-filter #flClear{margin-left:auto}
 .fl-selall{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--txt-2);cursor:pointer;user-select:none}
-/* 「已选中 N 项」与批量按钮之间的竖线：把状态和动作分成两组，不用留白分隔 */
-.fl-div{flex:0 0 auto;width:1px;height:18px;background:var(--line-2)}
 
 /* 日期区间：起止两个 date 输入合进同一个外壳，中间用「至」+ 竖线分隔，
    看起来是一个控件而不是两个独立输入框（原生 date 的边框/背景全部去掉）。 */

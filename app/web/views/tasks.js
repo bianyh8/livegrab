@@ -1,12 +1,12 @@
 /* LiveGrab · views/tasks.js —— 录制任务
-   工具条（搜索/平台/状态/排序/导出/新建）＋ 批量操作条（D7）＋ 状态相关行内操作
+   工具条（搜索/平台/状态/排序/新建）＋ 批量操作条（D7）＋ 状态相关行内操作
    ＋ 新建/编辑/详情任务弹窗（统一单页网格表单：地址/平台/房间号/主播名 + 清晰度卡片 + 命名/轮询/重连 + 分段与开关）。 */
 
 import { api } from '../api.js';
 import { t } from '../i18n.js';
 import {
   esc, formatBytes, formatDuration, formatDateTime, platIcon, segmentStrategyText,
-  qualityLabelOf, emptyBox, toast, confirmDialog, openDialog, downloadText, switchEl, bindSwitches, pagerHTML, bindPager,
+  qualityLabelOf, emptyBox, toast, confirmDialog, openDialog, switchEl, bindSwitches, pagerHTML, bindPager,
   captureFocus, restoreFocus,
 } from '../ui.js';
 
@@ -183,7 +183,7 @@ function paint(ctx, force) {
         <button class="btn sm primary" id="tkNew" style="flex:0 0 auto">${t('tasks.newTask')}</button>
       </div>
       <div class="toolbar tq" id="tkFilterBar" style="${state.filterOpen ? '' : 'display:none'}">
-        <input class="input" id="tkQ" style="width:170px" placeholder="${t('tasks.searchPh')}" value="${esc(state.q)}" />
+        <input class="input" id="tkQ" placeholder="${t('tasks.searchPh')}" value="${esc(state.q)}" />
         <select class="select" id="tkPlat" style="width:108px">
           <option value="">${t('common.allPlatforms')}</option>
           ${state.platforms.filter((p) => p.enabled || state.platform === p.id).map((p) => `<option value="${esc(p.id)}"${state.platform === p.id ? ' selected' : ''}>${esc(p.name)}</option>`).join('')}
@@ -204,8 +204,6 @@ function paint(ctx, force) {
           ${[['desc', t('tasks.sortDesc')], ['asc', t('tasks.sortAsc')]]
             .map(([v, label]) => `<option value="${v}"${state.sortDir === v ? ' selected' : ''}>${label}</option>`).join('')}
         </select>
-        <div class="spacer"></div>
-        <button class="btn sm ghost" id="tkExport">${t('logs.export')}</button>
       </div>
       <div class="toolbar" style="border-top:1px dashed var(--line);padding-top:12px">
         <span class="chip ${state.selected.size ? 'on' : ''}" id="tkSelChip"><i class="dot"></i>${t('tasks.selected', state.selected.size)}</span>
@@ -479,7 +477,6 @@ function bind(ctx) {
     if (e) e.stopPropagation(); // 按钮位于查询条件折叠头内，避免冒泡触发折叠切换
     openTaskDialog(ctx, null);
   };
-  root.querySelector('#tkExport').onclick = () => { void exportCsv(); };
 
   const selAll = root.querySelector('#tkSelAll');
   if (selAll) selAll.onclick = () => {
@@ -590,23 +587,6 @@ function removeTask(task, ctx) {
       }
     },
   });
-}
-
-async function exportCsv() {
-  // 后端分页后导出需拉取符合当前筛选的全量数据
-  const list = await fetchAllTasks();
-  if (!list.length) { toast(t('tasks.noExport'), 'warn'); return; }
-  const head = [t('tasks.csvId'), t('tasks.csvAnchor'), t('tasks.csvTitle'), t('settings.pfColPlatform'), t('tasks.csvRoom'), t('tasks.colQuality'), t('tasks.csvSegment'), t('tasks.csvStatus'), t('tasks.csvDuration'), t('tasks.csvSize'), t('tasks.csvCreated')];
-  const rows = list.map((t) => [
-    t.id, t.anchorName || t.name || '', t.title || '', platName(t.platform) || t.platform || '', roomLabel(t),
-    qualityLabelOf(t), segmentStrategyText(t), (t.status || ''),
-    formatDuration(Number(t.totalDurationSec) || Number(t.live && t.live.elapsedSec) || 0),
-    formatBytes(Number(t.totalBytes) || Number(t.live && t.live.bytes) || 0),
-    formatDateTime(t.createdAt),
-  ]);
-  const csv = [head, ...rows].map((r) => r.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(',')).join('\r\n');
-  downloadText(`livegrab_tasks_${new Date().toISOString().slice(0, 10)}.csv`, csv);
-  toast(t('tasks.exportedOk'));
 }
 
 /* ---------- 详情 ---------- */
