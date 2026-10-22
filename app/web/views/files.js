@@ -510,15 +510,17 @@ async function mergeFiles(ctx) {
   for (const id of state.picked) if (!orderedSet.has(id)) ordered.push(id); // 兜底：不在当前筛选结果里的勾选项
   if (ordered.length < 2) { toast(t('files.mergeNeedTwo'), 'warn'); return; }
 
-  // 客户端先做格式一致性预检，即时反馈；后端仍强校验
-  const files = ordered.map((id) => byId.get(id)).filter(Boolean);
+  // 客户端先做格式一致性预检，即时反馈；后端仍强校验。
+  // 注意解包行包装：byId 里存的是 { f, s, tag }，文件字段在 .f 上——
+  // 直接 files[0].name/.ext 会拿到 undefined（预填只剩「(合并)」的根因）。
+  const files = ordered.map((id) => (byId.get(id) || {}).f).filter(Boolean);
   const ext0 = String((files[0] && files[0].ext) || '').toLowerCase();
   if (files.some((f) => String(f.ext || '').toLowerCase() !== ext0)) {
     toast(t('files.mergeMixedExt'), 'warn');
     return;
   }
 
-  // 产物名预填：第一个文件名去扩展名 + 「(合并)」，可改（如 1、2、3、4 → 预填「1(合并)」）
+  // 产物名预填：第一个文件名去扩展名 + 「(合并)」，可改（如 A.mp4 → 预填「A(合并)」）
   const stemOf = (n) => String(n || '').replace(/\.[A-Za-z0-9]{1,8}$/, '');
   const defName = `${stemOf(files[0].name || files[0].relPath)}(合并)`;
   openDialog({

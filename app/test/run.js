@@ -19,7 +19,7 @@ import { Auth, parseCookies } from '../server/auth.js';
 import { PlayManager } from '../server/play.js';
 import * as resolvers from '../server/resolvers/index.js';
 import * as proxyFetch from '../server/proxy-fetch.js';
-import { buildRecordArgs, buildPlayArgs, ffmpegEnv, spawnFfmpeg } from '../server/media.js';
+import { buildRecordArgs, buildPlayArgs, buildConcatList, buildMergeArgs, ffmpegEnv, spawnFfmpeg } from '../server/media.js';
 import { isPullBlocked, reconnectDelay, planReconnect, Recorder } from '../server/recorder.js';
 import { sortFileRows } from '../server/file-order.js';
 import { byteLength, parseRange, safeJoin, formatBytes, formatDuration, HttpError, uid, VERSION, errText } from '../server/util.js';
@@ -1673,6 +1673,7 @@ function testViewGuards() {
      「保留源」→ 文件数 = 源数+1；「删源」→ 全部源删除只剩结果；结果继承第一个文件的场次信息。 */
   ok(/id="flMergeName"/.test(filesSrc), '弹框有「文件名」输入框');
   ok(/stemOf\(/.test(filesSrc) && /\(合并\)/.test(filesSrc), '预填默认名 = 第一个文件名去扩展名 +「(合并)」');
+  ok(/ordered\.map\(\(id\) => \(byId\.get\(id\) \|\| \{\}\)\.f\)/.test(filesSrc), '合并取文件对象本身（解包行包装 .f，否则预填只剩「(合并)」）');
   ok(/filesMergeSelected\(ids, deleteSources, name\)/.test(filesSrc), '录入的文件名传给后端');
   ok(/files\.mergeNameLabel/.test(filesSrc) && /files\.mergeNameRequired/.test(filesSrc), '命名输入有标签文案与空值拦截');
   ok(zhJson['files.mergeNameLabel'] === '文件名' && /生成全新文件/.test(zhJson['files.mergeText']), '文案改为「生成全新文件」语义');
@@ -1963,10 +1964,13 @@ async function testMergePicked() {
 
   // 与 testMergeDeleteSource 同思路：不碰真 ffmpeg，runFfmpeg 按 concat 清单把源文件内容
   // 依序拼到输出 —— 既能验证「追加顺序 = 传入顺序」，也能验证失败路径不动源文件。
+  // 参数构造器必须用真实 media.js 导出（buildConcatList/buildMergeArgs），不许手写等价物：
+  // 手写 mock 会把「参数形状接错」这类问题测绿（2026-10-22 教训）。真实二进制端到端另见
+  // smoke-merge-real.mjs（需要 ffmpeg，独立于本套件）。
   const ConcatMedia = {
     fail: false,
-    buildConcatList(list) { return list.map((x) => `file '${x}'`).join('\n'); },
-    buildMergeArgs({ listFile, output }) { return ['-y', '-f', 'concat', '-i', listFile, '-c', 'copy', output]; },
+    buildConcatList,
+    buildMergeArgs,
     async runFfmpeg({ args }) {
       if (ConcatMedia.fail) return { code: 1 };
       const listFile = args[args.indexOf('-i') + 1];
@@ -2012,6 +2016,8 @@ async function testMergePicked() {
   const errCode = async (fn) => {
     try { await fn(); return null; } catch (e) { return e.code || e.message; }
   };
+
+  ok(ConcatMedia.buildConcatList === buildConcatList && ConcatMedia.buildMergeArgs === buildMergeArgs, '合并用例接线真实 media.js 参数构造器（防手写 mock 与真实参数形状漂移）');
 
   // Case A：生成全新文件（不替换第一个）、保留源文件；产物名=指定名+源扩展名；继承第一个文件场次
   const storeA = await openStore(p('merge-pick-a'));
