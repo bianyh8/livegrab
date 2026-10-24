@@ -43,7 +43,20 @@ const state = {
   previewToken: 0,
 };
 
+/* render 传入的页签根节点（.tabpane）：所有查询与重绘都从这里出发。
+   过去用 document.getElementById('tabHost') 反查 —— 那是外层容器，多页签/设置页重挂
+   时会查到旧节点甚至另一个页签的 DOM（预览写到不存在的地方、绑定绑到已卸载的树）。 */
+let boundRoot = null;
+
+/** 查询根：render 给的就是 .tabpane 本身，兜底再找一层（兼容传入外层 #tabHost 的调用）。 */
+function paneOf(root) {
+  if (!root) return null;
+  if (root.classList && root.classList.contains('tabpane')) return root;
+  return root.querySelector('.tabpane') || root;
+}
+
 export async function render(root, ctx, kit) {
+  boundRoot = root;
   root.innerHTML = `<div class="card"><div class="empty">${t('settings.nmLoading')}</div></div>`;
   try {
     const n = await api.naming();
@@ -63,11 +76,12 @@ export async function render(root, ctx, kit) {
     root.innerHTML = `<div class="card"><div class="empty">${t('settings.nmLoadFailed', esc(e.message || e))}</div></div>`;
     return;
   }
-  paint(ctx, kit);
+  paint(root, ctx, kit);
 }
 
 export function destroy() {
   if (state.timer) { clearTimeout(state.timer); state.timer = null; }
+  boundRoot = null;
 }
 
 function profile() {
@@ -80,7 +94,7 @@ function opts() {
   return p.options;
 }
 
-function paint(ctx, kit, keepPreview) {
+function paint(root, ctx, kit, keepPreview) {
   const p = profile();
   const o = opts();
   const binding = p.binding || { type: 'none', value: '' };
@@ -91,9 +105,9 @@ function paint(ctx, kit, keepPreview) {
     : binding.type === 'task' ? 't:' + binding.value : 'none';
   const taskOptions = kit.state.tasks || [];
 
-  const host = document.getElementById('tabHost');
-  if (!host) return;
-  const pane = host.querySelector('.tabpane') || host;
+  const pane = paneOf(root);
+  if (!pane) return;
+  boundRoot = root;
   pane.innerHTML = `
     <div class="grid2b">
       <div class="stack">
@@ -243,8 +257,8 @@ function paint(ctx, kit, keepPreview) {
       </div>
     </div>`;
 
-  bind(ctx, kit);
-  if (!keepPreview) runPreview();
+  bind(root, ctx, kit);
+  if (!keepPreview) runPreview(ctx);
 }
 
 function platName(kit, id) {
@@ -252,14 +266,14 @@ function platName(kit, id) {
   return (p && p.name) || id;
 }
 
-function bind(ctx, kit) {
-  const pane = (document.getElementById('tabHost') || {}).querySelector ? document.getElementById('tabHost').querySelector('.tabpane') : null;
+function bind(root, ctx, kit) {
+  const pane = paneOf(root);
   if (!pane) return;
 
   pane.querySelector('#nmProfile').onchange = (e) => {
     state.activeId = e.target.value;
     saveActive(ctx, kit);
-    paint(ctx, kit);
+    paint(root, ctx, kit);
   };
 
   pane.querySelector('#nmBinding').onchange = (e) => {
@@ -328,7 +342,7 @@ function bind(ctx, kit) {
     state.activeId = id;
     state.naming.activeId = id;
     persist(ctx, true);
-    paint(ctx, kit);
+    paint(root, ctx, kit);
     toast(t('settings.nmCreated'));
   };
 
@@ -343,7 +357,7 @@ function bind(ctx, kit) {
     state.activeId = id;
     state.naming.activeId = id;
     persist(ctx, true);
-    paint(ctx, kit);
+    paint(root, ctx, kit);
     toast(t('settings.nmCopiedAs', (src.name || src.id) + t('settings.nmSuffixCopy')));
   };
 
@@ -355,7 +369,7 @@ function bind(ctx, kit) {
     state.activeId = state.naming.profiles[0].id;
     state.naming.activeId = state.activeId;
     persist(ctx, true);
-    paint(ctx, kit);
+    paint(root, ctx, kit);
     toast(t('settings.nmDeleted'));
   };
 }
@@ -363,7 +377,7 @@ function bind(ctx, kit) {
 function markDirty(ctx, kit, immediate) {
   state.dirty = true;
   clearTimeout(state.timer);
-  state.timer = setTimeout(() => { runPreview(); if (immediate) persist(ctx, false); }, immediate ? 0 : 300);
+  state.timer = setTimeout(() => { runPreview(ctx); if (immediate) persist(ctx, false); }, immediate ? 0 : 300);
 }
 
 async function persist(ctx, notify) {
@@ -390,8 +404,12 @@ function sampleDate(fmt) {
   return `${y}-${m}-${d}`;
 }
 
-async function runPreview() {
-  const pane = document.getElementById('tabHost') && document.getElementById('tabHost').querySelector('.tabpane');
+async function runPreview(ctx) {
+  /* 预览是异步（POST /api/naming/preview）且由防抖定时器触发：路由已经切走时必须直接丢弃，
+     否则会把结果写到已卸载/别人的 DOM 上（过去用 document.getElementById('tabHost') 反查，
+     切页后甚至写到另一个页签里）。 */
+  if (ctx && typeof ctx.isActive === 'function' && !ctx.isActive()) return;
+  const pane = paneOf(boundRoot);
   if (!pane) return;
   const dirEl = pane.querySelector('#nmPrevDir');
   const bodyEl = pane.querySelector('#nmPrevBody');

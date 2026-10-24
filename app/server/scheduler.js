@@ -8,7 +8,7 @@ import {
   resolveRoom, resolveStream, getPlatform, platformList, detectPlatform, roomIdFrom, probeLive,
 } from './resolvers/index.js';
 import { buildRoomUrl } from './resolvers/room-url.js';
-import { uid, nowIso, HttpError, formatBytes, formatDuration, dateKey, formatDate, formatTime, VERSION, errText } from './util.js';
+import { uid, nowIso, HttpError, formatBytes, formatDuration, dateKey, formatDate, formatTime, VERSION, errText, redactUrl } from './util.js';
 
 // 录制中的任务同样要定期探测直播状态（否则主播下播后无从发现，历史 bug：整夜继续录垃圾段）。
 // 间隔完全取系统设置/任务级配置（与未录制时同一口径，用户明确要求），不额外加下限。
@@ -392,6 +392,7 @@ export class Scheduler {
     const task = this.store.getTask(id);
     if (!task) throw new HttpError('NOT_FOUND', '任务不存在', 404);
     this._cancelPendingStart(id); // 删除：撤掉自动延时开录
+    this._recOfflineStreak.delete(id); // 删除：清掉下播确认计数，避免 Map 残留
     if (['recording', 'stopping', 'paused'].includes(task.status)) {
       if (!force) throw new HttpError('TASK_RUNNING', '任务正在录制/暂停中，请先停止（或加 force=1 先停止再删除）', 409);
       await this.stopTask(id, { reason: 'delete' });
@@ -426,8 +427,28 @@ export class Scheduler {
     }
   }
 
+  /** 开播通知：每场直播只发一次（liveNotifiedAt 是本场闩锁，下播时清空）。
+   *  不能只看 liveStatus 的 offline→live 跳变：手动停止/进程重启后 liveStatus 仍是 live，
+   *  下一场真实开播就永远等不到跳变（历史 bug：只有第一次开播能收到通知）。 */
+  async _noteLiveDetected(task, { source = '轮询' } = {}) {
+    if (task.liveNotifiedAt) return false;
+    task.liveNotifiedAt = nowIso();
+    const at = `${formatDate()} ${formatTime(new Date(), 'HH:mm:ss')}`;
+    this.logger.info(`检测到开播：${task.anchorName || task.roomId}（${at} · ${source}）`, { taskId: task.id, taskName: task.anchorName });
+    await this.notifier.send('live', '开始直播',
+      `${task.platformName || '直播'} 直播间 ${task.anchorName || task.roomId} 开始直播，时间：${at}`,
+      { taskId: task.id, taskName: task.anchorName, plain: true });
+    return true;
+  }
+
   async _startRecordingInner(task, { reason = 'live' } = {}) {
     const settings = this.store.settings;
+    // 由「检测到开播」触发的开录：即使随后因并发上限卡在 queued，也要先把开播通知发出去。
+    // 排队分支只做 _startRecording + continue，永远走不到轮询里的通知代码（通知会被静默吞掉）。
+    if (reason === 'live') {
+      task.liveStatus = 'live';
+      await this._noteLiveDetected(task, { source: '开录' });
+    }
     const cap = this.capacity(task.platform);
     if (cap.active >= cap.global) {
       task.status = 'queued';
@@ -512,7 +533,7 @@ export class Scheduler {
       task.failCount = 0;
       await this.store.saveTask(task);
       await this.store.saveSession(session);
-      this.logger.info(`开始录制：${task.anchorName || task.roomId}（${task.platformName || task.platform}）· ${started.qualityLabel} · 拉流 ${recorder.streamUrl || task.sourceUrl || `${task.platform}:${task.roomId}`} → ${path.basename(started.dir)}`, { taskId: task.id, taskName: task.anchorName });
+      this.logger.info(`开始录制：${task.anchorName || task.roomId}（${task.platformName || task.platform}）· ${started.qualityLabel} · 拉流 ${redactUrl(recorder.streamUrl) || task.sourceUrl || `${task.platform}:${task.roomId}`} → ${path.basename(started.dir)}`, { taskId: task.id, taskName: task.anchorName });
       this.onEvent({ type: 'task', task });
       return { started: true, sessionId: session.id };
     } catch (e) {
@@ -682,6 +703,8 @@ export class Scheduler {
       session.status = reason === 'error' ? 'error' : (session.segments.length ? 'done' : 'partial');
       await this.store.saveSession(session);
     }
+    // 下播收尾：解除本场开播通知闩锁，下一场开播才能再通知一次
+    if (reason === 'offline') task.liveNotifiedAt = null;
     task.status = reason === 'error' ? 'error' : (task.manualHeld ? 'stopped' : 'completed');
     task.endedAt = nowIso();
     task.currentFile = null;
@@ -712,6 +735,7 @@ export class Scheduler {
   async startTask(id, { reason = 'manual', oneShot = false } = {}) {
     const task = this.store.getTask(id);
     if (!task) throw new HttpError('NOT_FOUND', '任务不存在', 404);
+    this._recOfflineStreak.delete(id); // 新一轮录制重新计数（否则上次残留的 1 次确认会立刻触发下播收尾）
     this._cancelPendingStart(id); // 手动开始：撤掉可能挂着的自动延时开录
     const isMonitor = task.monitorOnly === true;
     if (['recording', 'stopping'].includes(task.status)) return { already: true, task };
@@ -758,6 +782,7 @@ export class Scheduler {
   async stopTask(id, { reason = 'user', oneShot = false } = {}) {
     const task = this.store.getTask(id);
     if (!task) throw new HttpError('NOT_FOUND', '任务不存在', 404);
+    this._recOfflineStreak.delete(id); // 停止/收尾后清掉下播确认计数（下次录制重新从 0 开始）
     this._cancelPendingStart(id); // 停止：撤掉自动延时开录
     // 手动停止（正常任务）：关闭自动录制、等手动重新开始，但直播状态监控照常刷新；仅监控任务停掉的是当场一次性录制，回到"仅监控"
     // 「停止本场」（oneShot）：只停这一场录制，不改变 autoRecord/manualHeld 配置，下次照旧按系统配置运行
@@ -804,6 +829,7 @@ export class Scheduler {
     try {
       const info = await resolveRoom(task.sourceUrl || `${task.platform}:${task.roomId}`, { platform: task.platform, settings: this.store.settings, logger: this.logger });
       task.liveStatus = info.liveStatus || 'offline';
+      if (task.liveStatus === 'offline') task.liveNotifiedAt = null;
     } catch (e) {
       this.logger?.debug(`手动停止后刷新直播状态失败：${e.message}`, {});
       task.liveStatus = task.liveStatus || 'offline';
@@ -884,6 +910,7 @@ export class Scheduler {
     if (info.avatar) await this.storage.saveAvatar(task, info.avatar); // 刷新头像落盘缓存
     if (task.platform === 'douyin' && info.shortId) task.shortId = String(info.shortId); // 批量刷新后回写短号（抖音号）
     task.liveStatus = info.liveStatus;
+    if (info.liveStatus === 'offline') task.liveNotifiedAt = null;
     task.failCount = 0;
     task.nextPollAt = Date.now() + Math.max(10, this.pollIntervalOf(task)) * 1000;
     await this.store.saveTask(task);
@@ -903,6 +930,7 @@ export class Scheduler {
       if (info.avatar) await this.storage.saveAvatar(task, info.avatar); // 手动检查时刷新头像缓存
       if (task.platform === 'douyin' && info.shortId) task.shortId = String(info.shortId); // 检查后回写短号（抖音号）
       task.liveStatus = info.liveStatus;
+      if (info.liveStatus === 'offline') task.liveNotifiedAt = null;
       task.failCount = 0;
       if (!task.manualHeld && !task.sessionHold && info.liveStatus === 'live' && !task.monitorOnly && task.autoRecord && !['recording', 'stopping', 'paused'].includes(task.status)) {
         const r = await this._startRecording(task);
@@ -1045,17 +1073,12 @@ export class Scheduler {
         // 避免每次轮询重写主播名与标题（减少流量与资源消耗，且不覆盖用户自定义名称）。
         const wasLive = task.liveStatus === 'live';
         task.liveStatus = info.liveStatus; // 始终落盘真实直播状态，避免"状态未知"
+        // 下播即解除本场通知闩锁：下一场开播才能再通知一次。
+        if (info.liveStatus === 'offline') task.liveNotifiedAt = null;
         this.logger.info(`${pollLabel}：${info.liveStatus === 'live' ? '已开播' : '未开播'}`, { taskId: task.id, taskName: task.anchorName });
 
-        // 开播检测：当监控发现某直播间从"未直播"变为"直播"时通知一次（非录制开始/结束）
-        if (info.liveStatus === 'live' && !wasLive) {
-          const at = `${formatDate()} ${formatTime(new Date(), 'HH:mm:ss')}`;
-          this.logger.info(`检测到开播：${pollLabel}（${at}）`, { taskId: task.id, taskName: task.anchorName });
-          const platDot = (p && p.name) || '直播';
-          await this.notifier.send('live', '开始直播',
-            `${platDot} 直播间 ${task.anchorName || task.roomId} 开始直播，时间：${at}`,
-            { taskId: task.id, taskName: task.anchorName, plain: true });
-        }
+        // 开播检测：本场直播第一次探到 live 时通知一次（每场一次，与录制开始/结束无关）
+        if (info.liveStatus === 'live') await this._noteLiveDetected(task, { source: '轮询' });
 
         // 手动停止后的任务：保持"已停止"，只刷新直播状态，绝不自动拉起，等用户点「开始录制」（仅监控任务走下面的 monitor 分支）
         if (task.manualHeld && !task.monitorOnly) {

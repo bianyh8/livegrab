@@ -31,6 +31,9 @@ const state = {
   pages: 1,
   hash: '',
   pending: false,
+  /* 请求飞行中用户又点了翻页/筛选：不能静默丢弃，标记后由本轮 finally 再跑一次 */
+  reloadQueued: false,
+  reloadFull: false,
   bound: false,
 };
 
@@ -41,6 +44,8 @@ let boundRoot = null;
 let offFiles = null;   // SSE files 事件的退订函数
 let offRefresh = null; // 2s 轮询回调的退订函数
 let filesTimer = null; // 事件合并定时器（成串事件压成一次请求）
+/* 搜索框防抖定时器提到模块级：destroy 里必须 clearTimeout，否则切页后 300ms 到点仍在旧视图上请求/重绘。 */
+let searchTimer = null;
 
 /* 头部「N 个视频 · X MB」的唯一拼装点：整表重绘与 patchSizes 共用，
    避免两处模板各自拼接、日后改文案时漂移。未转义：重绘走 esc()，局部更新走 textContent。 */
@@ -53,11 +58,13 @@ function bytesHint() {
   return { from: fmt(new Date(Date.now() - 7 * 864e5)), to: fmt(new Date()) };
 }
 
-/* 把输入框草稿提交为已生效筛选条件（「查询」按钮触发） */
+/* 把输入框草稿提交为已生效筛选条件（查询/筛选变更时触发）。
+   同时清空勾选：换了条件后原勾选的文件可能已不在列表里，留着会被「删除所选」带走。 */
 function commitFilters() {
   state.filters = { q: state.q, platform: state.platform, dateFrom: state.dateFrom, dateTo: state.dateTo, ext: state.ext };
   state.page = 1;
   state.hash = '';
+  clearPicked();
 }
 
 /* 恢复默认查询条件（首次进入页面：默认近 7 天） */
@@ -105,12 +112,17 @@ export function destroy() {
   if (offFiles) { offFiles(); offFiles = null; }
   if (offRefresh) { offRefresh(); offRefresh = null; }
   if (filesTimer) { clearTimeout(filesTimer); filesTimer = null; }
+  if (searchTimer) { clearTimeout(searchTimer); searchTimer = null; }
   boundRoot = null;
 }
 
 async function tick(ctx, full) {
-  if (state.pending) return;
+  /* 请求未回来时用户又翻页/改筛选：老写法直接 return 会把这次点击静默丢掉（页码变了、列表不动）。
+     改成脏标记，finally 里按最新 state 补跑一次。 */
+  if (state.pending) { state.reloadQueued = true; state.reloadFull = state.reloadFull || !!full; return; }
   state.pending = true;
+  state.reloadQueued = false;
+  state.reloadFull = false;
   try {
     const r = await api.files({
       view: 'platform',
@@ -133,6 +145,12 @@ async function tick(ctx, full) {
     if (full && boundRoot) boundRoot.innerHTML = `<div class="card"><div class="empty">${t('files.loadFailed', esc(e.message || t('common.unknownError')))}</div></div>`;
   } finally {
     state.pending = false;
+    if (state.reloadQueued) {
+      state.reloadQueued = false;
+      const queuedFull = state.reloadFull;
+      state.reloadFull = false;
+      void tick(ctx, queuedFull);
+    }
   }
 }
 
@@ -173,7 +191,13 @@ async function fetchAllRows() {
 function listHash() {
   const list = state.rows;
   return JSON.stringify([
-    list.map(({ f, s }) => [f.id, f.status, s.platform, s.streamer, s.startedAt, f.createdAt, f.durationSec]),
+    /* 行模板用到的字段都要进指纹。漏掉 f.name / s.segmentCount / s.merged / s.mp4 时，
+       「改名」或「本场只剩一个文件」这类变化不会触发重绘 → 行上的时间与时长停在旧值
+       （这正是刚修好的「分段行时间/时长」bug 的回归口）。字节数仍交给 patchSizes 局部补。 */
+    list.map(({ f, s }) => [
+      f.id, f.status, f.name, f.ext, f.segmentIndex,
+      s.platform, s.streamer, s.startedAt, Number(s.segmentCount) || 0, !!s.merged, !!s.mp4,
+      f.createdAt, f.durationSec]),
     state.q, state.platform, state.dateFrom, state.dateTo, state.ext,
     Array.from(state.picked), 'p' + state.page, state.total,
   ]);
@@ -196,7 +220,7 @@ function paintResults(ctx) {
   const pagerEl = root.querySelector('#flPager');
   if (pagerEl) pagerEl.outerHTML = pagerHTML('flPager', state.page, state.pages, state.total);
   bindRows(ctx);
-  bindPager(root, 'flPager', state, () => { state.hash = ''; tick(ctx, false); });
+  bindPager(root, 'flPager', state, () => { clearPicked(); state.hash = ''; tick(ctx, false); });
   syncPickedBar();
   restoreFocus(root, focus);
 }
@@ -328,13 +352,14 @@ function bind(ctx) {
      「清除」保留（清空关键词/平台/格式/日期范围）。「刷新」给 toast 反馈，避免点了不知道生效没。 */
   const q = root.querySelector('#flQ');
   if (q) {
-    let timer = null;
     q.oninput = () => {
       state.q = q.value;
-      clearTimeout(timer);
-      timer = setTimeout(() => {
+      clearTimeout(searchTimer);
+      searchTimer = setTimeout(() => {
         commitFilters();
-        tick(ctx, true);
+        /* 只重绘结果区（paintResults）：全量 paint 会重建 #flQ，把正在输入的中文组词（IME）打断、
+           焦点与光标也一起丢。与任务管理/日志页同一套约定。 */
+        tick(ctx, false);
       }, 300);
     };
   }
@@ -368,8 +393,9 @@ function bind(ctx) {
     tick(ctx, true);
     toast(t('files.queryApplied'));
   };
-  // 翻页需重新向后端请求对应页数据（走局部重绘，不重建工具栏/搜索框）
-  bindPager(root, 'flPager', state, () => { state.hash = ''; tick(ctx, false); });
+  // 翻页需重新向后端请求对应页数据（走局部重绘，不重建工具栏/搜索框）。
+  // 换页同时清空勾选：上一页的勾选在屏幕上看不见，留着会被「删除所选」带走。
+  bindPager(root, 'flPager', state, () => { clearPicked(); state.hash = ''; tick(ctx, false); });
 
   const selAll = root.querySelector('#flSelAll');
   if (selAll) selAll.onchange = () => {
@@ -463,6 +489,19 @@ function bindRows(ctx) {
   });
 }
 
+/* 清空勾选并同步 chip / 表头全选 / 行内勾选框（筛选、翻页、清除条件时调用）。 */
+function clearPicked() {
+  if (!state.picked.size) return;
+  state.picked.clear();
+  state.hash = '';
+  syncPickedBar();
+  const root = boundRoot;
+  if (!root) return;
+  root.querySelectorAll('[data-pick-file]').forEach((cb) => { cb.checked = false; });
+  const all = root.querySelector('#flSelAll');
+  if (all) all.checked = false;
+}
+
 /* 只更新「已选中 N 项 / 删除所选」这几个文本与可用态，不重建 DOM：
    勾选框在结果区（会随 paintResults 重建），但工具栏的选中计数要跟着变，
    这里单独同步，避免勾一个就整表重绘（勾选计数变了 → hash 变 → 必要时才重绘）。 */
@@ -511,7 +550,11 @@ async function deleteFiles(ids, ctx) {
   if (!ids.length) return;
   // 选中可能跨页，统计需基于全量数据而非当前页
   const all = await fetchAllRows();
-  const rows = ids.map((id) => all.find((r) => r.f.id === id)).filter(Boolean);
+  /* 双保险：只删当前筛选结果里仍在的文件（勾选跨筛选残留时，不能删掉屏幕上看不见的行）。 */
+  const visible = new Set(all.map((r) => r.f.id));
+  const targets = all.length ? ids.filter((id) => visible.has(id)) : ids;
+  if (!targets.length) return;
+  const rows = targets.map((id) => all.find((r) => r.f.id === id)).filter(Boolean);
   let bytes = 0;
   rows.forEach(({ f }) => { bytes += Number(f.bytes) || 0; });
   trashEnabled().then((toTrash) => {
@@ -521,13 +564,13 @@ async function deleteFiles(ids, ctx) {
       danger: true,
       ok: tr,
       text: toTrash
-        ? t('files.deleteToTrashSelected', ids.length, esc(formatBytes(bytes)))
-        : t('files.deletePermanentSelected', ids.length, esc(formatBytes(bytes))),
+        ? t('files.deleteToTrashSelected', targets.length, esc(formatBytes(bytes)))
+        : t('files.deletePermanentSelected', targets.length, esc(formatBytes(bytes))),
       onOk: async () => {
         try {
-          const r = await api.filesDelete({ fileIds: ids });
-          toast((r && r.useTrash === false ? t('files.toastDeletedPermanent') : t('files.toastDeletedTrash')) + t('files.deletedCountBytes', Number(r && r.movedToTrash) || ids.length, esc(formatBytes(r && r.bytes != null ? r.bytes : bytes))));
-          ids.forEach((id) => state.picked.delete(id));
+          const r = await api.filesDelete({ fileIds: targets });
+          toast((r && r.useTrash === false ? t('files.toastDeletedPermanent') : t('files.toastDeletedTrash')) + t('files.deletedCountBytes', Number(r && r.movedToTrash) || targets.length, esc(formatBytes(r && r.bytes != null ? r.bytes : bytes))));
+          targets.forEach((id) => state.picked.delete(id));
           state.hash = '';
           await tick(ctx, true);
         } catch (e) { toast(e.message || t('files.deleteFailed'), 'err'); }

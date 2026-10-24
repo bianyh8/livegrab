@@ -22,7 +22,7 @@ export async function render(root, ctx, kit) {
             <input class="input mono" id="ntHook" placeholder="https://sctapi.ftqq.com/xxx.send" value="${esc(n.webhook || '')}" />
             <div class="hintline">${t('settings.ntWebhookHint')}</div>
           </div>
-          <div class="sw-row"><div><div class="t">${t('settings.ntOnLiveLabel')}</div><div class="d">${t('settings.ntOnLiveDesc')}</div></div><div class="spacer"></div>${switchEl(n.onLive !== false, 'id="ntStart"')}</div>
+          <div class="sw-row"><div><div class="t">${t('settings.ntOnLiveLabel')}</div><div class="d">${t('settings.ntOnLiveDesc')}</div></div><div class="spacer"></div>${switchEl(n.onLive !== false, 'id="ntLive"')}</div>
           <div class="sw-row"><div><div class="t">${t('settings.ntOnErrorLabel')}</div><div class="d">${t('settings.ntOnErrorDesc')}</div></div><div class="spacer"></div>${switchEl(n.onError !== false, 'id="ntError"')}</div>
           <div class="sw-row"><div><div class="t">${t('settings.ntOnDiskLabel')}</div><div class="d">${t('settings.ntOnDiskDesc')}</div></div><div class="spacer"></div>${switchEl(n.onDisk !== false, 'id="ntDisk"')}</div>
           <div class="sw-row"><div><div class="t">${t('settings.ntOnCookieLabel')}</div><div class="d">${t('settings.ntOnCookieDesc')}</div></div><div class="spacer"></div>${switchEl(!!n.onCookie, 'id="ntCookie"')}</div>
@@ -42,12 +42,9 @@ export async function render(root, ctx, kit) {
 
   kit.bind(root.querySelector('#ntHook'), 'notify.webhook');
   kit.bind(root.querySelector('#ntDedupeSec'), 'notify.dedupeSec', 'number');
-  const dedupeSecInput = root.querySelector('#ntDedupeSec');
-  dedupeSecInput.oninput = () => { root.querySelector('#ntDedupeTx').textContent = dedupeSecInput.value || '0'; };
-
   bindSwitches(root, (sw) => {
     const map = {
-      ntStart: 'notify.onLive', ntError: 'notify.onError', ntDisk: 'notify.onDisk',
+      ntLive: 'notify.onLive', ntError: 'notify.onError', ntDisk: 'notify.onDisk',
       ntCookie: 'notify.onCookie',
       ntDedupe: 'notify.dedupe', ntRetry: 'notify.retry',
     };

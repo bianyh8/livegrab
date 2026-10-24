@@ -4,11 +4,36 @@ import { proxyStore, httpGetViaProxy, requestViaProxy } from '../proxy-fetch.js'
 
 export const DESKTOP_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
 
-export async function httpGet(url, { headers = {}, timeoutMs = 12000, retries = 2, logger = null, label = '', proxy = '' } = {}) {
+/** 读取响应体并限制字节数：解析平台接口/头像/更新元数据都可能被超大响应打爆内存 */
+async function readTextCapped(res, maxBytes) {
+  const len = Number(res.headers.get('content-length') || 0);
+  if (len && len > maxBytes) throw new HttpError('RESPONSE_TOO_LARGE', `响应体过大（${len} 字节 > ${maxBytes}）`, 502);
+  if (!res.body) return '';
+  const reader = res.body.getReader();
+  const chunks = [];
+  let size = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > maxBytes) {
+        try { await reader.cancel(); } catch { /* ignore */ }
+        throw new HttpError('RESPONSE_TOO_LARGE', `响应体超过上限 ${maxBytes} 字节`, 502);
+      }
+      chunks.push(Buffer.from(value));
+    }
+  } finally {
+    try { reader.releaseLock(); } catch { /* ignore */ }
+  }
+  return Buffer.concat(chunks).toString('utf8');
+}
+
+export async function httpGet(url, { headers = {}, timeoutMs = 12000, retries = 2, logger = null, label = '', proxy = '', maxBytes = 8 * 1024 * 1024 } = {}) {
   // 代理来源优先级：显式传入 opts.proxy > 当前 AsyncLocalStorage 上下文（runWithProxy 注入的按平台生效代理）> 直连
   const effectiveProxy = proxy || proxyStore.getStore()?.proxy || '';
   if (effectiveProxy) {
-    return httpGetViaProxy(url, { headers, timeoutMs, retries, logger, label, proxy: effectiveProxy });
+    return httpGetViaProxy(url, { headers, timeoutMs, retries, logger, label, proxy: effectiveProxy, maxBytes });
   }
   let lastErr = null;
   for (let i = 0; i <= retries; i++) {
@@ -18,9 +43,10 @@ export async function httpGet(url, { headers = {}, timeoutMs = 12000, retries = 
         redirect: 'follow',
         signal: AbortSignal.timeout(timeoutMs),
       });
-      const text = await res.text();
+      const text = await readTextCapped(res, maxBytes);
       return { status: res.status, ok: res.ok, text, headers: res.headers, finalUrl: res.url || url };
     } catch (e) {
+      if (e instanceof HttpError) throw e; // 体积超限不是网络故障，别重试也别包装成 NETWORK
       lastErr = e;
       if (logger && i < retries) logger.debug(`${label || 'HTTP'} 第 ${i + 1} 次请求失败：${errText(e, { withStack: false })}`);
       await new Promise((r) => setTimeout(r, 400 * (i + 1)));

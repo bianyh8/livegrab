@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import * as media from './media.js';
-import { uid, nowIso, ensureDir, formatBytes, extOf, HttpError, errText } from './util.js';
+import { uid, nowIso, ensureDir, formatBytes, extOf, HttpError, errText, assertRemoteUrl } from './util.js';
 import { buildMergedName, buildContext, pickProfile } from './naming.js';
 import { PLATFORMS } from './resolvers/index.js';
 
@@ -50,16 +50,17 @@ function siblingKeyOf(name) {
   return String(name || '').replace(/\.[^.]+$/, '').replace(/\d+$/, '');
 }
 
-/** 旧命名 YYYY-MM-DD[-HH[-MM[-SS]]] 前缀 → 开始时间；解析失败回退文件时间。
+/** 旧命名 YYYY-MM-DD[-HH[-MM[-SS]]] 前缀 → 开始时间；解析不到返回 fallback（默认 null）。
  *  文件名里的时间戳是「本地时间」（录制目录按本地时区命名），必须用本地时区构造再转 ISO——
- *  曾用 Date.UTC 解析，东八区存出的 ISO 比真实录制时间早 8 小时，前端本地化显示会变成次日凌晨。 */
-function inferStartedAt(name, fallback) {
+ *  曾用 Date.UTC 解析，东八区存出的 ISO 比真实录制时间早 8 小时，前端本地化显示会变成次日凌晨。
+ *  注意：绝不回落到"现在"——那会让每轮扫描都把无日期文件名的场次时间改成当前时间。 */
+function inferStartedAt(name, fallback = null) {
   const m = String(name || '').match(/(\d{4})-(\d{2})-(\d{2})(?:[-_ ](\d{2}))?(?:[-_ ](\d{2}))?(?:[-_ ](\d{2}))?/);
   if (m) {
     const d = new Date(+m[1], +m[2] - 1, +m[3], +(m[4] || 0), +(m[5] || 0), +(m[6] || 0));
     if (!Number.isNaN(d.getTime())) return d.toISOString();
   }
-  return fallback || nowIso();
+  return fallback || null;
 }
 
 /** 并发受限的批量 stat：扫描上万文件时串行 stat 会让整轮扫描拖到几秒以上，
@@ -135,9 +136,17 @@ export class Storage {
     const root = this.root;
     await ensureDir(root);
     const found = [];
+    // 目录级读取失败（NAS 抖动/权限/休眠盘）不能当成「目录里的文件都消失了」：
+    // 否则下一段会把整批记录判成 missing 并落库，界面整片显示「文件缺失」。
+    const walkFailedDirs = [];
     const walk = async (dir) => {
       let ents = [];
-      try { ents = await fsp.readdir(dir, { withFileTypes: true }); } catch { return; }
+      try { ents = await fsp.readdir(dir, { withFileTypes: true }); }
+      catch (e) {
+        walkFailedDirs.push(dir);
+        this.logger.warn(`扫描时目录读取失败，本轮跳过其缺失判定：${dir}（${e?.code || e?.message || e}）`);
+        return;
+      }
       for (const e of ents) {
         const p = path.join(dir, e.name);
         if (e.isDirectory()) {
@@ -263,6 +272,8 @@ export class Storage {
       for (const rec of recs) {
         if (rec.kind === 'unregistered') continue;
         if (seen.has(p)) continue;
+        // 所在目录本轮读失败 → 无法判断文件是否真的消失，保持原状态，等下轮扫描
+        if (walkFailedDirs.some((d) => p === d || p.startsWith(d + path.sep))) continue;
         if (rec.status === 'recording') {
           // 占位行（开录即登记，但文件从未落盘/已被轮转清掉）：撤掉，不能标成「文件缺失」
           if (!recordingSessionIds.has(rec.sessionId)) await this._dropFileRow(rec);
@@ -338,7 +349,9 @@ export class Storage {
     let changed = false;
     const file = [...(s.segments || []), ...(s.extras || []), s.merged, s.mp4].find((f) => f && f.path);
     if (file) {
-      const inferred = inferStartedAt(path.basename(file.path), '');
+      // 回退用「场次自己的时间」，绝不能给空串（inferStartedAt 过去用 nowIso() 兜底 →
+      // 文件名不带日期的场次每轮扫描都把 startedAt 改成"现在"，并触发一次全量 persist + SSE）。
+      const inferred = inferStartedAt(path.basename(file.path), s.startedAt || file.createdAt || null);
       if (inferred && inferred !== s.startedAt) {
         s.startedAt = inferred;
         changed = true;
@@ -559,36 +572,55 @@ export class Storage {
     const useTrash = settings.deleteToTrash !== false;
     const moved = [];
     let bytes = 0;
+    let affected = 0;
 
-    // 把一个媒体文件 + 它同名的刮削侧夹（<同名>.jpg/.jpeg/.nfo）一起移入回收站，可还原；返回 item 数组
+    // 回滚：把已经移入回收站的文件放回原位（中途失败时用，避免「磁盘已移走、库里还记着」）
+    const restoreItem = async (it) => {
+      if (!it || !it.trashPath) return;
+      try {
+        await ensureDir(path.dirname(it.origPath));
+        await fsp.rename(it.trashPath, it.origPath).catch(async () => {
+          await fsp.copyFile(it.trashPath, it.origPath);
+          await fsp.rm(it.trashPath, { force: true });
+        });
+      } catch (e) {
+        this.logger.error(`回滚已移走的文件失败：${it.origPath} — ${errText(e)}`);
+      }
+    };
+
+    // 把一个媒体文件 + 它同名的刮削侧夹（<同名>.jpg/.jpeg/.nfo）一起移入回收站，可还原；返回 item 数组。
+    // 先 stat 出全部来源再动手：任何一步失败都把本次已处理的文件放回原位并上抛，绝不留下半成品。
     const moveOne = async (file) => {
       if (!file || !file.path) return [];
       const st = await fsp.stat(file.path).catch(() => null);
       if (!st) return [];
-      const items = [];
-      const mover = async (src, isMedia) => {
-        const s2 = isMedia ? st : await fsp.stat(src).catch(() => null);
-        if (!s2) return null;
-        const name = path.basename(src);
-        const target = path.join(this.trashDir, `${Date.now()}_${Math.random().toString(36).slice(2, 6)}__${name}`);
-        if (useTrash) {
-          await ensureDir(this.trashDir);
-          await fsp.rename(src, target).catch(async () => { await fsp.copyFile(src, target); await fsp.rm(src, { force: true }); });
-        } else {
-          await fsp.rm(src, { force: true });
-        }
-        const item = { origPath: src, trashPath: useTrash ? target : null, name, bytes: s2.size, kind: isMedia ? (file.kind || 'file') : 'sidecar' };
-        if (isMedia) item.record = { ...file };
-        return item;
-      };
-      const media = await mover(file.path, true);
-      if (media) { items.push(media); bytes += media.bytes; }
       const base = file.path.replace(/\.[^./\\]+$/, '');
+      const sources = [{ src: file.path, isMedia: true, size: st.size, kind: file.kind || 'file' }];
       for (const ext of ['.jpg', '.jpeg', '.nfo']) {
-        const sc = await mover(base + ext, false);
-        if (sc) items.push(sc);
+        const src = base + ext;
+        const s2 = await fsp.stat(src).catch(() => null);
+        if (s2) sources.push({ src, isMedia: false, size: s2.size, kind: 'sidecar' });
       }
-      return items;
+      const items = [];
+      try {
+        for (const so of sources) {
+          const name = path.basename(so.src);
+          const target = path.join(this.trashDir, `${Date.now()}_${Math.random().toString(36).slice(2, 6)}__${name}`);
+          if (useTrash) {
+            await ensureDir(this.trashDir);
+            await fsp.rename(so.src, target).catch(async () => { await fsp.copyFile(so.src, target); await fsp.rm(so.src, { force: true }); });
+          } else {
+            await fsp.rm(so.src, { force: true });
+          }
+          const item = { origPath: so.src, trashPath: useTrash ? target : null, name, bytes: so.size, kind: so.kind };
+          if (so.isMedia) item.record = { ...file };
+          items.push(item);
+        }
+        return items;
+      } catch (e) {
+        for (const it of [...items].reverse()) await restoreItem(it);
+        throw e;
+      }
     };
 
     const dirs = new Set();
@@ -599,16 +631,33 @@ export class Storage {
       const files = [...(s.segments || []), ...(s.extras || []), s.merged, s.mp4].filter(Boolean);
       files.forEach((f) => { if (f && f.path) dirs.add(path.dirname(f.path)); });
       const items = [];
-      for (const f of files) items.push(...(await moveOne(f)));
+      try {
+        for (const f of files) items.push(...(await moveOne(f)));
+      } catch (e) {
+        // 整场删除中途失败：把这场已经移走的文件全部放回，场次记录保持原样（用户可重试）
+        for (const it of [...items].reverse()) await restoreItem(it);
+        this.logger.error(`删除场次失败，已回滚已移走的文件：${sid} — ${errText(e)}`);
+        continue;
+      }
       const entry = {
         id: uid('tr'), kind: 'session', name: `${s.streamer || s.id} · ${s.title || ''}`.trim(),
         bytes: items.reduce((a, b) => a + (b.bytes || 0), 0), deletedAt: nowIso(),
         expireAt: new Date(Date.now() + (Number(settings.trashRetentionDays) || 7) * 86400_000).toISOString(),
         items, session: s,
       };
-      if (useTrash) await this.store.addTrash(entry);
+      bytes += entry.bytes;
+      affected++;
+      // 只有真正登记进回收站才返回该 id（关闭回收站时不能给出「幻影 trashIds」）
+      if (useTrash) { await this.store.addTrash(entry); moved.push(entry.id); }
       await this.store.removeSession(sid);
-      moved.push(entry.id);
+      // 删掉的正是任务当前场次 → 任务总量清零，不能继续挂着已删除场次的数字
+      const task = s.taskId ? this.store.tasks.find((t) => t.id === s.taskId) : null;
+      if (task && task.sessionId === sid) {
+        task.sessionId = null;
+        task.totalBytes = 0;
+        task.totalDurationSec = 0;
+        await this.store.saveTask(task);
+      }
     }
 
     for (const fid of fileIds) {
@@ -621,8 +670,17 @@ export class Storage {
         throw new HttpError('FILE_RECORDING', '该文件所属场次正在录制，请先停止录制再删除', 409);
       }
       if (file && file.path) dirs.add(path.dirname(file.path));
-      const items = await moveOne(file);
+      let items = [];
+      try {
+        items = await moveOne(file);
+      } catch (e) {
+        // 单个文件失败不影响同批其它文件（moveOne 已把该文件本次移动的部分回滚）
+        this.logger.error(`删除文件失败，已跳过并回滚：${file?.path || fid} — ${errText(e)}`);
+        continue;
+      }
       if (items.length) {
+        bytes += items.reduce((a, b) => a + (b.bytes || 0), 0);
+        affected++;
         // 与 session 分支一致：按「删除时移入回收站」开关决定是否登记回收站
         // （否则开关关闭时文件被永久删除，回收站仍残留清单 ghost 项）
         if (useTrash) {
@@ -651,9 +709,9 @@ export class Storage {
     // 清理因删除而空的目录链
     for (const d of dirs) await this.rmEmptyUp(d);
     await this.store.persist();
-    this.logger.info(`删除 ${moved.length} 项（${formatBytes(bytes)}）${useTrash ? '，已移入回收站' : ''}`);
+    this.logger.info(`删除 ${affected} 项（${formatBytes(bytes)}）${useTrash ? '，已移入回收站' : ''}`);
     this.onEvent({ type: 'files' });
-    return { movedToTrash: moved.length, bytes, trashIds: moved, useTrash };
+    return { movedToTrash: affected, bytes, trashIds: moved, useTrash };
   }
 
   /* 回收站列表：支持后端分页。
@@ -683,27 +741,85 @@ export class Storage {
 
   async restoreTrash(ids = []) {
     let restored = 0;
+    const failed = [];
+
+    // 还原目标已存在时换名，绝不静默覆盖同路径上的新文件（旧实现直接 rename，新录内容被旧文件顶掉）
+    const freePath = async (p) => {
+      const ext = path.extname(p);
+      const stem = p.slice(0, p.length - ext.length);
+      const taken = new Set(this.store.allFiles().map((f) => f.path));
+      for (let i = 1; i <= 999; i++) {
+        const cand = `${stem} (restored${i > 1 ? ` ${i}` : ''})${ext}`;
+        if (!taken.has(cand) && !(await fsp.stat(cand).catch(() => null))) return cand;
+      }
+      return `${stem} (restored ${Date.now()})${ext}`;
+    };
+    // 记录里同路径的条目跟着改名，避免「文件还原了但库里指向旧路径 → 显示文件缺失」
+    const renameRecordPath = (entry, oldPath, newPath) => {
+      const fix = (f) => {
+        if (!f || f.path !== oldPath) return;
+        f.path = newPath;
+        f.name = path.basename(newPath);
+        if (f.relPath != null) f.relPath = this.rel(newPath);
+      };
+      const s = entry.session;
+      if (s) for (const f of [...(s.segments || []), ...(s.extras || []), s.merged, s.mp4]) fix(f);
+      for (const it of entry.items || []) if (it.origPath === oldPath) it.origPath = newPath;
+    };
+
     for (const id of ids) {
       const entry = this.store.trash.find((t) => t.id === id);
       if (!entry) continue;
-      for (const it of entry.items || []) {
-        if (!it.trashPath) continue;
-        await ensureDir(path.dirname(it.origPath));
-        await fsp.rename(it.trashPath, it.origPath).catch(async () => {
-          await fsp.copyFile(it.trashPath, it.origPath);
-          await fsp.rm(it.trashPath, { force: true });
-        });
+      const items = (entry.items || []).filter((it) => it.trashPath);
+      // 预检：任一副本已丢失 → 整个条目跳过（不 middle-of-batch 抛错，避免留下半还原状态）
+      const missing = [];
+      for (const it of items) {
+        if (!(await fsp.stat(it.trashPath).catch(() => null))) missing.push(it.trashPath);
+      }
+      if (missing.length) {
+        failed.push({ id, reason: 'missing', paths: missing });
+        this.logger.error(`还原失败：回收站副本缺失，已跳过该条目 ${id}（${missing.length} 个文件）`);
+        continue;
+      }
+      const done = [];
+      try {
+        for (const it of items) {
+          await ensureDir(path.dirname(it.origPath));
+          if (await fsp.stat(it.origPath).catch(() => null)) {
+            const alt = await freePath(it.origPath);
+            renameRecordPath(entry, it.origPath, alt);
+          }
+          await fsp.rename(it.trashPath, it.origPath).catch(async () => {
+            await fsp.copyFile(it.trashPath, it.origPath);
+            await fsp.rm(it.trashPath, { force: true });
+          });
+          done.push(it);
+        }
+      } catch (e) {
+        for (const it of [...done].reverse()) {
+          try { await fsp.rename(it.origPath, it.trashPath); } catch { /* 尽力回滚 */ }
+        }
+        failed.push({ id, reason: 'io', message: String(e?.message || e) });
+        this.logger.error(`还原失败，已回滚该条目：${id} — ${errText(e)}`);
+        continue;
       }
       if (entry.kind === 'session' && entry.session) {
         const s = entry.session;
         s.status = s.status === 'recording' ? 'partial' : s.status;
-        this.store.state.sessions.unshift(s);
+        if (!this.store.getSession(s.id)) this.store.state.sessions.unshift(s);
       } else if (entry.kind === 'file' && entry.sessionId) {
         const s = this.store.getSession(entry.sessionId);
         const rec = entry.items?.[0]?.record;
         if (s && rec) {
-          if (rec.kind === 'merged') s.merged = rec; else if (rec.kind === 'mp4' || rec.kind === 'm4a') s.mp4 = rec;
-          else s.segments = [...(s.segments || []), rec].sort((a, b) => (a.segmentIndex || 0) - (b.segmentIndex || 0));
+          // 成品统一进 extras；只有指针为空时才占用，避免顶掉期间新转封装/新合并的指针
+          s.extras = (s.extras || []).filter((x) => x.path !== rec.path && x.id !== rec.id);
+          if (rec.kind === 'merged' || rec.kind === 'mp4' || rec.kind === 'm4a') {
+            s.extras.push(rec);
+            if (rec.kind === 'merged' && !s.merged) s.merged = rec;
+            if ((rec.kind === 'mp4' || rec.kind === 'm4a') && !s.mp4) s.mp4 = rec;
+          } else {
+            s.segments = [...(s.segments || []), rec].sort((a, b) => (a.segmentIndex || 0) - (b.segmentIndex || 0));
+          }
           await this._recalcSession(s); // 还原后场次体积/时长与任务总量同步重算
         }
       } else if (entry.kind === 'file') {
@@ -715,7 +831,7 @@ export class Storage {
     }
     await this.store.persist();
     this.onEvent({ type: 'files' });
-    return { restored };
+    return { restored, failed };
   }
 
   async emptyTrash() {
@@ -777,6 +893,30 @@ export class Storage {
     setTimeout(() => this.jobs.delete(job.id), 60000);
   }
 
+  /** 输出路径是否已被「别的场次 / 别的文件 id」占用（库里有记录即算；盘上是否存在另判） */
+  _pathClaimedByOther(p, { sessionId = null, fileId = null } = {}) {
+    for (const f of this.store.allFiles()) {
+      if (f.path !== p) continue;
+      if (fileId && f.id === fileId) continue;
+      if (sessionId && f.sessionId === sessionId) continue;
+      return true;
+    }
+    return false;
+  }
+
+  /** 为冲突路径生成不冲突的新路径：a.mp4 → a (2).mp4 → a (3).mp4 …（绝不返回原路径） */
+  async _uniqueOutputPath(p, opts = {}) {
+    const ext = path.extname(p);
+    const stem = p.slice(0, p.length - ext.length);
+    for (let i = 2; i <= 999; i++) {
+      const cand = `${stem} (${i})${ext}`;
+      if (this._pathClaimedByOther(cand, opts)) continue;
+      if (await fsp.stat(cand).catch(() => null)) continue;
+      return cand;
+    }
+    return `${stem} (${Date.now()})${ext}`;
+  }
+
   async remux(fileId, { kind = 'mp4' } = {}) {
     const hit = this.store.findFile(fileId);
     if (!hit) throw new HttpError('NOT_FOUND', '文件不存在', 404);
@@ -787,7 +927,12 @@ export class Storage {
     const job = this._jobStart(`转封装 ${file.name}`);
     const audioOnly = kind === 'm4a' || file.kind === 'm4a';
     const outExt = audioOnly ? 'm4a' : 'mp4';
-    const outPath = file.path.replace(/\.[^.]+$/, '') + `.${outExt}`;
+    let outPath = file.path.replace(/\.[^.]+$/, '') + `.${outExt}`;
+    // 输出路径不能顶掉别的场次/别的文件已登记的成品：两个同名同目录场次时，
+    // 旧实现会原地覆盖别人的 mp4，随后插入行撞 files.path UNIQUE 被跳过 → 前一个场次的记录指向被改写的内容。
+    if (this._pathClaimedByOther(outPath, { sessionId: session?.id || null, fileId: file.id })) {
+      outPath = await this._uniqueOutputPath(outPath, { sessionId: session?.id || null, fileId: file.id });
+    }
 
     // 同一输出路径 in-flight 互斥 —— live remux 与 autoRemux 可能对同一分段并发转封装。
     // 已在飞则直接复用其结果（同一 Promise），绝不两个 ffmpeg 同时写同一文件（keepSource=false 时成品是唯一副本）。
@@ -838,7 +983,7 @@ export class Storage {
           if (!session.mp4 && file.kind === 'segment') session.mp4 = item;
           this._dropExternalByPath(outPath); // 防止同名"未登记"条目残留（扫描可能先一步登记过这个文件）
           await this._dropOrphanSessionByPath(outPath); // 让扫描先注册的独立场次让位，避免 files.path UNIQUE 冲突导致收编失败
-          await this.store.saveSession(session);
+          await this._recalcSession(session); // 收编产物后重算 bytes/时长（与 mergePicked 同口径，含 mp4 体积）
         } else {
           this.store.external.push(item);
           await this.store.persist();
@@ -876,41 +1021,63 @@ export class Storage {
       quality: session.quality, durationSec: session.durationSec,
     });
     const { name: mergedName } = buildMergedName({ naming, ctx, ext: 'ts', profile });
-    const outPath = path.join(dir, mergedName);
-    try {
-      await fsp.writeFile(listFile, this.media.buildConcatList(segs.map((f) => f.path)), 'utf8');
-      const { code } = await this.media.runFfmpeg({
-        args: this.media.buildMergeArgs({ listFile, output: outPath }),
-        onStderr: (l) => this.logger.debug(`[merge] ${l}`),
-      });
-      await fsp.rm(listFile, { force: true }).catch(() => {});
-      if (code !== 0) throw new Error(`ffmpeg exit=${code}`);
-      const st = await fsp.stat(outPath);
-      const probe = await this.media.probeJson(outPath).catch(() => null);
-      const item = {
-        id: uid('f'), sessionId: session.id, kind: 'merged', name: mergedName, path: outPath,
-        relPath: this.rel(outPath), ext: 'ts', bytes: st.size,
-        durationSec: probe?.durationSec || session.durationSec || 0, width: probe?.width || 0, height: probe?.height || 0,
-        createdAt: nowIso(), completedAt: nowIso(), status: 'ok', segmentIndex: 0,
-      };
-      session.merged = item;
-      session.extras = session.extras || [];
-      session.extras.push(item);
-      this._dropExternalByPath(outPath); // 合并产物同理：清掉可能已存在的同名"未登记"条目
-      await this._dropOrphanSessionByPath(outPath); // 独立场次让位（同 remux 收编）
-      await this.store.saveSession(session);
-      this.logger.info(`合并完成：${mergedName}（${formatBytes(st.size)}）`);
-      this._jobDone(job, { fileId: item.id, name: item.name });
-      // 合并后按设置自动转封装 MP4
-      if (this.store.settings.remuxToMp4) {
-        await this.remux(item.id).catch((e) => this.logger.warn(`合并后转封装失败：${errText(e)}`));
+    let outPath = path.join(dir, mergedName);
+    // 目标名已被别的场次/别的文件占用 → 换名，绝不原地覆盖
+    if (this._pathClaimedByOther(outPath, { sessionId: session.id })) {
+      outPath = await this._uniqueOutputPath(outPath, { sessionId: session.id });
+    }
+    const finalName = path.basename(outPath);
+    // 先写临时文件、成功后再 rename 落位，并在写盘期间登记 _remuxInflight：
+    // 否则 scan（每 5–15s 一轮）会把正在长大的半成品注册成独立场次，用户还能在合并途中把它删掉。
+    const token = uid('mg');
+    const tmpOut = path.join(dir, `.merge_tmp_${token}.ts`);
+    const run = (async () => {
+      try {
+        await fsp.writeFile(listFile, this.media.buildConcatList(segs.map((f) => f.path)), 'utf8');
+        const { code } = await this.media.runFfmpeg({
+          args: this.media.buildMergeArgs({ listFile, output: tmpOut }),
+          onStderr: (l) => this.logger.debug(`[merge] ${l}`),
+        });
+        await fsp.rm(listFile, { force: true }).catch(() => {});
+        if (code !== 0) throw new Error(`ffmpeg exit=${code}`);
+        const stTmp = await fsp.stat(tmpOut).catch(() => null);
+        if (!stTmp || stTmp.size <= 0) throw new Error('合并产物为空');
+        await fsp.rename(tmpOut, outPath);
+        const st = await fsp.stat(outPath);
+        const probe = await this.media.probeJson(outPath).catch(() => null);
+        const item = {
+          id: uid('f'), sessionId: session.id, kind: 'merged', name: finalName, path: outPath,
+          relPath: this.rel(outPath), ext: 'ts', bytes: st.size,
+          durationSec: probe?.durationSec || session.durationSec || 0, width: probe?.width || 0, height: probe?.height || 0,
+          createdAt: nowIso(), completedAt: nowIso(), status: 'ok', segmentIndex: 0,
+        };
+        session.merged = item;
+        // 同路径旧条目先清掉：否则 sessionFiles 按路径去重会保留旧 id，而指针指向新 id → 重开库后 merged 变 null
+        session.extras = (session.extras || []).filter((x) => x.path !== outPath);
+        session.extras.push(item);
+        this._dropExternalByPath(outPath); // 合并产物同理：清掉可能已存在的同名"未登记"条目
+        await this._dropOrphanSessionByPath(outPath); // 独立场次让位（同 remux 收编）
+        await this._recalcSession(session); // 收编产物后重算 bytes/时长（旧实现直接 save，整场成品不计入统计）
+        this.logger.info(`合并完成：${finalName}（${formatBytes(st.size)}）`);
+        this._jobDone(job, { fileId: item.id, name: item.name });
+        // 合并后按设置自动转封装 MP4
+        if (this.store.settings.remuxToMp4) {
+          await this.remux(item.id).catch((e) => this.logger.warn(`合并后转封装失败：${errText(e)}`));
+        }
+        return item;
+      } catch (e) {
+        await fsp.rm(listFile, { force: true }).catch(() => {});
+        await fsp.rm(tmpOut, { force: true }).catch(() => {});
+        this.logger.error(`合并失败：${errText(e)}`);
+        this._jobFail(job, e.message);
+        throw new HttpError('MERGE_FAILED', `合并失败：${e.message}`, 500);
       }
-      return item;
-    } catch (e) {
-      await fsp.rm(listFile, { force: true }).catch(() => {});
-      this.logger.error(`合并失败：${errText(e)}`);
-      this._jobFail(job, e.message);
-      throw new HttpError('MERGE_FAILED', `合并失败：${e.message}`, 500);
+    })();
+    this._remuxInflight.set(outPath, run);
+    try {
+      return await run;
+    } finally {
+      this._remuxInflight.delete(outPath);
     }
   }
 
@@ -1086,10 +1253,18 @@ export class Storage {
     await this.store.saveSession(session);
     if (session.taskId) {
       const task = this.store.tasks.find((t) => t.id === session.taskId);
+      // 任务总量 = 「当前场次」的量（scheduler 的语义）。删/还原旧场次时若无条件覆盖，
+      // 会把任务页的总大小改成那个旧场次的数字（删旧场次 → 任务量变 0，删整场 → 又完全不重算）。
       if (task) {
-        task.totalBytes = session.bytes;
-        task.totalDurationSec = session.durationSec;
-        await this.store.saveTask(task);
+        const isCurrent = task.sessionId
+          ? task.sessionId === session.id
+          : !this.store.sessions.some((s) => s.taskId === task.id && s.id !== session.id
+            && String(s.startedAt || '') > String(session.startedAt || ''));
+        if (isCurrent) {
+          task.totalBytes = session.bytes;
+          task.totalDurationSec = session.durationSec;
+          await this.store.saveTask(task);
+        }
       }
     }
   }
@@ -1218,15 +1393,27 @@ export class Storage {
     const url = typeof raw === 'string' ? raw : (raw && typeof raw === 'object' ? (raw.middle || raw.big || raw.small || '') : '');
     if (!url || !task || !task.id) return null;
     try {
-      const r = await fetch(url, {
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-          'Accept': 'image/*',
-        },
-        redirect: 'follow',
-        signal: AbortSignal.timeout(8000),
-      });
-      if (!r.ok) return null;
+      // 头像 URL 来自平台解析结果，服务端会主动请求：只允许 http(s) 公网地址，
+      // 且逐跳校验重定向，避免被 302 带到 127.0.0.1 / 169.254.169.254 等内网目标。
+      let target = assertRemoteUrl(url, { label: '头像地址' }).toString();
+      let r = null;
+      for (let i = 0; i < 4; i++) {
+        r = await fetch(target, {
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'image/*',
+          },
+          redirect: 'manual',
+          signal: AbortSignal.timeout(8000),
+        });
+        const loc = r.headers.get('location');
+        if ([301, 302, 303, 307, 308].includes(r.status) && loc) {
+          target = assertRemoteUrl(new URL(loc, target).toString(), { label: '头像重定向地址' }).toString();
+          continue;
+        }
+        break;
+      }
+      if (!r || !r.ok) return null;
       const buf = Buffer.from(await r.arrayBuffer());
       if (!buf.length || buf.length > 2 * 1024 * 1024) return null;
       const ct = r.headers.get('content-type') || '';

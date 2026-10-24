@@ -3,6 +3,7 @@
 import {
   UpdateManager, parseVersion, compareVersions, pickLatestTag,
   gitTransportArgs, classifyGitError, FETCH_PLAN, parseTarEntries, extractTarGzTo,
+  redactUrl, splitGitUserInfo, TAR_LIMITS,
 } from '../server/update.js';
 
 let bad = 0;
@@ -124,8 +125,17 @@ console.log('== B2. 私有仓库 + 有 token（匿名 404 → token 重试成功
   check(m.state.latest.usedToken === true, 'usedToken=true（走了 token 重试）');
   check(m.state.latest.version === '0.2.0', '私有仓库版本解析正确');
   check(m.status().hasUpdate === true, 'hasUpdate=true');
-  const authArgs = m._gitAuthArgs();
-  check(authArgs.length === 2 && authArgs[0] === '-c' && authArgs[1].includes('http.extraheader=Authorization: Basic'), 'git 认证参数正确注入');
+  // token 必须仍能认证，但绝不能出现在 argv（/proc/<pid>/cmdline 同主机可读）：
+  // 认证改为 GIT_CONFIG_* 环境变量注入（等价于 -c http.extraheader=...）
+  const fetchArgs = m._buildFetchArgs('https://github.com/acme/priv.git', 'release');
+  check(!fetchArgs.some((a) => /Basic|extraheader|test-token-123/.test(String(a))),
+    'fetch 参数里没有 token / extraheader（认证不进 argv）', fetchArgs.join(' '));
+  const authEnv = m._gitEnv();
+  check(authEnv.GIT_CONFIG_COUNT === '1' && authEnv.GIT_CONFIG_KEY_0 === 'http.extraheader'
+    && /^Authorization: Basic [A-Za-z0-9+/=]+$/.test(authEnv.GIT_CONFIG_VALUE_0 || ''),
+    'git 认证改走 GIT_CONFIG_* 环境变量（等价 -c http.extraheader，只对本次子进程生效）');
+  const decoded = Buffer.from(String(authEnv.GIT_CONFIG_VALUE_0 || '').replace(/^Authorization: Basic /, ''), 'base64').toString('utf8');
+  check(decoded === 'x-access-token:test-token-123', '环境变量里的凭据解出来仍是 x-access-token:<token>（认证语义未变）', decoded.replace(/test-token-\d+/, 'test-token-***'));
 }
 
 console.log('== C. 仓库不存在（匿名/token 均 404 → 不提示需要 token） ==');
@@ -447,12 +457,50 @@ console.log('== R. tar.gz 解析与落地（零依赖快照通道的底座） ==
 
       const dest = TMP + '/snapout';
       rmSync(dest, { recursive: true, force: true });
-      const res = extractTarGzTo(buf, dest);
+      const res = await extractTarGzTo(buf, dest);
       check(fsExists(dest + '/app/server/server.js'), '落地后文件就位');
       check(fsExists(dest + '/app/package.json'), '落地后 package.json 就位');
       check(readFileSync(dest + '/app/package.json', 'utf8').includes('0.9.9'), '文件内容正确');
       check(fsExists(dest + '/app/server/' + 'x'.repeat(60) + '/' + 'y'.repeat(60) + '/deep.txt'), '超长路径文件落地');
       check(res.files.some((f) => f === 'app/server/server.js'), '返回的文件清单是剥离顶层目录后的相对路径');
+
+      // 解压上限（压缩炸弹）：几 KB 压缩 → 几十 MB 解压，必须中止而不是把内存吃光
+      check(TAR_LIMITS.totalBytes >= 256 * 1024 * 1024, '解压总量上限存在且合理（>=256MB）', String(TAR_LIMITS.totalBytes));
+      const bomb = zlib.gzipSync(Buffer.alloc(8 * 1024 * 1024, 0x41));   // 压缩后 ~8KB、解压 8MB
+      let bombErr = '';
+      const bombOut = TMP + '/bombout';
+      rmSync(bombOut, { recursive: true, force: true });
+      try { await extractTarGzTo(bomb, bombOut, { totalBytes: 1024 * 1024 }); } catch (e) { bombErr = e.message; }
+      check(/上限/.test(bombErr) && /已中止/.test(bombErr), '解压后总量超限即中止（流式解压，不再一次性 gunzipSync）', bombErr);
+      check(!fsExists(bombOut + '/app'), '超限中止时没有落下任何文件');
+
+      // 单条目上限：头里声明的 size 就超限 → 连数据都不收，直接拒
+      let entryErr = '';
+      try { await extractTarGzTo(buf, TMP + '/entryout', { entryBytes: 10 }); } catch (e) { entryErr = e.message; }
+      check(/条目过大/.test(entryErr), '单条目声明体积超限即中止', entryErr);
+
+      // 顶层目录条目不带尾斜杠时也要正确剥离（流式解析不能依赖 tar 的书写习惯）
+      const hdr = (name, size, type) => {
+        const b = Buffer.alloc(512);
+        b.write(name, 0, 100, 'latin1');
+        b.write('0000644\0', 100, 8, 'latin1');
+        b.write(`${size.toString(8).padStart(11, '0')}\0`, 124, 12, 'latin1');
+        b.write(type, 156, 1, 'latin1');
+        b.write('ustar\0' + '00', 257, 8, 'latin1');
+        let sum = 0; for (const x of b) sum += x;
+        b.write(`${sum.toString(8).padStart(6, '0')}\0 `, 148, 8, 'latin1');
+        return b;
+      };
+      const payload = Buffer.from('// synth\n');
+      const synthTar = Buffer.concat([
+        hdr('livegrab-9.9.9', 0, '5'),                       // 目录条目：没有尾斜杠
+        hdr('livegrab-9.9.9/app/server/server.js', payload.length, '0'), payload, Buffer.alloc(512 - (payload.length % 512)),
+        Buffer.alloc(1024),
+      ]);
+      const synthOut = TMP + '/synthout';
+      rmSync(synthOut, { recursive: true, force: true });
+      await extractTarGzTo(zlib.gzipSync(synthTar), synthOut);
+      check(fsExists(synthOut + '/app/server/server.js'), '顶层目录条目不带尾斜杠时也能正确剥离');
     }
   }
 }
@@ -765,6 +813,7 @@ console.log('== S. 容器归档通道：按 commit 比对 → 下载该提交 �
         check(fingerprint(RUN3) === before3, `${label}：运行目录内容与修改时间逐文件比对无变化（没被改动过）`);
         check(!fsExists(path.join(OPT3, 'run3.old')), `${label}：没有产生 .old（压根没走到切换那一步）`);
         check(!fsExists(path.join(OPT3, 'run3.stage')), `${label}：没有暂存目录残留`);
+        check(!fsExists(path.join(OPT3, 'run3.update.lock')), `${label}：没有更新锁残留（失败也走 finally 放锁）`);
         check(restarted === null, `${label}：没有重启服务（旧版本继续跑，录制不受影响）`);
         check(m6.status().phase === wantPhase, `${label}：状态为 ${wantPhase}（页面据此提示重试/原因）`, m6.status().phase);
         check(m6.state.log.some((l) => wantLog.test(String(l.msg))), `${label}：日志写明原因`, m6.state.log.map((l) => l.msg).slice(-2).join(' | '));
@@ -851,6 +900,152 @@ console.log('== S. 容器归档通道：按 commit 比对 → 下载该提交 �
   try { await m.apply(); } catch (e) { threw = e.message; }
   check(/炸了/.test(threw), '环境探测失败时把错误抛给调用方', threw);
   check(m.state.running === false, '失败后闸门已放行（可重试）', String(m.state.running));
+}
+
+/* ⑦ 依赖基线 / 回滚点：只有在切换成功之后才允许动它们。
+   旧实现把「换基线」放在 _swapIn 之前——一旦切换失败，仍在跑的旧代码就带着新依赖（原生模块换 ABI 直接崩）；
+   _swapIn 一进门还先 rm 掉 <target>.old，把唯一的手动回滚点也删了。 */
+console.log('== T. 依赖基线与回滚点：切换失败也不能提前动 ==');
+{
+  const D = path.join(TMP, 'deps-order');
+  rmSync(D, { recursive: true, force: true });
+  const base = path.join(D, 'node_modules');   // 模拟 /opt/node_modules 基线
+  mkdirSync(path.join(base, 'better-sqlite3'), { recursive: true });
+  writeFileSync(path.join(base, 'better-sqlite3', 'marker.txt'), 'OLD-BASELINE');
+  const runDir = path.join(D, '.run');
+  mkdirSync(path.join(runDir, 'server'), { recursive: true });
+  writeFileSync(path.join(runDir, 'package.json'), JSON.stringify({ name: 'livegrab', version: '0.1.0', dependencies: { 'better-sqlite3': '^13.0.0' } }));
+  writeFileSync(path.join(runDir, 'server', 'server.js'), '// old code\n');
+
+  const m = new UpdateManager({ appDir: runDir, srcRoot: runDir, imageApp: path.join(D, 'image') });
+  m.depsDir = base;
+  m.logger = { info() {}, warn() {}, error() {}, debug() {} };
+
+  const stageApp = path.join(D, '.run.stage', 'app');
+  mkdirSync(path.join(stageApp, 'node_modules', 'better-sqlite3'), { recursive: true });
+  writeFileSync(path.join(stageApp, 'node_modules', 'better-sqlite3', 'marker.txt'), 'NEW-BASELINE');
+
+  const pending = m._stageDepsBaseline(stageApp);
+  check(!!pending && pending.base === base, '新依赖先寄存到基线旁的临时目录', JSON.stringify(pending));
+  check(readFileSync(path.join(base, 'better-sqlite3', 'marker.txt'), 'utf8') === 'OLD-BASELINE',
+    '切换之前：旧代码正在用的基线一个字节都没变');
+  check(lstatSync(path.join(stageApp, 'node_modules')).isSymbolicLink(), '暂存区只留指向寄存位置的软链');
+
+  // 切换失败 → 调用方丢弃寄存目录：旧基线必须仍完好
+  rmSync(pending.newBase, { recursive: true, force: true });
+  check(readFileSync(path.join(base, 'better-sqlite3', 'marker.txt'), 'utf8') === 'OLD-BASELINE',
+    '切换失败丢弃寄存依赖后：旧基线仍是 OLD-BASELINE（旧代码照常跑）');
+
+  // 切换成功 → 转正：新依赖成基线、旧的留 .prev、运行目录依赖入口指回 base
+  rmSync(path.join(stageApp, 'node_modules'), { force: true });
+  mkdirSync(path.join(stageApp, 'node_modules', 'better-sqlite3'), { recursive: true });
+  writeFileSync(path.join(stageApp, 'node_modules', 'better-sqlite3', 'marker.txt'), 'NEW-BASELINE');
+  const pending2 = m._stageDepsBaseline(stageApp);
+  check(m._commitDepsBaseline(pending2, runDir) === true, '切换成功后依赖基线转正成功');
+  check(readFileSync(path.join(base, 'better-sqlite3', 'marker.txt'), 'utf8') === 'NEW-BASELINE', '转正后基线是新依赖');
+  check(readFileSync(path.join(base + '.prev', 'better-sqlite3', 'marker.txt'), 'utf8') === 'OLD-BASELINE', '上一份依赖留在 <base>.prev');
+  let depLink = '';
+  try { depLink = fs.realpathSync(path.join(runDir, 'node_modules')); } catch { /* 没建起来 */ }
+  check(!!depLink && depLink === fs.realpathSync(base), '运行目录的依赖入口重新指向正式基线', depLink);
+}
+{
+  // 切换彻底失败（改名 + 覆盖两条路都不通）→ 上一版备份必须还在、运行目录仍是旧版本
+  const S = path.join(TMP, 'swap-keep');
+  const runDir = path.join(S, 'run');
+  const oldDir = path.join(S, 'run.old');
+  const newApp = path.join(S, 'new');
+  mkdirSync(path.join(runDir, 'server'), { recursive: true });
+  writeFileSync(path.join(runDir, 'server', 'server.js'), '// current\n');
+  mkdirSync(path.join(oldDir, 'server'), { recursive: true });
+  writeFileSync(path.join(oldDir, 'server', 'server.js'), '// previous backup\n');
+  mkdirSync(path.join(newApp, 'server'), { recursive: true });
+  writeFileSync(path.join(newApp, 'server', 'server.js'), '// new\n');
+  const m = new UpdateManager({ appDir: runDir });
+  m.logger = { info() {}, warn() {}, error() {}, debug() {} };
+
+  const origRename = fs.renameSync;
+  const origCp = fs.cpSync;
+  fs.renameSync = (a, b) => {
+    const A = String(a); const B = String(b);
+    if (A === runDir || B === runDir || A === newApp) { const e = new Error('EBUSY: 模拟整目录改名失败'); e.code = 'EBUSY'; throw e; }
+    return origRename(a, b);
+  };
+  fs.cpSync = () => { const e = new Error('EIO: 模拟覆盖失败'); e.code = 'EIO'; throw e; };
+  let swapErr = '';
+  try { m._swapIn(newApp, runDir, oldDir); } catch (e) { swapErr = e.message; }
+  finally { fs.renameSync = origRename; fs.cpSync = origCp; }
+  check(/EIO|覆盖失败/.test(swapErr), '切换彻底失败会抛错（不静默）', swapErr);
+  check(readFileSync(path.join(oldDir, 'server', 'server.js'), 'utf8').includes('previous backup'),
+    '切换失败后上一版备份 <target>.old 仍在（没在动刀之前被删掉）');
+  check(readFileSync(path.join(runDir, 'server', 'server.js'), 'utf8').includes('current'), '切换失败后运行目录仍是原版本');
+  check(!readdirSync(S).some((n) => n.includes('.stale-')), '不留 .stale- 临时目录残留', readdirSync(S).join(','));
+}
+
+/* ⑧ 跨进程更新锁：宿主手动更新 + 容器页面各跑一个进程时，谁也不能同时解包同一个暂存区 */
+console.log('== U. 跨进程更新锁（O_EXCL 锁文件 + 30 分钟自动失效） ==');
+{
+  const L = path.join(TMP, 'lock');
+  rmSync(L, { recursive: true, force: true });
+  const target = path.join(L, '.run');
+  const noop = { info() {}, warn() {}, error() {}, debug() {} };
+  const m1 = new UpdateManager({ appDir: target });
+  const m2 = new UpdateManager({ appDir: target });
+  m1.logger = noop; m2.logger = noop;
+  const lock1 = m1._acquireUpdateLock(target);
+  check(fsExists(m1._lockFileFor(target)), '抢锁成功后 <target>.update.lock 存在');
+  const info = JSON.parse(readFileSync(m1._lockFileFor(target), 'utf8'));
+  check(info.pid === process.pid && typeof info.at === 'number', '锁内容记录 pid 与时间戳', JSON.stringify(info));
+  let err = '';
+  try { m2._acquireUpdateLock(target); } catch (e) { err = e.message; }
+  check(/另一个更新进程正在进行/.test(err), '第二个进程抢锁失败并明确提示「另一个更新进程正在进行」', err);
+  m1._releaseUpdateLock(lock1);
+  check(!fsExists(m1._lockFileFor(target)), '放锁后锁文件被删除');
+
+  // 过期锁（>30 分钟）自动失效：一次被 kill 不能让人永久无法更新
+  writeFileSync(m1._lockFileFor(target), JSON.stringify({ pid: 999999, at: Date.now() - 31 * 60 * 1000, host: 'dead' }));
+  let took = false;
+  try { const l2 = m2._acquireUpdateLock(target); took = true; m2._releaseUpdateLock(l2); } catch (e) { err = e.message; }
+  check(took, '超过 30 分钟的锁被判过期并接管', err);
+  check(!fsExists(m1._lockFileFor(target)), '接管后放锁不留残留');
+
+  // 主体抛错也必须走 finally 放锁，否则一次失败会把更新永久锁死
+  const runDir = path.join(L, 'failrun');
+  mkdirSync(runDir, { recursive: true });
+  const m3 = new UpdateManager({ appDir: runDir, srcRoot: runDir });
+  m3.logger = noop;
+  m3.state.env = { mode: 'archive', srcRoot: runDir, inContainer: true };
+  m3._runArchiveUpdateLocked = async () => { throw new Error('模拟主体失败'); };
+  let bodyErr = '';
+  try { await m3._runArchiveUpdate(m3.state.env, {}); } catch (e) { bodyErr = e.message; }
+  check(/模拟主体失败/.test(bodyErr), '主体失败时错误向上抛（页面显示重试）', bodyErr);
+  check(!fsExists(m3._lockFileFor(runDir)), '主体失败后锁已释放（不会永久锁死更新）');
+}
+
+/* ⑨ 仓库地址脱敏：token 不能进日志文件、不能进 /api/update/status */
+console.log('== V. 仓库地址脱敏 / 拒绝把 token 写进地址 ==');
+{
+  check(redactUrl('https://user:ghp_secret123@github.com/a/b.git') === 'https://***@github.com/a/b.git',
+    'redactUrl 把 user:token@ 打成 ***', redactUrl('https://user:ghp_secret123@github.com/a/b.git'));
+  check(!/ghp_secret123/.test(redactUrl('https://github.com/a/b.git?access_token=ghp_secret123')), 'redactUrl 打掉查询参数里的 token');
+  check(redactUrl('https://github.com/a/b.git') === 'https://github.com/a/b.git', '无凭据地址原样保留');
+  check(redactUrl('') === '' && redactUrl(null) === '', '空值返回空串');
+  const parts = splitGitUserInfo('https://x:tok@github.com/a/b.git');
+  check(parts.url === 'https://github.com/a/b.git' && parts.pass === 'tok', 'splitGitUserInfo 摘出凭据并给出干净地址', JSON.stringify({ url: parts.url, pass: parts.pass ? '***' : '' }));
+
+  // 老配置把 token 写在地址里：认证照旧（token 走 extraheader），但 argv/日志/status 里都没有明文
+  const legacy = new UpdateManager({ appDir: TMP, getRepoConfig: () => ({ updateGitUrl: 'https://x:tok_in_url@github.com/acme/priv.git', updateToken: '' }) });
+  legacy.envToken = '';
+  check(legacy._gitUrl() === 'https://github.com/acme/priv.git', '交给 git 的地址已摘掉 userinfo', legacy._gitUrl());
+  check(legacy._token() === 'tok_in_url', '摘下来的 token 仍被当凭据用（认证不丢）');
+  check(!/tok_in_url/.test(JSON.stringify(legacy.status())), 'status() 里看不到明文 token');
+  check(!/tok_in_url/.test(JSON.stringify(legacy._gitEnv().GIT_CONFIG_VALUE_0 || '')), 'git 环境变量里是 base64 凭据，不是明文 token');
+
+  const m = new UpdateManager({ appDir: TMP });
+  let threw = '';
+  try { m.normalizeRepoConfig({ repo: 'https://user:tok123@github.com/a/b.git' }); } catch (e) { threw = e.message; }
+  check(/Token/.test(threw) && /用户名|密码/.test(threw), 'normalizeRepoConfig 拒绝带 userinfo 的地址并提示用 Token 字段', threw);
+  const okCfg = m.normalizeRepoConfig({ repo: 'https://github.com/a/b.git', token: 'tok123' });
+  check(okCfg.gitUrl === 'https://github.com/a/b.git' && okCfg.token === 'tok123', '正常地址 + 独立 Token 字段照常通过');
 }
 
 console.log(bad === 0 ? '\n全部通过 ✅' : `\n${bad} 项失败 ❌`);

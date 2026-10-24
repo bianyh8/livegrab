@@ -80,8 +80,8 @@ const latest = {
 check(m._computeHasUpdate(local, latest) === true, 'v0.1.6 → v0.1.7 判定有更新');
 const fetchR = await run('git', ['fetch', 'origin', 'main'], { cwd: gitRoot });
 check(fetchR.ok, 'git fetch 成功', fetchR.err);
-const pullR = await run('git', [...m._gitAuthArgs(), 'pull', '--ff-only', 'origin', 'main'], { cwd: gitRoot });
-check(pullR.ok, 'git pull --ff-only 成功（分支上快进）', pullR.err);
+const pullR = await run('git', ['pull', '--ff-only', 'origin', 'main'], { cwd: gitRoot, env: m._gitEnv() });
+check(pullR.ok, 'git pull --ff-only 成功（分支上快进；认证走 GIT_CONFIG_* 环境变量）', pullR.err);
 const after = await m.localInfo();
 check(after.version === '0.1.7', '拉取后本地版本为 0.1.7', after.version);
 check(m._computeHasUpdate(after, latest) === false, '拉取后 commit 一致 → 判定无更新');

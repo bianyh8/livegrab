@@ -140,7 +140,7 @@ function createTunnel(proxyUrl, targetHost, targetPort, secure) {
 /** 经代理发起一次请求，返回 { status, ok, statusText, headers(Map), body(Buffer), finalUrl }。
  *  maxRedirects>0 时自动跟随 3xx 跳转（相对/绝对 Location 均可）。 */
 export async function requestViaProxy(targetUrl, opts = {}) {
-  const { method = 'GET', headers = {}, timeoutMs = 15000, maxRedirects = 5, proxy, body = null } = opts;
+  const { method = 'GET', headers = {}, timeoutMs = 15000, maxRedirects = 5, proxy, body = null, maxBytes = 32 * 1024 * 1024 } = opts;
   const proxyUrl = new URL(proxy);
   let current = targetUrl;
   let redirects = 0;
@@ -156,6 +156,9 @@ export async function requestViaProxy(targetUrl, opts = {}) {
         agent,
         timeout: timeoutMs,
       });
+      // 总时长兜底：socket timeout 只能发现「完全没数据」，慢速滴流可以无限期占着连接
+      const deadline = setTimeout(() => req.destroy(new Error('代理请求总时长超时')), Math.max(timeoutMs * 4, 60000));
+      req.on('close', () => clearTimeout(deadline));
       req.on('timeout', () => req.destroy(new Error('代理请求超时')));
       req.on('error', reject);
       req.on('response', resolve);
@@ -163,8 +166,18 @@ export async function requestViaProxy(targetUrl, opts = {}) {
       req.end();
     });
     const chunks = [];
+    let size = 0;
     await new Promise((resolve, reject) => {
-      res.on('data', (c) => chunks.push(c));
+      res.on('data', (c) => {
+        size += c.length;
+        // 响应体上限：任何上游/CDN 返回超大响应都不能把录制进程的内存打爆
+        if (size > maxBytes) {
+          try { res.destroy(); } catch { /* ignore */ }
+          reject(new Error(`响应体过大（>${maxBytes} 字节）`));
+          return;
+        }
+        chunks.push(c);
+      });
       res.on('end', resolve);
       res.on('error', reject);
     });
@@ -190,11 +203,11 @@ export async function requestViaProxy(targetUrl, opts = {}) {
 /** 经代理取文本（带重试），返回与 resolvers/http.js 的 httpGet 一致的形状：
  *  { status, ok, text, headers(Map), finalUrl }。 */
 export async function httpGetViaProxy(url, opts = {}) {
-  const { headers = {}, timeoutMs = 12000, retries = 2, logger = null, label = '', proxy } = opts;
+  const { headers = {}, timeoutMs = 12000, retries = 2, logger = null, label = '', proxy, maxBytes } = opts;
   let lastErr = null;
   for (let i = 0; i <= retries; i++) {
     try {
-      const res = await requestViaProxy(url, { headers, timeoutMs, maxRedirects: 5, proxy });
+      const res = await requestViaProxy(url, { headers, timeoutMs, maxRedirects: 5, proxy, maxBytes });
       return { status: res.status, ok: res.ok, text: res.body.toString('utf8'), headers: res.headers, finalUrl: res.finalUrl };
     } catch (e) {
       lastErr = e;
@@ -208,11 +221,12 @@ export async function httpGetViaProxy(url, opts = {}) {
 /** 经代理取二进制（带重试），返回 { status, ok, buffer(Buffer), headers(Map), finalUrl }。
  *  用于 GitHub codeload 归档下载（tar.gz 不能按文本解码）。 */
 export async function httpGetBufferViaProxy(url, opts = {}) {
-  const { headers = {}, timeoutMs = 120000, retries = 2, logger = null, label = '', proxy } = opts;
+  // 这个助手用于「下载完整文件」（更新归档最大 128MB），默认上限必须高于 requestViaProxy 的普通响应上限
+  const { headers = {}, timeoutMs = 120000, retries = 2, logger = null, label = '', proxy, maxBytes = 192 * 1024 * 1024 } = opts;
   let lastErr = null;
   for (let i = 0; i <= retries; i++) {
     try {
-      const res = await requestViaProxy(url, { headers, timeoutMs, maxRedirects: 5, proxy });
+      const res = await requestViaProxy(url, { headers, timeoutMs, maxRedirects: 5, proxy, maxBytes });
       return { status: res.status, ok: res.ok, buffer: res.body, headers: res.headers, finalUrl: res.finalUrl };
     } catch (e) {
       lastErr = e;

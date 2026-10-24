@@ -5,6 +5,7 @@
 import { api, ApiError, setUnauthorizedHandler } from './api.js';
 import {
   toast, confirmDialog, formatBytes, formatDuration, formatDateTime,
+  closePlayer, closeDialogs,
 } from './ui.js';
 import { loadI18n, t } from './i18n.js';
 
@@ -37,6 +38,9 @@ const runtime = {
   limits: { maxConcurrency: 8 },
   lastTasks: [],
   topChipText: '',
+  /* 跨页「新建/详情」请求：老页面点顶栏按钮时记在这里，等任务视图渲染完成后消费
+     （过去用 setTimeout(80ms) 猜挂载完成，冷加载/慢网下 import 还没回来，点击就丢）。 */
+  pendingModal: null,
 };
 
 const listeners = new Map();
@@ -76,9 +80,17 @@ const ctx = {
       ctx.emit('open-task-modal', id || null);
       return;
     }
+    /* 跨页打开：请求存进 runtime.pendingModal，由任务视图渲染完成后取走执行。
+       不再用 setTimeout 猜「视图挂好了没有」—— 冷加载/慢网时 import 还没回来，
+       80ms 后 emit 出去没有任何订阅者，点击就静默丢失。 */
+    runtime.pendingModal = { id: id || null };
     navigate('tasks');
-    /* 等任务页完成挂载（它订阅 open-task-modal）后再触发 */
-    setTimeout(() => ctx.emit('open-task-modal', id || null), 80);
+  },
+  /* 任务视图渲染完成后调用：取走（并清空）跨页弹窗请求。 */
+  takePendingTaskModal() {
+    const p = runtime.pendingModal;
+    runtime.pendingModal = null;
+    return p;
   },
   invalidate(page) {
     runtime.loaded[page] = false;
@@ -292,6 +304,11 @@ function stopView() {
     try { runtime.view.destroy(); } catch (e) { console.error('[LiveGrab] 视图清理失败', e); }
   }
   runtime.view = null;
+  /* #modalMask / #playerMask 是 #view 的兄弟节点，视图 destroy() 管不到它们：
+     只销毁视图会让遮罩继续盖住新页面、body 一直 overflow:hidden，播放器会话与
+     remux ffmpeg 也不释放。切页与退出登录（都走这里）统一收口。 */
+  try { closePlayer(); } catch (e) { console.error('[LiveGrab] 关闭播放器失败', e); }
+  try { closeDialogs(); } catch (e) { console.error('[LiveGrab] 关闭弹窗失败', e); }
 }
 
 /** 等一帧，避免先清空 DOM 再异步加载模块导致的可见闪烁。
@@ -427,7 +444,6 @@ async function pullStatus() {
   try {
     const st = await api.status();
     applyStatus(st);
-    runtime.emit('status', st);
   } catch (e) {
     if (e instanceof ApiError && e.code === 'NETWORK') return;
     /* 404 等实现差异静默忽略，页面各自会再拉一次数据 */
@@ -480,15 +496,14 @@ function startSse() {
     try { line = JSON.parse(ev.data); } catch { return; }
     ctx.emit('log', line);
   });
-  sse.addEventListener('task', (ev) => {
-    ctx.emit('task', safeParse(ev.data));
-    pullStatus();
-  });
+  /* task 事件只用来触发一次全量 status 兜底刷新：全仓没有 'task' 订阅者，
+     原先的 ctx.emit('task', …) 是死事件（发了没人接），已删。 */
+  sse.addEventListener('task', () => { pullStatus(); });
   sse.addEventListener('files', (ev) => ctx.emit('files', safeParse(ev.data)));
+  /* 同上：'status' 也没有订阅者（视图各自拉自己的数据），emit 已删，只留 applyStatus */
   sse.addEventListener('status', (ev) => {
     const d = safeParse(ev.data);
     if (d && d.stats) applyStatus(d);
-    ctx.emit('status', d);
   });
   sse.addEventListener('ping', () => { /* 心跳，无需处理 */ });
   sse.onerror = () => { /* EventSource 自带重连 */ };

@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import net from 'node:net';
 import { fileURLToPath } from 'node:url';
 
 // 版本号唯一来源：app/package.json（此前写死 '0.1.0'，发版后各处显示旧版本）。
@@ -114,6 +115,52 @@ export function safeJoin(root, rel) {
     throw new HttpError('BAD_PATH', '路径越界', 400);
   }
   return p;
+}
+
+/** 脱敏 URL：保留 host+path，把 query 里的签名/令牌参数替换为 ***，并抹掉 userinfo。
+ *  直播流地址常带 expire/sign/token，日志与状态接口都不该出现可直接复用的签名。 */
+export function redactUrl(raw) {
+  try {
+    const u = new URL(String(raw));
+    if (u.username || u.password) { u.username = '***'; u.password = '***'; }
+    for (const k of [...u.searchParams.keys()]) {
+      if (/token|sign|expire|auth|key|secret|credential|session|sig/i.test(k)) u.searchParams.set(k, '***');
+    }
+    return u.toString();
+  } catch {
+    return String(raw ?? '').replace(/([?&](?:token|sign|expire|auth|key|secret|session|sig)=)[^&]*/gi, '$1***');
+  }
+}
+
+/** 是不是「内网/本机/链路本地」地址（trustLan 与 SSRF 防护共用）。
+ *  用 net.isIP 规范解析，不做字符串前缀糊匹配（旧实现 startsWith('fc') 会把 'fc.example.com' 判成内网）。 */
+export function isPrivateHost(host) {
+  let s = String(host || '').toLowerCase().trim().replace(/^\[|\]$/g, '');
+  if (s.startsWith('::ffff:')) s = s.slice(7);
+  if (!s) return true;
+  if (s === 'localhost' || s.endsWith('.localhost') || s.endsWith('.local')) return true;
+  const v = net.isIP(s);
+  if (v === 4) {
+    return /^(0\.|10\.|127\.|192\.168\.|169\.254\.)/.test(s)
+      || /^172\.(1[6-9]|2\d|3[01])\./.test(s)
+      || /^22[4-9]\.|^23\d\.|^24\d\.|^25[0-5]\./.test(s);
+  }
+  if (v === 6) return s === '::1' || s === '::' || /^f[cd]/.test(s) || /^fe80/.test(s) || /^ff/.test(s);
+  return false; // 域名：只做字面判断，DNS rebinding 需在请求层再校验（当前未做）
+}
+
+/** 校验一个「服务端要主动请求」的地址：协议白名单 + 默认拒绝内网目标 */
+export function assertRemoteUrl(raw, { label = '地址', allowRtmp = false, allowPrivate = false } = {}) {
+  let u;
+  try { u = new URL(String(raw ?? '').trim()); } catch { throw new HttpError('INVALID_URL', `${label}不是合法地址`, 400); }
+  const protos = allowRtmp ? ['http:', 'https:', 'rtmp:'] : ['http:', 'https:'];
+  if (!protos.includes(u.protocol)) {
+    throw new HttpError('INVALID_URL', `${label}只支持 ${allowRtmp ? 'http(s) / rtmp' : 'http(s)'} 协议`, 400);
+  }
+  if (!allowPrivate && isPrivateHost(u.hostname)) {
+    throw new HttpError('INVALID_URL', `${label}不能指向内网/本机地址`, 400);
+  }
+  return u;
 }
 
 // ---------- 时间（跟随容器 TZ 环境变量） ----------

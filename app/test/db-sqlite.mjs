@@ -295,6 +295,8 @@ check('老库迁移补 on_live 列', dbOld.prepare("SELECT name FROM pragma_tabl
 check('老库存量行 on_live 修正为 1（开播通知不丢失）', dbOld.prepare('SELECT on_live FROM notify WHERE id=1').get().on_live === 1);
 const storeOld = await new Store(tmp).init(dbOld);
 check('迁移后读取 onLive=true', storeOld.settings.notify.onLive === true);
+// 开播通知闩锁列：老库必须补上，否则「每场直播只通知一次」退化回只按 liveStatus 跳变
+check('老库迁移补 tasks.live_notified_at 列', dbOld.prepare("SELECT name FROM pragma_table_info('tasks')").all().some((c) => c.name === 'live_notified_at'));
 dbOld.close();
 
 // ---------- 旧 v1 库（data_json）作废重建 ----------
@@ -305,6 +307,30 @@ v1.close();
 const v2 = openDb(v1Path);
 check('v1 库被作废重建为 v2 空库', schemaVersion(v2) === 2 && v2.prepare('SELECT COUNT(*) c FROM tasks').get().c === 0);
 v2.close();
+check('作废重建前保留 .bak 备份（不再直接删除）', fs.readdirSync(tmp).some((f) => f.startsWith('v1.db.bak-')));
+
+// ---------- 脏 schema_version / 更高版本：绝不能静默删库重建 ----------
+const dirtyPath = path.join(tmp, 'dirty.db');
+const d1 = new Database(dirtyPath);
+d1.exec("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL); INSERT INTO meta(key,value) VALUES('schema_version','2abc'); CREATE TABLE tasks (id TEXT PRIMARY KEY); INSERT INTO tasks VALUES('keepme');");
+d1.close();
+let dirtyErr = null;
+try { openDb(dirtyPath); } catch (e) { dirtyErr = e; }
+check('非法 schema_version（2abc）拒绝启动，而不是当成旧库删掉', !!dirtyErr && /不是合法整数/.test(dirtyErr.message), dirtyErr && dirtyErr.message);
+const d2 = new Database(dirtyPath, { readonly: true });
+check('拒绝启动后原库数据仍在（未删一行）', d2.prepare('SELECT COUNT(*) c FROM tasks').get().c === 1);
+d2.close();
+
+const newerPath = path.join(tmp, 'newer.db');
+const n1 = new Database(newerPath);
+n1.exec("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL); INSERT INTO meta(key,value) VALUES('schema_version','99'); CREATE TABLE tasks (id TEXT PRIMARY KEY); INSERT INTO tasks VALUES('future');");
+n1.close();
+let newerErr = null;
+try { openDb(newerPath); } catch (e) { newerErr = e; }
+check('结构版本高于程序支持时拒绝启动（不降级删库）', !!newerErr && /高于本程序支持/.test(newerErr.message), newerErr && newerErr.message);
+const n2 = new Database(newerPath, { readonly: true });
+check('更高版本库原数据仍在', n2.prepare('SELECT COUNT(*) c FROM tasks').get().c === 1);
+n2.close();
 
 fs.rmSync(tmp, { recursive: true, force: true });
 console.log(`\n结果：${ok} 通过 / ${fail} 失败`);

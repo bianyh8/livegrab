@@ -123,6 +123,8 @@ export async function render(root, ctx, kit) {
       root.querySelector('#scNew').value = '';
       root.querySelector('#scNew2').value = '';
       toast(t('settings.secPwUpdated'));
+      // 改密后服务端已把全部会话作废（epoch 自增）→ 当前页面也必须回登录页，否则每次请求都会 401
+      setTimeout(() => ctx.emit('logout'), 700);
     } catch (e) {
       toast(e.message || t('settings.secPwFailed'), 'err');
     } finally {
@@ -135,7 +137,7 @@ export async function render(root, ctx, kit) {
     title: t('settings.secKillAll'), danger: true, ok: t('settings.secLogoutOk'),
     text: t('settings.secKillAllText'),
     onOk: async () => {
-      try { await api.logout(); } catch { /* 忽略 */ }
+      try { await api.logoutAll(); } catch { /* 忽略 */ }
       toast(t('settings.secSessionsLoggedOut'));
       ctx.emit('logout');
     },

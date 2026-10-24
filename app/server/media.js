@@ -72,7 +72,7 @@ export function buildRecordArgs({
     '-analyzeduration', '20000000',
     '-probesize', '10000000',
     '-fflags', '+discardcorrupt+igndts', // 丢弃损坏包 + 忽略不连续 DTS：时间戳混乱时保分段时长准确
-    '-protocol_whitelist', 'rtmp,crypto,file,http,https,tcp,tls,udp,rtp,httpproxy', // 显式放行协议（含 httpproxy），避免默认白名单缺失导致 Invalid argument
+    '-protocol_whitelist', 'rtmp,crypto,http,https,tcp,tls,udp,rtp,httpproxy', // 显式放行协议（含 httpproxy）；刻意不含 file——录制输入永远不该是本地文件
   );
   // 断流重连（ffmpeg 层）：注意 -reconnect / -reconnect_streamed 是「布尔选项」，
   // 必须显式带值 1——否则 ffmpeg 8 会把下一个参数当成它的值

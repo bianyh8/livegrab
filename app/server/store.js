@@ -6,6 +6,7 @@
 //  · persist() 作为兜底：把内存全量对账式落库（外部文件、批量状态归一、启动/关停时调用）。
 import path from 'node:path';
 import { uid, nowIso, ensureDir } from './util.js';
+import { createSecretBox } from './secret-box.js';
 import { DEFAULT_NAMING, DEFAULT_OPTIONS, VARIABLES } from './naming.js';
 
 export const DEFAULT_SETTINGS = {
@@ -178,13 +179,15 @@ const boolOrNull = (v) => (v === null || v === undefined ? null : (v ? 1 : 0));
 const num = (v, d = 0) => { const n = Number(v); return Number.isFinite(n) ? n : d; };
 const numOrNull = (v) => { if (v === null || v === undefined || v === '') return null; const n = Number(v); return Number.isFinite(n) ? n : null; };
 const strOrNull = (v) => (v === null || v === undefined ? null : String(v));
+// NOT NULL 且带 DEFAULT '' 的列：显式写 NULL 会绕过 DEFAULT 直接撞约束（一条不完整的 task 对象就会让整个写事务回滚）
+const strReq = (v) => String(v ?? '');
 
 function taskToRow(t) {
   return {
     id: t.id,
-    platform: strOrNull(t.platform), room_id: strOrNull(t.roomId), short_id: strOrNull(t.shortId),
-    source_url: strOrNull(t.sourceUrl), anchor_name: strOrNull(t.anchorName), platform_anchor_name: strOrNull(t.platformAnchorName),
-    title: strOrNull(t.title), avatar_file: strOrNull(t.avatarFile),
+    platform: strReq(t.platform), room_id: strReq(t.roomId), short_id: strReq(t.shortId),
+    source_url: strReq(t.sourceUrl), anchor_name: strReq(t.anchorName), platform_anchor_name: strReq(t.platformAnchorName),
+    title: strReq(t.title), avatar_file: strOrNull(t.avatarFile),
     quality: strOrNull(t.quality), quality_actual: strOrNull(t.qualityActual), quality_label: strOrNull(t.qualityLabel),
     segment_mode: strOrNull(t.segmentMode), segment_minutes: numOrNull(t.segmentMinutes), segment_size_mb: numOrNull(t.segmentSizeMB),
     container: strOrNull(t.container),
@@ -200,7 +203,7 @@ function taskToRow(t) {
     segment_index: num(t.segmentIndex), current_file: strOrNull(t.currentFile), session_id: strOrNull(t.sessionId),
     platform_name: strOrNull(t.platformName), next_poll_at: num(t.nextPollAt),
     fail_count: num(t.failCount), fail_notified: boolish(t.failNotified),
-    live_status: strOrNull(t.liveStatus), name_locked: boolish(t.nameLocked),
+    live_status: strOrNull(t.liveStatus), live_notified_at: strOrNull(t.liveNotifiedAt), name_locked: boolish(t.nameLocked),
     created_at: strOrNull(t.createdAt), updated_at: strOrNull(t.updatedAt),
   };
 }
@@ -222,7 +225,8 @@ function rowToTask(r, overrides = {}) {
     startedAt: r.started_at, endedAt: r.ended_at, totalBytes: r.total_bytes || 0, totalDurationSec: r.total_duration_sec || 0,
     segmentIndex: r.segment_index || 0, currentFile: r.current_file, sessionId: r.session_id,
     platformName: r.platform_name, nextPollAt: r.next_poll_at || 0, failCount: r.fail_count || 0,
-    failNotified: !!r.fail_notified, liveStatus: r.live_status, nameLocked: !!r.name_locked,
+    failNotified: !!r.fail_notified, liveStatus: r.live_status, liveNotifiedAt: r.live_notified_at || null,
+    nameLocked: !!r.name_locked,
     overrides, createdAt: r.created_at, updatedAt: r.updated_at,
   };
 }
@@ -374,8 +378,26 @@ export class Store {
     return this._idx;
   }
 
-  /** 内存模型发生任何增删改后调用：下次读取时重建索引 */
-  _invalidateIndex() { this._idx = null; }
+  /** 落盘用的稳定场次顺序：真实录制的场次优先（taskId 非空），其次 startedAt 升序，最后 id 兜底。 */
+  _orderedSessions() {
+    return [...this.state.sessions].sort((a, b) => {
+      const ta = a?.taskId ? 0 : 1;
+      const tb = b?.taskId ? 0 : 1;
+      if (ta !== tb) return ta - tb;
+      const sa = String(a?.startedAt || '');
+      const sb = String(b?.startedAt || '');
+      if (sa !== sb) return sa < sb ? -1 : 1;
+      return String(a?.id || '') < String(b?.id || '') ? -1 : String(a?.id || '') > String(b?.id || '') ? 1 : 0;
+    });
+  }
+
+  /** 惰性创建配置加密盒（init 前也能工作，测试里直接 loadFromDb 不会炸） */
+  _box() {
+    if (!this._secret) this._secret = createSecretBox(this.configDir, this.logger);
+    return this._secret;
+  }
+
+  _invalidateIndex() { this._idx = null; } // 内存模型发生任何增删改后调用：下次读取时重建索引
 
   get settings() { return this.state.settings; }
   get naming() { return this.state.naming; }
@@ -429,11 +451,15 @@ export class Store {
     }
     const cookies = {};
     for (const r of db.prepare('SELECT * FROM cookies').all()) {
-      cookies[r.platform] = { value: r.value || '', ttwid: r.ttwid || '', updatedAt: r.updated_at || null, valid: !!r.value };
+      const cookieVal = this._box().open(r.value);
+      cookies[r.platform] = { value: cookieVal, ttwid: r.ttwid || '', updatedAt: r.updated_at || null, valid: !!cookieVal };
     }
     state.settings.cookies = cookies;
     const customize = {};
-    for (const r of db.prepare('SELECT key, value FROM customize').all()) customize[r.key] = parseMaybeJson(r.value);
+    for (const r of db.prepare('SELECT key, value FROM customize').all()) {
+      const v = parseMaybeJson(r.value);
+      customize[r.key] = (r.key === 'updateToken' && typeof v === 'string') ? this._box().open(v) : v;
+    }
     state.settings.customize = customize;
 
     // ---- 命名 ----
@@ -573,7 +599,10 @@ export class Store {
         for (const t of this.state.tasks) { this._stmt('task_upsert').run(taskToRow(t)); this._writeOverrides(t); }
         this._stmt('files_delete_all').run();
         this._stmt('sessions_delete_all').run();
-        for (const s of this.state.sessions) this._writeSessionRows(s);
+        // 落盘顺序必须确定：files.path 是 UNIQUE，同一路径若同时挂在「真实录制场次」和
+        // 「扫描出的孤儿场次」上，谁先写谁赢。按 taskId 优先 + startedAt 升序排列，
+        // 保证每次启动/全量对账的胜者一致（孤儿场次永远让位给真实场次）。
+        for (const s of this._orderedSessions()) this._writeSessionRows(s);
         this._writeExternalRows();
         this._stmt('trash_delete_all').run();
         for (const e of this.state.trash) this._writeTrashRows(e);
@@ -607,21 +636,44 @@ export class Store {
 
   /** 写穿透失败时回滚内存：不做全量深拷贝，各变更点只快照最小实体（settings/tasks/sessions/trash 引用或浅拷贝、单字段 undo）。 */
 
-  /** 单文件行写入：files.path 全局 UNIQUE，同一物理路径被登记为两个 id 时跳过该行并告警，避免拖垮整库事务 */
+  /**
+   * 单文件行写入：files.path 是全局 UNIQUE。
+   * 只有「同一物理路径被登记成两个 id」这一种情况可以跳过（并告警）；
+   * 其它 SQL 错误（no such column / NOT NULL / 磁盘满）必须上抛——以前一律吞掉，
+   * 导致迁移缺列时每一行都「跳过冲突」，整个文件库静默不落库。
+   */
   _upsertFileRow(session, f, kindOverride) {
     try {
       this._stmt('file_upsert').run(fileToRow(session, f, kindOverride));
+      return true;
     } catch (e) {
-      const msg = `跳过冲突文件行 ${f?.id || '?'}（path=${f?.path || '?'}）：${e?.message || e}`;
-      if (this.logger) this.logger.warn(msg);
-      else console.warn(`[store] ${msg}`);
+      const text = String(e?.code || '') + ' ' + String(e?.message || e);
+      if (!/SQLITE_CONSTRAINT_UNIQUE|UNIQUE constraint failed/i.test(text)) throw e;
+      const msg = `文件行路径冲突，已跳过 ${f?.id || '?'}（path=${f?.path || '?'}）：${e?.message || e}`;
+      if (this.logger) this.logger.error(msg);
+      else console.error(`[store] ${msg}`);
+      return false;
     }
   }
 
   _writeSessionRows(session) {
+    const files = sessionFiles(session);
+    // 指针（merged/mp4）必须能在本次落库的（按 id/路径去重后的）文件集合里命中，
+    // 否则 sessions.merged_file_id 会指向一条没写进去的行 → 重开库后 merged 变 null。
+    const byId = new Map(files.map((f) => [f.id, f]));
+    for (const key of ['merged', 'mp4']) {
+      const ptr = session[key];
+      if (ptr && ptr.id && !byId.has(ptr.id)) {
+        const alt = files.find((f) => f.path === ptr.path) || null;
+        const msg = `场次 ${session.id} 的 ${key} 指针悬空（${ptr.id} 未被落库），已${alt ? `改指同路径记录 ${alt.id}` : '置空'}`;
+        if (this.logger) this.logger.error(msg);
+        else console.error(`[store] ${msg}`);
+        session[key] = alt;
+      }
+    }
     this._stmt('session_upsert').run(sessionToRow(session));
     this._stmt('files_delete_session').run(session.id);
-    for (const f of sessionFiles(session)) this._upsertFileRow(session, f);
+    for (const f of files) this._upsertFileRow(session, f);
   }
 
   _writeSession(session) {
@@ -725,11 +777,14 @@ export class Store {
     this._stmt('cookies_delete_all').run();
     const ckIns = this._stmt('cookie_upsert');
     for (const [p, c] of Object.entries(s.cookies || {})) {
-      ckIns.run({ platform: p, value: strOrNull(c?.value || ''), ttwid: strOrNull(c?.ttwid || ''), updated_at: strOrNull(c?.updatedAt) });
+      ckIns.run({ platform: p, value: strOrNull(this._box().seal(c?.value || '')), ttwid: strOrNull(c?.ttwid || ''), updated_at: strOrNull(c?.updatedAt) });
     }
     this._stmt('customize_delete_all').run();
     const czIns = this._stmt('customize_upsert');
-    for (const [k, v] of Object.entries(s.customize || {})) czIns.run(k, JSON.stringify(v ?? null));
+    for (const [k, v] of Object.entries(s.customize || {})) {
+      // 更新 token 是凭据：落盘封存，内存里始终保持明文供 git 调用
+      czIns.run(k, JSON.stringify(k === 'updateToken' && typeof v === 'string' ? this._box().seal(v) : (v ?? null)));
+    }
   }
 
   _writeNaming() {
@@ -1009,7 +1064,7 @@ export class Store {
       container: 'ts', remuxToMp4: true, keepSource: true, autoMerge: false,
       namingProfileId: null, customText: '', overrides: {},
       autoRecord: true, monitorOnly: false, manualHeld: false, pollIntervalSec: 60, startDelaySec: 5, stopDelaySec: 30,
-      status: 'idle', queueReason: null, lastError: null,
+      status: 'idle', queueReason: null, lastError: null, liveStatus: 'unknown', liveNotifiedAt: null,
       retryCount: 0, reconnectCount: 0,
       startedAt: null, endedAt: null, totalBytes: 0, totalDurationSec: 0,
       segmentIndex: 0, currentFile: null, sessionId: null,

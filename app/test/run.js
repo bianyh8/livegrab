@@ -641,7 +641,7 @@ function testSegmentGuards() {
   ok(/this\.child \? 'timeout' : 'stopped'/.test(rec), 'segment-close 带结束原因（进程活着=自然轮转 / 退出=提前收尾）');
   ok(/const endReason = seg\.reason/.test(sched) && /endReason,/.test(sched), '_onSegmentClose 把结束原因落进文件记录');
   ok(/end_reason: strOrNull\(f\.endReason\)/.test(store) && /endReason: r\.end_reason/.test(store), 'store end_reason 读写映射齐全（三态持久化）');
-  ok(/ADD COLUMN end_reason/.test(db), 'db 有 end_reason 幂等补列迁移');
+  ok(/ensureCol\('files', 'end_reason'/.test(db) && /ADD COLUMN \$\{decl\}/.test(db), 'db 有 end_reason 幂等补列迁移（逐列独立、失败即抛）');
   ok(/serializeTask\(task, withSegments/.test(sched) && /serializeTask\(t, true\)/.test(srv), '详情接口带出分段明细（含结束原因），列表不带');
   for (const [file, pat] of [['douyin', /status == null \? 'unknown'/], ['bilibili', /d\.live_status == null \? 'unknown'/], ['cn', /room\.show_status == null \? 'unknown'/]]) {
     const src = fs.readFileSync(path.join(APP_DIR, 'server', 'resolvers', `${file}.js`), 'utf8');
@@ -1140,6 +1140,31 @@ async function testOfflineDetectHardening() {
   rec5._finalize = async () => { touched5 = true; };
   await rec5._checkStall();
   ok(!touched5, 'stopping 时看门狗不介入');
+
+  // ⑧ _tick 重入互斥：定时器 1.5s 与内部 await 重叠时不得交错统计
+  const rec6 = mk(async () => false);
+  rec6.dir = '/tmp/lg-stall-unused';
+  let scans6 = 0;
+  rec6.scanSegments = async () => { scans6 += 1; await new Promise((r) => setTimeout(r, 30)); return []; };
+  await Promise.all([rec6._tick(), rec6._tick()]);
+  eq(scans6, 1, '_tick 并发两次只执行一次（另一路被 _tickBusy 挡掉）');
+  await rec6._tick();
+  eq(scans6, 2, '上一轮结束后下一轮正常执行（闸门会释放）');
+
+  // ⑨ _finalize 幂等 + 并发安全：停止/下播/看门狗同时触发只收尾一次
+  const rec7 = mk(async () => false);
+  rec7.dir = '/tmp/lg-stall-unused';
+  rec7.scanSegments = async () => [];
+  rec7._dropEmptySegments = async () => [];
+  let finishedCount = 0;
+  rec7.on('finished', () => { finishedCount += 1; });
+  const [p1, p2] = await Promise.all([rec7._finalize('offline'), rec7._finalize('user')]);
+  eq(finishedCount, 1, '并发两次 _finalize 只 emit 一次 finished');
+  eq(p1.reason, 'offline', '并发收尾共享同一份结果（先发起的原因生效）');
+  ok(p1 === p2, '两次调用拿到同一个 payload');
+  const p3 = await rec7._finalize('user');
+  eq(finishedCount, 1, '再次调用仍不重复 emit');
+  ok(p3 === p1, '返回缓存结果');
 }
 
 /* 全局一致性审计守卫：把「前后端契约 / 多处口径不一致」的真实缺陷钉死，防止回退。 */
@@ -1857,7 +1882,7 @@ function testViewGuards() {
      与任务管理保持同一套交互约定，避免两个页面查询体验漂移。 */
   const filesSrc = fs.readFileSync(path.join(APP_DIR, 'web', 'views', 'files.js'), 'utf8');
   ok(/function paintResults\s*\(/.test(filesSrc), '文件库有 paintResults()（只重绘结果区，不重建搜索框）');
-  ok(/setTimeout\(\(\) => \{[\s\S]{0,80}?commitFilters\(\);[\s\S]{0,80}?tick\(ctx, true\);[\s\S]{0,40}?\}, 300\)/.test(filesSrc), '文件库查询防抖 = 300ms + commitFilters + tick（不再一输就查、不抢焦点）');
+  ok(/setTimeout\(\(\) => \{[\s\S]{0,120}?commitFilters\(\);[\s\S]{0,240}?tick\(ctx, false\);[\s\S]{0,40}?\}, 300\)/.test(filesSrc), '文件库查询防抖 = 300ms + commitFilters + 局部重绘 tick(ctx,false)（不再一输就查、不抢焦点、不打断中文组词）');
   ok(!/id="flQuery"/.test(filesSrc) && !/flQuery/.test(filesSrc), '文件库不再有「查询」按钮（草稿/提交两套状态重复）');
   ok(/toast\(t\('files\.scanDone',/.test(filesSrc) && /toast\(t\('files\.scanFail'/.test(filesSrc), '「扫描磁盘」给结果/失败 toast 反馈（避免点了不知道生效没）');
   ok(/function bindRows\s*\(/.test(filesSrc) && /bindRows\(ctx\)/.test(filesSrc), '局部重绘后重绑行内按钮（换数据不换操作）');
@@ -2055,7 +2080,14 @@ function testUpdateGuards() {
   ok(!/\[[^\]]*'fetch',\s*'origin'/.test(upd), 'fetch 不写死 origin（远端取配置地址）');
 
   ok(/codeload\.github\.com/.test(upd), 'git 传输不可用时走 codeload 快照通道');
-  ok(/zlib\.gunzipSync/.test(upd) && /function parseTarEntries/.test(upd), '零依赖解包 tar.gz（不依赖容器内 tar/curl）');
+  ok(/zlib\.createGunzip/.test(upd) && !/zlib\.gunzipSync\(/.test(upd) && /function parseTarEntries/.test(upd),
+    '零依赖流式解包 tar.gz（边解边落地，不再一次性 gunzipSync 整包）');
+  ok(/TAR_LIMITS/.test(upd) && /entryBytes/.test(upd) && /totalBytes/.test(upd),
+    '解压有单条目 / 解压总量上限（压缩炸弹不再 OOM）');
+  ok(/GIT_CONFIG_COUNT/.test(upd) && /http\.extraheader/.test(upd) && !/http\.extraheader=Authorization[^`]*'\s*\]/.test(upd)
+    && !/_gitAuthArgs/.test(upd), 'git token 走 GIT_CONFIG_* 环境变量（绝不进 argv，/proc 读不到）');
+  ok(/redactUrl/.test(upd) && /gitUrl: redactUrl/.test(upd), '日志与 /api/update/status 里的仓库地址脱敏（userinfo → ***）');
+  ok(/\.update\.lock/.test(upd) && /_acquireUpdateLock/.test(upd), '更新加跨进程 O_EXCL 锁文件（宿主手动 + 容器页面不会同时解包）');
   ok(/livegrab-snapshot\.json/.test(upd), '快照状态写入 .git 内标记文件（不污染工作区）');
   ok(/_contentDigest/.test(upd) && /reset',\s*'--hard',\s*'FETCH_HEAD'/.test(upd), '快照后可按内容指纹安全自愈对齐 git 索引');
   ok(/'ls-tree',\s*'-r',\s*'-z'/.test(upd), '只清理「旧 commit 跟踪过」的文件（-z 取原始路径，避免非 ASCII 被转义而算错删除集）');

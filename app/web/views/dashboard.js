@@ -13,14 +13,19 @@ import {
 
 export const page = 'dashboard';
 
-const state = { tasks: [], pending: false, html: '' };
+const state = {
+  tasks: [],
+  recording: [],   // 当前录制中的任务（patchNumbers 局部补数字时要用）
+  pending: false,
+  sig: '',         // 结构指纹（不含录制时长/字节这类每 2 秒都变的数字）
+};
 
 let boundRoot = null;
 let offRefresh = null;
 
 export async function render(root, ctx) {
   boundRoot = root;
-  state.html = ''; // 重新进入页面必须强制重绘（DOM 已被路由清空）
+  state.sig = ''; // 重新进入页面必须强制重绘（DOM 已被路由清空）
   root.innerHTML = `<div class="stack"><div class="card"><div class="empty">${_t('dashboard.loading')}</div></div></div>`;
   if (offRefresh) { offRefresh(); offRefresh = null; }
   offRefresh = ctx.onRefresh(() => tick(ctx));
@@ -30,7 +35,7 @@ export async function render(root, ctx) {
 export function destroy() {
   if (offRefresh) { offRefresh(); offRefresh = null; }
   boundRoot = null;
-  state.html = '';
+  state.sig = '';
 }
 
 async function tick(ctx) {
@@ -55,7 +60,7 @@ function paint(ctx, status) {
   const root = boundRoot;
   if (!root) return;
   if (!status && !state.tasks.length) {
-    state.html = '';
+    state.sig = '';
     root.innerHTML = `<div class="card"><div class="card-b">
       <div class="empty">${_t('dashboard.loadFailed')}</div>
     </div></div>`;
@@ -125,11 +130,86 @@ function paint(ctx, status) {
       </div>
     </div>`;
 
-  // 内容未变就跳过重绘：2s 轮询下避免整页 innerHTML 重建（重新解析 HTML + 缩略图重新请求）
-  if (html === state.html) return;
-  state.html = html;
+  /* 结构指纹：只纳入「决定模板结构」的字段，以及那些渲染成文本后才看得出变化的数字。
+     录制中的 elapsedSec / bytes 每 2 秒都在涨，过去它们直接进了整页 HTML 串比对 →
+     只要在录就每 2 秒 innerHTML 整页重建（缩略图重新请求、进度条闪、滚动位置丢）。
+     现在这些数字由 patchNumbers() 只改对应文本节点，指纹没变就完全不动 DOM。 */
+  const sig = JSON.stringify([
+    state.tasks.map((t) => [t.id, t.status, t.liveStatus, t.monitorOnly]),
+    recording.map((r) => {
+      const n = recNumbers(r);
+      return [r.id, r.name, r.anchorName, r.title, r.platform, r.platformName, r.roomId,
+        r.quality, r.qualityLabel, r.segmentMode, r.segmentMinutes, r.segmentSizeMB, n.segIndex];
+    }),
+    recCount, cap, queuedCount, waitNum, liveCount, monitorList.length, usePct,
+    todayDuration(stats.todayDurationSec), todayDuration(totalDurationSec),
+    Number(stats.todayFiles) || 0, formatBytes(stats.todayBytes), bwText,
+    formatBytes(platformTotal), pstore.map((p) => [p.name || p.platform, formatBytes(p.bytes)]),
+    formatBytes(freeBytes), formatBytes(usedBytes), formatBytes(totalBytes), formatBytes(trashBytes),
+    freeBytes > 0 && freeBytes < 20 * 1024 * 1024 * 1024 ? 1 : 0,
+  ]);
+  if (sig === state.sig) { patchNumbers(); return; }
+  state.sig = sig;
+
   root.innerHTML = html;
   bind(root, ctx);
+  patchNumbers(); // 首绘后按同一口径对齐一次数字（结构指纹与局部补值的算法只在一处）
+}
+
+/* ---------- 局部补数字（不重建 DOM：不重请求缩略图、不跳滚动、不闪进度条） ---------- */
+
+/** 录制中任务的时长/体积派生值：recItem 与 patchNumbers 共用，避免两处口径漂移 */
+function recNumbers(t) {
+  const live = t.live || {};
+  const segIndex = Number(live.segmentIndex || t.segmentIndex || 1);
+  const elapsed = Number(live.elapsedSec || 0);
+  const bytes = Number(live.bytes || 0);
+  const perSeg = Math.max(1, Math.round(elapsed / Math.max(1, segIndex)));
+  const current = Math.max(0, elapsed - perSeg * (segIndex - 1));
+  return { segIndex, elapsed, bytes, current };
+}
+
+/** 只改 [data-live-elapsed] / [data-live-bytes] / [data-live-current] / [data-bytes] 的
+    textContent 与宽度（绝不用 innerHTML），对应 files.js 的 patchSizes 范式。 */
+function patchNumbers() {
+  const root = boundRoot;
+  if (!root || !root.isConnected) return;
+  const byId = new Map(state.recording.map((r) => [String(r.id), r]));
+
+  root.querySelectorAll('[data-live-elapsed]').forEach((node) => {
+    const rec = byId.get(String(node.dataset.liveElapsed));
+    if (!rec) return;
+    const txt = formatDuration(recNumbers(rec).elapsed);
+    if (node.textContent !== txt) node.textContent = txt;
+  });
+
+  root.querySelectorAll('[data-live-bytes]').forEach((node) => {
+    const rec = byId.get(String(node.dataset.liveBytes));
+    if (!rec) return;
+    const n = recNumbers(rec);
+    const txt = segLabel(rec) === 'none'
+      ? _t('dashboard.writtenSingle', formatBytes(n.bytes))
+      : _t('dashboard.writtenSeg', n.segIndex, formatBytes(n.bytes));
+    if (node.textContent !== txt) node.textContent = txt;
+  });
+
+  root.querySelectorAll('[data-live-current]').forEach((node) => {
+    const rec = byId.get(String(node.dataset.liveCurrent));
+    if (!rec) return;
+    const n = recNumbers(rec);
+    const txt = segLabel(rec) === 'none'
+      ? _t('dashboard.singleFile')
+      : _t('dashboard.currentSeg', formatDuration(n.current));
+    if (node.textContent !== txt) node.textContent = txt;
+  });
+
+  root.querySelectorAll('[data-bytes]').forEach((node) => {
+    const rec = byId.get(String(node.dataset.bytes));
+    if (!rec) return;
+    const pct = Math.min(95, Math.max(4, Math.round((recNumbers(rec).current / (60 * 60)) * 100)));
+    const width = pct + '%';
+    if (node.style.width !== width) node.style.width = width;
+  });
 }
 
 /* ---------- 片段 ---------- */
@@ -204,14 +284,9 @@ function diskSection({ usedBytes, totalBytes, freeBytes, trashBytes }) {
 function recItem(t) {
   const quality = qualityLabelOf(t);
   const isAudio = t.quality === 'audio';
-  const live = t.live || {};
-  const segIndex = Number(live.segmentIndex || t.segmentIndex || 1);
   const segOf = segLabel(t);
+  const { segIndex, elapsed, bytes, current } = recNumbers(t);
   const total = segOf === 'none' ? 1 : Math.max(segIndex + 1, 6);
-  const elapsed = Number(live.elapsedSec || 0);
-  const bytes = Number(live.bytes || 0);
-  const perSeg = Math.max(1, Math.round(elapsed / Math.max(1, segIndex)));
-  const current = Math.max(0, elapsed - perSeg * (segIndex - 1));
 
   return `
     <div class="rec-item">
@@ -225,15 +300,15 @@ function recItem(t) {
           ${platBadge(t.platform, t.platformName)}<span>${_t('common.room', esc(t.roomId || '—'))}</span>
           <span class="chip">${esc(quality)}</span>
           <span class="chip">${segOf === 'none' ? _t('seg.none') : esc(segOf)}</span>
-          <span class="chip on"><i class="dot"></i>${segOf === 'none' ? _t('dashboard.writtenSingle', esc(formatBytes(bytes))) : _t('dashboard.writtenSeg', segIndex, esc(formatBytes(bytes)))}</span>
+          <span class="chip on" data-live-bytes="${esc(t.id)}"><i class="dot"></i>${segOf === 'none' ? _t('dashboard.writtenSingle', esc(formatBytes(bytes))) : _t('dashboard.writtenSeg', segIndex, esc(formatBytes(bytes)))}</span>
         </div>
         ${isAudio && segOf === 'none'
-          ? `<div class="bar" style="width:100%"><i style="width:${Math.min(95, Math.max(4, Math.round((current / (60 * 60)) * 100)))}%"></i></div>`
+          ? `<div class="bar" style="width:100%"><i data-bytes="${esc(t.id)}" style="width:${Math.min(95, Math.max(4, Math.round((current / (60 * 60)) * 100)))}%"></i></div>`
           : segTrack(Math.max(0, segIndex - 1), segIndex - 1, total)}
       </div>
       <div class="rec-right">
-        <div class="tm">${esc(formatDuration(elapsed))}</div>
-        <div style="font-size:11px;color:var(--txt-3)">${segOf === 'none' ? _t('dashboard.singleFile') : _t('dashboard.currentSeg', esc(formatDuration(current))) /* current=本段已录秒数，仅用于时长 */}</div>
+        <div class="tm" data-live-elapsed="${esc(t.id)}">${esc(formatDuration(elapsed))}</div>
+        <div style="font-size:11px;color:var(--txt-3)" data-live-current="${esc(t.id)}">${segOf === 'none' ? _t('dashboard.singleFile') : _t('dashboard.currentSeg', esc(formatDuration(current))) /* current=本段已录秒数，仅用于时长 */}</div>
         <div class="acts" style="margin-top:7px">
           <button class="btn sm danger" data-act="stop-once" data-id="${esc(t.id)}" title="${_t('tasks.stopOnceTip')}">${_t('tasks.stopOnce')}</button>
           <button class="btn sm danger" data-act="stop" data-id="${esc(t.id)}">${_t('common.stopRecord')}</button>

@@ -113,6 +113,7 @@ export const api = {
   login: (username, password, remember) => request('POST', '/api/auth/login', { username, password, remember: !!remember }, { noAuthRedirect: true }),
   init: (username, password) => request('POST', '/api/auth/init', { username, password }, { noAuthRedirect: true }),
   logout: () => request('POST', '/api/auth/logout', {}, { noAuthRedirect: true }),
+  logoutAll: () => request('POST', '/api/auth/logout-all', {}, { noAuthRedirect: true }),
   password: (oldPassword, newPassword) => request('POST', '/api/auth/password', { oldPassword, newPassword }),
 
   platforms: () => request('GET', '/api/platforms'),

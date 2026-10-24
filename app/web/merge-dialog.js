@@ -42,15 +42,28 @@ function renumber(list) {
   });
 }
 
-/* 拖动排序：按住左侧手柄拖动整行，落点决定插到目标行前/后；松手把 DOM 顺序回写成 order。 */
+/* 拖动排序：按住左侧手柄拖动整行，落点决定插到目标行前/后；松手把 DOM 顺序回写成 order。
+   返回「摘除本次拖动监听」的函数：拖动中弹窗被关掉（点✕/Esc/切页/被别的弹窗顶掉）时，
+   由 openDialog 的 onClose 钩子调用，避免 document 上残留 pointermove/up/cancel
+   （残留下次在任何地方移动鼠标都会继续改这个已关闭弹窗的行顺序）。 */
 function bindDrag(list, getOrder, setOrder) {
-  if (!list) return;
+  if (!list) return () => {};
+  let detach = null; // 当前这次拖动挂在 document 上的监听
+  const unbind = () => {
+    if (!detach) return;
+    document.removeEventListener('pointermove', detach.onMove);
+    document.removeEventListener('pointerup', detach.done);
+    document.removeEventListener('pointercancel', detach.done);
+    detach = null;
+  };
+
   list.addEventListener('pointerdown', (e) => {
     const handle = e.target && e.target.closest ? e.target.closest('.mg-handle') : null;
     if (!handle) return;
     const row = handle.closest('.mg-row');
     if (!row || row.parentNode !== list) return;
     e.preventDefault();
+    unbind(); // 防御：上一轮如果没收到 pointerup，先清掉
     row.classList.add('mg-dragging');
 
     const onMove = (ev) => {
@@ -63,9 +76,7 @@ function bindDrag(list, getOrder, setOrder) {
     };
     const done = () => {
       row.classList.remove('mg-dragging');
-      document.removeEventListener('pointermove', onMove);
-      document.removeEventListener('pointerup', done);
-      document.removeEventListener('pointercancel', done);
+      unbind();
       const byId = new Map(getOrder().map((r) => [String(r.f.id), r]));
       const next = [];
       list.querySelectorAll('.mg-row').forEach((node) => {
@@ -75,10 +86,13 @@ function bindDrag(list, getOrder, setOrder) {
       if (next.length === getOrder().length) setOrder(next);
       renumber(list);
     };
+    detach = { onMove, done };
     document.addEventListener('pointermove', onMove);
     document.addEventListener('pointerup', done);
     document.addEventListener('pointercancel', done);
   });
+
+  return unbind;
 }
 
 /**
@@ -96,6 +110,7 @@ export function openMergeDialog({ rows, deleteSources = false, trashEnabled = tr
   let del = !!deleteSources;
   let busy = false;
   let nameDirty = false; // 用户改过文件名后，删除行不再覆盖它
+  let stopDrag = () => {}; // 拖动监听的摘除函数（footer 里 bindDrag 回填，弹窗关闭时统一摘）
 
   /* 删源开关的语义固定在「删除」上（与系统设置「合并后删除原始分段」一致）：
      开关只表示「删不删源文件」，文案不再随状态翻转成「保留源文件」——
@@ -110,6 +125,9 @@ export function openMergeDialog({ rows, deleteSources = false, trashEnabled = tr
     title: t('merge.title'),
     width: 'min(560px,92vw)',
     cls: 'mg-modal', // 三段式布局 + 弹框自身不滚动（只有列表滚）
+    /* 弹窗关闭（✕/Esc/点遮罩/被新弹窗顶掉/切页）时统一摘掉拖动监听：
+       过去只在 pointerup 的 done() 里摘，拖到一半关弹窗就永久残留在 document 上。 */
+    onClose: () => { stopDrag(); },
     body: `<div class="mg-body">
       <div class="hintline mg-hint" style="margin-top:0">
         <span id="mgCount">${t('merge.count', list.length)}</span> · ${t('merge.dragHint')}
@@ -143,7 +161,7 @@ export function openMergeDialog({ rows, deleteSources = false, trashEnabled = tr
         if (delHintEl) delHintEl.textContent = delHint();
       });
       if (nameEl) nameEl.addEventListener('input', () => { nameDirty = true; });
-      bindDrag(listEl, () => order, (next) => { order = next; });
+      stopDrag = bindDrag(listEl, () => order, (next) => { order = next; });
 
       const cancel = el('button', 'btn ghost', t('common.cancel'));
       const go = el('button', 'btn primary', t('files.mergeSelected'));

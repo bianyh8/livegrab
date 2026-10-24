@@ -19,6 +19,7 @@ import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { Readable } from 'node:stream';
 import zlib from 'node:zlib';
 import { httpGetViaProxy, httpGetBufferViaProxy, normalizeProxy } from './proxy-fetch.js';
 
@@ -28,6 +29,10 @@ const DEFAULT_BRANCH = process.env.LIVEGRAB_BRANCH || 'main';
 const DEFAULT_GIT_URL = process.env.LIVEGRAB_GIT_URL || `https://github.com/${DEFAULT_REPO}.git`;
 /** 代理失败后的直连冷却时间：这段时间内不再尝试代理，避免每次请求都先卡一遍代理超时。 */
 const PROXY_COOLDOWN_MS = 120 * 1000;
+/** 更新锁文件的有效期：更新进程被 kill 掉时锁会留下，超时后自动失效，免得永久无法更新。 */
+const UPDATE_LOCK_TTL_MS = 30 * 60 * 1000;
+/** 归档压缩包本身的体积上限（解压后的上限见 TAR_LIMITS）。 */
+const MAX_ARCHIVE_BYTES = 128 * 1024 * 1024;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const run = (cmd, args, opts = {}) =>
@@ -58,6 +63,42 @@ function parseOwnerRepoFromGitHubUrl(url) {
     if (parts.length >= 2) return `${parts[0]}/${parts[1]}`;
   } catch { /* ignore */ }
   return '';
+}
+
+/** 拆出 URL 里的 userinfo（老配置可能把 token 直接写在仓库地址里）。
+    返回去掉凭据的地址 + 凭据本身；非 URL / 无凭据时原样返回。 */
+export function splitGitUserInfo(raw) {
+  const s = String(raw == null ? '' : raw).trim();
+  if (!s) return { url: '', user: '', pass: '' };
+  try {
+    const u = new URL(s);
+    if (!u.username && !u.password) return { url: s, user: '', pass: '' };
+    const user = decodeURIComponent(u.username || '');
+    const pass = decodeURIComponent(u.password || '');
+    u.username = '';
+    u.password = '';
+    return { url: u.toString(), user, pass };
+  } catch { return { url: s, user: '', pass: '' }; }
+}
+
+/** 脱敏仓库地址：userinfo（https://user:TOKEN@host/...）与 token 类查询参数一律打码。
+    日志文件与 /api/update/status 都会原样吐给用户，绝不能出现明文 token。 */
+export function redactUrl(raw) {
+  const s = String(raw == null ? '' : raw).trim();
+  if (!s) return '';
+  try {
+    const u = new URL(s);
+    let changed = false;
+    if (u.username || u.password) { u.username = '***'; u.password = ''; changed = true; }
+    for (const key of [...u.searchParams.keys()]) {
+      if (/token|secret|passw|api[_-]?key|access[_-]?key|auth/i.test(key)) { u.searchParams.set(key, '***'); changed = true; }
+    }
+    // URL 会把 *** 编码成 %2A%2A%2A，换回来便于人读
+    return changed ? u.toString().replace(/%2A%2A%2A/g, '***') : s;
+  } catch {
+    // 不是合法 URL（ssh scp 形式 / 本地路径）：只兜底打掉 //user:pass@ 段
+    return s.replace(/(\/\/)[^/@\s]+@/g, '$1***@');
+  }
 }
 
 /** 解析版本号（可带 v 前缀 / 预发布后缀）为可比较对象；不可解析返回 null。 */
@@ -142,28 +183,43 @@ export function classifyGitError(text) {
 
 /* ---------- tar.gz 快照解析（零依赖：只用 node:zlib） ---------- */
 
+/** 解压体量上限：压缩包本身另有 MAX_ARCHIVE_BYTES 上限，这里管「解压后」——
+    几百 KB 的 gzip 可以解出几十 GB，一次性 gunzipSync 就是给压缩炸弹送内存。 */
+export const TAR_LIMITS = {
+  totalBytes: 512 * 1024 * 1024,  // 解压后总量
+  entryBytes: 128 * 1024 * 1024,  // 单个普通文件
+  metaBytes: 1024 * 1024,         // GNU longname / pax 元数据条目
+};
+
+/** tar 头的 C 字符串字段（到第一个 NUL 为止）。 */
+function tarCString(b, s, e) {
+  const slice = b.subarray(s, e);
+  const z = slice.indexOf(0);
+  return slice.subarray(0, z === -1 ? slice.length : z).toString('utf8');
+}
+
+/** tar 头的数值字段：八进制，或 base-256（高位为 1）表示的超长数值。 */
+function tarNumber(b, s, e) {
+  const slice = b.subarray(s, e);
+  // base-256（高位为 1）表示大数，tar 用它存超长数值
+  if (slice[0] & 0x80) {
+    let n = 0n;
+    for (const byte of slice.subarray(1)) n = (n << 8n) | BigInt(byte);
+    return Number(n);
+  }
+  const txt = tarCString(b, s, e).trim();
+  return txt ? parseInt(txt, 8) || 0 : 0;
+}
+
 /** 解析 tar 归档为条目列表（支持 ustar 前缀、GNU longname、pax 扩展头与 base-256 长度）。
-    返回 [{ name, type, mode, data }]，name 已按 ustar prefix 拼好；type: 'f'|'d'|'other'。 */
+    返回 [{ name, type, mode, data }]，name 已按 ustar prefix 拼好；type: 'f'|'d'|'other'。
+    注意：这是「整包已在内存里」的纯解析工具（诊断/测试用）；更新链路走下面的流式 extractTarGzTo。 */
 export function parseTarEntries(buf) {
   const entries = [];
   let off = 0;
   let nextName = '';     // GNU longname / pax path 覆盖
-  const cstr = (b, s, e) => {
-    const slice = b.subarray(s, e);
-    const z = slice.indexOf(0);
-    return slice.subarray(0, z === -1 ? slice.length : z).toString('utf8');
-  };
-  const octal = (b, s, e) => {
-    const slice = b.subarray(s, e);
-    // base-256（高位为 1）表示大数，tar 用它存超长数值
-    if (slice[0] & 0x80) {
-      let n = 0n;
-      for (const byte of slice.subarray(1)) n = (n << 8n) | BigInt(byte);
-      return Number(n);
-    }
-    const txt = cstr(b, s, e).trim();
-    return txt ? parseInt(txt, 8) || 0 : 0;
-  };
+  const cstr = tarCString;
+  const octal = tarNumber;
   while (off + 512 <= buf.length) {
     const h = buf.subarray(off, off + 512);
     if (h[0] === 0) break; // 全零块 = 归档结束
@@ -200,28 +256,139 @@ export function parseTarEntries(buf) {
   return entries;
 }
 
-/** 把 tar.gz 解压落地到 destDir，剥离最外层目录（GitHub 归档是 <repo>-<branch>/...）。
-    返回 { files, dirs, skipped }（相对路径列表）。 */
-export function extractTarGzTo(buf, destDir) {
-  const all = parseTarEntries(zlib.gunzipSync(buf));
-  // 顶层目录名（如 livegrab-main），用于剥离
-  const roots = new Set(all.map((e) => e.name.replace(/^\.\//, '').split('/')[0]).filter(Boolean));
-  const strip = roots.size === 1 ? `${[...roots][0]}/` : '';
+/** 流式解压 tar.gz 并落地到 destDir，剥离最外层目录（GitHub 归档是 <repo>-<branch>/...）。
+ *
+ *  为什么流式：zlib.gunzipSync 会把整个解压结果一次性铺进内存，压缩炸弹（几百 KB → 几十 GB）直接 OOM，
+    而 128MB 的「压缩后」上限拦不住它。这里边解压边解析 tar 头、边写文件，内存只与单个条目和流缓冲有关；
+ *  并把「单条目 / 解压后总量」钉死在 TAR_LIMITS 内，超限立刻中止并报错。
+ *
+ *  安全语义与旧实现一致：剥离顶层目录后，含 `..` 或绝对路径的条目跳过，软链等非常规条目跳过。
+ *  返回 { files, dirs, skipped }（相对路径列表）。 */
+export async function extractTarGzTo(buf, destDir, {
+  totalBytes = TAR_LIMITS.totalBytes,
+  entryBytes = TAR_LIMITS.entryBytes,
+  metaBytes = TAR_LIMITS.metaBytes,
+} = {}) {
   const files = [], dirs = [], skipped = [];
-  for (const e of all) {
-    let rel = e.name.replace(/^\.\//, '');
+  let stripInited = false, strip = '';
+  let pending = Buffer.alloc(0);
+  let entry = null;
+  let nextName = '';
+  let ended = false;
+  let unpacked = 0;
+  const mb = (n) => Math.max(1, Math.round(n / 1048576));
+
+  /** 一个条目读完：落盘 / 记录 / 只更新「下一个名字」 */
+  const finish = (e) => {
+    const raw = e.name.replace(/^\.\//, '');
+    if (e.type === 'L' || e.type === 'x' || e.type === 'g') {
+      const txt = Buffer.concat(e.chunks).toString('utf8');
+      if (e.type === 'L') {
+        nextName = txt.replace(/\0[\s\S]*$/, '');
+      } else {
+        // pax 记录形如「len key=value\n」；只关心 path
+        let i = 0;
+        while (i < txt.length) {
+          const sp = txt.indexOf(' ', i);
+          if (sp === -1) break;
+          const len = parseInt(txt.slice(i, sp), 10);
+          if (!len || Number.isNaN(len)) break;
+          const rec = txt.slice(sp + 1, i + len - 1);
+          const eq = rec.indexOf('=');
+          if (eq > 0 && rec.slice(0, eq) === 'path') nextName = rec.slice(eq + 1);
+          i += len;
+        }
+      }
+      return;
+    }
+    // 顶层目录名（如 livegrab-main）由第一个条目确定，用于剥离
+    if (!stripInited) {
+      stripInited = true;
+      const seg = raw.split('/')[0];
+      const rest = raw.slice(seg.length);
+      if (rest.startsWith('/')) strip = `${seg}/`;      // 深层路径：剥掉顶层目录
+      else if (e.type === 'd') strip = `${raw}/`;       // 顶层目录条目（名字可能没有尾斜杠）
+      else strip = '';                                  // 单文件归档：不剥
+    }
+    let rel = raw;
     if (strip) {
-      if (!rel.startsWith(strip)) { skipped.push(rel); continue; }
+      if (!rel.startsWith(strip)) { if (rel) skipped.push(rel); return; }
       rel = rel.slice(strip.length);
     }
-    if (!rel || rel.includes('..') || path.isAbsolute(rel)) { if (rel) skipped.push(rel); continue; }
+    if (!rel || rel.includes('..') || path.isAbsolute(rel)) { if (rel) skipped.push(rel); return; }
     const abs = path.join(destDir, rel);
-    if (e.type === 'd') { fs.mkdirSync(abs, { recursive: true }); dirs.push(rel); continue; }
-    if (e.type !== 'f') { skipped.push(rel); continue; }
+    if (e.type === 'd') { fs.mkdirSync(abs, { recursive: true }); dirs.push(rel); return; }
+    if (e.type !== 'f') { skipped.push(rel); return; }
     fs.mkdirSync(path.dirname(abs), { recursive: true });
-    fs.writeFileSync(abs, e.data);
+    fs.writeFileSync(abs, Buffer.concat(e.chunks, e.size));
     try { fs.chmodSync(abs, e.mode || 0o644); } catch { /* Windows 上可能不支持 */ }
     files.push(rel);
+  };
+
+  /** 尽可能把 pending 里的字节吃掉：先解 512 字节头，再按 size 收数据，最后跳过 512 对齐填充。 */
+  const pump = () => {
+    for (;;) {
+      if (entry) {
+        if (entry.remain > 0) {
+          if (!pending.length) return;
+          const take = Math.min(entry.remain, pending.length);
+          if (entry.type !== 'other' && entry.type !== 'd') {
+            entry.chunks.push(pending.subarray(0, take));
+            entry.got += take;
+            if (entry.got > entry.limit) throw new Error(`归档条目过大（${entry.name} 超过 ${mb(entry.limit)}MB 上限），已中止`);
+          }
+          entry.remain -= take;
+          pending = pending.subarray(take);
+          continue;
+        }
+        if (entry.pad > 0) {
+          if (!pending.length) return;
+          const take = Math.min(entry.pad, pending.length);
+          entry.pad -= take;
+          pending = pending.subarray(take);
+          continue;
+        }
+        finish(entry);
+        entry = null;
+        continue;
+      }
+      if (pending.length < 512) return;
+      const h = pending.subarray(0, 512);
+      if (h[0] === 0) { ended = true; return; }   // 全零块 = 归档结束
+      pending = pending.subarray(512);
+      const size = tarNumber(h, 124, 136);
+      const typeflag = String.fromCharCode(h[156] || 0x30);
+      const prefix = tarCString(h, 345, 500);
+      const name = nextName || (prefix ? `${prefix}/${tarCString(h, 0, 100)}` : tarCString(h, 0, 100));
+      nextName = '';
+      const meta = typeflag === 'L' || typeflag === 'x' || typeflag === 'g';
+      const limit = meta ? metaBytes : entryBytes;
+      // 头里声明的 size 就超限 → 连数据都不用收，直接中止（压缩炸弹的典型形态）
+      if (size > limit) throw new Error(`归档条目过大（${name} 声明 ${mb(size)}MB，上限 ${mb(limit)}MB），已中止（疑似压缩炸弹）`);
+      const type = (typeflag === '0' || typeflag === '\0' || typeflag === '7') ? 'f'
+        : typeflag === '5' ? 'd'
+        : meta ? typeflag : 'other';
+      entry = {
+        name, type, mode: tarNumber(h, 100, 108) & 0o777, size,
+        remain: size, pad: (512 - (size % 512)) % 512, chunks: [], got: 0, limit,
+      };
+    }
+  };
+
+  const src = Readable.from([Buffer.from(buf)]);
+  const gunzip = zlib.createGunzip({ chunkSize: 64 * 1024 });
+  src.pipe(gunzip);
+  try {
+    for await (const chunk of gunzip) {
+      unpacked += chunk.length;
+      if (unpacked > totalBytes) throw new Error(`归档解压后超过 ${mb(totalBytes)}MB 上限，已中止（疑似压缩炸弹）`);
+      pending = pending.length ? Buffer.concat([pending, chunk]) : chunk;
+      pump();
+      if (ended) break;   // 结束块之后不再消费剩余字节（炸弹的尾巴也不解）
+    }
+  } finally {
+    try { src.destroy(); } catch { /* 忽略 */ }
+    try { gunzip.destroy(); } catch { /* 忽略 */ }
   }
   return { files, dirs, skipped };
 }
@@ -293,11 +460,19 @@ export class UpdateManager {
     return process.env.LIVEGRAB_REPO || DEFAULT_REPO;
   }
 
-  _gitUrl() {
+  /** 配置里声明的原始仓库地址（可能带 userinfo——老配置把 token 写在地址里）。 */
+  _rawGitUrl() {
     const cfg = this._cfg();
     if (cfg.gitUrl) return cfg.gitUrl;
     if (cfg.repo) return `https://github.com/${cfg.repo}.git`;
     return process.env.LIVEGRAB_GIT_URL || DEFAULT_GIT_URL;
+  }
+
+  /** 实际交给 git 的地址：userinfo（user:token@）一律摘掉。
+   *  两个理由：① 它会随 argv 泄露到 /proc/<pid>/cmdline；② 它会原样进日志文件。
+   *  摘下来的 token 由 _urlToken() 接回去，仍走 extraheader 认证，功能不变。 */
+  _gitUrl() {
+    return splitGitUserInfo(this._rawGitUrl()).url;
   }
 
   _branch() {
@@ -306,10 +481,22 @@ export class UpdateManager {
     return process.env.LIVEGRAB_BRANCH || DEFAULT_BRANCH;
   }
 
+  /** 兼容老配置：token 被写进仓库地址（https://user:TOKEN@github.com/...）时，把它当 token 用。 */
+  _urlToken() {
+    const cfg = this._cfg();
+    for (const raw of [cfg.gitUrl, process.env.LIVEGRAB_GIT_URL || '']) {
+      if (!raw) continue;
+      const { pass } = splitGitUserInfo(raw);
+      if (pass) return pass;
+    }
+    return '';
+  }
+
   _token() {
     const cfg = this._cfg();
     if (cfg.token) return cfg.token;
-    return this.envToken;
+    if (this.envToken) return this.envToken;
+    return this._urlToken();
   }
 
   _api() { return `https://api.github.com/repos/${this._repo()}`; }
@@ -405,6 +592,8 @@ export class UpdateManager {
 
   /** 校验并归一化前端提交的更新源配置。
    *  repo 支持 owner/repo 或完整 https git URL；分支缺省 main；token 私有仓库必填。
+   *  带 userinfo 的地址（https://user:token@github.com/...）一律拒绝：那种写法会把 token 带进
+   *  日志文件、/api/update/status 响应和 git 子进程命令行，token 必须走独立的 Token 字段。
    *  返回 { repo, gitUrl, branch, token }，供 UI 即时回显与持久化到 settings.customize。 */
   normalizeRepoConfig({ repo = '', branch = '', token = '' } = {}) {
     const r = String(repo || '').trim();
@@ -413,8 +602,12 @@ export class UpdateManager {
     if (!r) throw new Error('仓库地址不能为空');
     let gitUrl = '', ownerRepo = '';
     if (/^https?:\/\//.test(r)) {
-      gitUrl = r;
-      ownerRepo = parseOwnerRepoFromGitHubUrl(r);
+      const { url, user, pass } = splitGitUserInfo(r);
+      if (user || pass) {
+        throw new Error('仓库地址不要包含用户名/密码（Token 请填在下面的「Token」字段：它以 http.extraheader 注入 git，不会写进日志与配置地址）');
+      }
+      gitUrl = url || r;
+      ownerRepo = parseOwnerRepoFromGitHubUrl(gitUrl);
     } else if (/^[\w.-]+\/[\w.-]+$/.test(r)) {
       ownerRepo = r;
       gitUrl = `https://github.com/${r}.git`;
@@ -446,12 +639,21 @@ export class UpdateManager {
     if (task) this.state.task = task;
   }
 
-  /** 返回 git 认证参数（临时注入，不改仓库 config）。私有仓库无本地凭据时用 token 走 extraheader。 */
-  _gitAuthArgs() {
+  /** git 认证走环境变量 GIT_CONFIG_*，绝不拼进 argv。
+   *  为什么：子进程的命令行对同主机任何进程都可读（/proc/<pid>/cmdline），token 拼进 -c 参数等于公开泄露；
+   *  GIT_CONFIG_COUNT / GIT_CONFIG_KEY_n / GIT_CONFIG_VALUE_n 等价于 `-c key=value`，只对本次 git 子进程生效，
+   *  也不改仓库的 .git/config（git ≥ 2.31 支持；更老的 git 会忽略这几项，认证失败会落到「填 Token」的提示上）。 */
+  _gitAuthEnv() {
     const t = this._token();
-    if (!t) return [];
-    const b64 = Buffer.from(`x-access-token:${t}`).toString('base64');
-    return ['-c', `http.extraheader=Authorization: Basic ${b64}`];
+    if (!t) return {};
+    const b64 = Buffer.from(`x-access-token:${t}`).toString(`base64`);
+    // 尊重调用方环境里已有的 GIT_CONFIG_n：追加一项，而不是把别人配的项覆盖掉
+    const used = Math.max(0, Number.parseInt(process.env.GIT_CONFIG_COUNT || `0`, 10) || 0);
+    return {
+      GIT_CONFIG_COUNT: String(used + 1),
+      [`GIT_CONFIG_KEY_${used}`]: `http.extraheader`,
+      [`GIT_CONFIG_VALUE_${used}`]: `Authorization: Basic ${b64}`,
+    };
   }
 
   /** git 子进程环境：禁用一切交互式凭据提示。
@@ -480,6 +682,8 @@ export class UpdateManager {
       env.NO_PROXY = '';
       env.no_proxy = '';
     }
+    // 认证同样走环境变量（见 _gitAuthEnv）：token 不进 argv、也不写进权威仓库的 config
+    Object.assign(env, this._gitAuthEnv());
     return env;
   }
 
@@ -492,9 +696,10 @@ export class UpdateManager {
     return ['-c', `http.proxy=${proxy}`, '-c', `https.proxy=${proxy}`];
   }
 
-  /** 组装一次 fetch 的完整参数（传输层抗抖动参数 + 认证参数 + 兜底超时）。 */
+  /** 组装一次 fetch 的完整参数（传输层抗抖动参数 + 代理 -c + 兜底超时）。
+   *  认证不在参数里：token 由 _gitEnv() 的 GIT_CONFIG_* 注入（进 argv 会被 /proc 读走）。 */
   _buildFetchArgs(gitUrl, branch, { legacyRefs = false } = {}) {
-    return [...this._gitProxyArgs(), ...gitTransportArgs({ legacyRefs }), ...this._gitAuthArgs(), 'fetch', gitUrl, branch];
+    return [...this._gitProxyArgs(), ...gitTransportArgs({ legacyRefs }), 'fetch', gitUrl, branch];
   }
 
   /** git 拉取（带降级重试）。返回 { ok, code, out, err, attempt, label, tried }。
@@ -524,15 +729,17 @@ export class UpdateManager {
     return String(s || '').split('\n').map((x) => x.trim()).filter(Boolean)[0] || '无输出';
   }
 
-  /** 针对不同失败原因给出可操作建议（真正能救命的提示都写在这里）。 */
+  /** 针对不同失败原因给出可操作建议（真正能救命的提示都写在这里）。
+   *  注意：gitUrl 在写进日志/手动命令前必须脱敏——用户可能把 token 写在地址里，日志会落盘到 /config/logs。 */
   _logGitAdvice(kind, gitUrl, branch, env) {
-    const cmd = `git -c http.version=HTTP/1.1 -c protocol.version=0 fetch ${gitUrl} ${branch}`;
+    const safeUrl = redactUrl(gitUrl);
+    const cmd = `git -c http.version=HTTP/1.1 -c protocol.version=0 fetch ${safeUrl} ${branch}`;
     if (kind === 'http2') {
       this._log('INFO', '该错误来自网络中间设备/代理改写了 HTTP2 连接（curl 16 / expected flush after ref listing）。');
       this._log('INFO', `已自动降级 HTTP/1.1 + protocol v0 重试仍失败，可在${env.inContainer ? '宿主机执行容器的 git，或' : ''}源码目录手动验证：${cmd}`);
       this._log('INFO', '若宿主机同样报错，请检查代理/网关（公司网络、软路由、科学上网工具常改写长连接）。');
     } else if (kind === 'network') {
-      this._log('INFO', `无法连接仓库地址，请确认网络与 DNS：${gitUrl}`);
+      this._log('INFO', `无法连接仓库地址，请确认网络与 DNS：${safeUrl}`);
       this._log('INFO', '需要在页面「系统设置 → 平台账号 → 网络代理」里配置代理？配好后重试即可（失败会自动改直连）。');
     } else if (kind === 'auth') {
       this._log('INFO', '认证失败：私有仓库请在「更新源配置」里填写 GitHub Token（或设置环境变量 LIVEGRAB_GITHUB_TOKEN）后重试。');
@@ -597,7 +804,7 @@ export class UpdateManager {
     const tmp = path.join(os.tmpdir(), `lg-snap-${Date.now()}-${process.pid}`);
     await fsp.mkdir(tmp, { recursive: true });
     try {
-      const { files, skipped } = extractTarGzTo(buf, tmp);
+      const { files, skipped } = await extractTarGzTo(buf, tmp);
       if (!files.length) throw new Error('归档解析后没有任何文件');
       if (!fs.existsSync(path.join(tmp, 'app', 'server', 'server.js')) || !fs.existsSync(path.join(tmp, 'app', 'package.json'))) {
         throw new Error('归档结构异常（缺少 app/server/server.js 或 app/package.json），已放弃');
@@ -824,10 +1031,10 @@ export class UpdateManager {
     if (staleGit) await this._logStaleGit(env, marker);
     if (env.gitAvailable && env.gitRoot && !staleGit) {
       const [sha, br, at, tg] = await Promise.all([
-        run('git', ['rev-parse', '--short=12', 'HEAD'], { cwd: env.gitRoot }),
-        run('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: env.gitRoot }),
-        run('git', ['log', '-1', '--format=%cI', 'HEAD'], { cwd: env.gitRoot }),
-        run('git', ['describe', '--tags', '--exact-match', 'HEAD'], { cwd: env.gitRoot }).then((r) => r.ok ? r.out.trim() : ''),
+        run('git', ['rev-parse', '--short=12', 'HEAD'], { cwd: env.gitRoot, env: this._gitEnv() }),
+        run('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: env.gitRoot, env: this._gitEnv() }),
+        run('git', ['log', '-1', '--format=%cI', 'HEAD'], { cwd: env.gitRoot, env: this._gitEnv() }),
+        run('git', ['describe', '--tags', '--exact-match', 'HEAD'], { cwd: env.gitRoot, env: this._gitEnv() }).then((r) => r.ok ? r.out.trim() : ''),
       ]);
       if (sha.ok) commit = sha.out;
       if (br.ok) branch = br.out;
@@ -1102,7 +1309,7 @@ export class UpdateManager {
         this._phase('done', 15, '需手动更新');
         this._log('WARN', '未检测到可用 git 工作区，无法在线更新（容器部署不受影响：容器走归档通道）');
         const branch = this._branch();
-        const gitUrl = this._gitUrl();
+        const gitUrl = redactUrl(this._gitUrl());
         this._log('INFO', `请在源码目录手动执行：git -c http.version=HTTP/1.1 pull ${gitUrl} ${branch} && npm install`);
         this._log('INFO', '已生成手动更新指引。更新后重启服务即可生效。');
         this._phase('done', 100, '需手动更新');
@@ -1113,9 +1320,9 @@ export class UpdateManager {
       // 直接以配置的仓库地址作为 fetch 的远端，避免仓库里残留的 origin 指向别处导致拉到旧代码。
       const branch = this._branch();
       const gitUrl = this._gitUrl();
-      // ② fetch（传输层抗抖动 + 逐级降级重试 + 认证注入）
+      // ② fetch（传输层抗抖动 + 逐级降级重试 + 认证注入 env）
       this._phase('fetch', 20, '拉取远端代码');
-      this._log('INFO', `准备从更新源拉取代码：${gitUrl}（分支 ${branch}）…`);
+      this._log('INFO', `准备从更新源拉取代码：${redactUrl(gitUrl)}（分支 ${branch}）…`);
       const fetchR = await this._fetchWithRetry(env, gitUrl, branch);
 
       if (fetchR.ok) {
@@ -1156,7 +1363,7 @@ export class UpdateManager {
         if (!ffR.ok) {
           this._phase('error', 60, '');
           this._log('ERR', `代码更新失败（非快进或本地有改动，exit ${ffR.code}）：${this._firstLine(ffR.err || ffR.out)}`);
-          this._log('INFO', `请先提交或暂存本地改动后重试，或手动执行 git -C ${env.gitRoot} pull --ff-only ${gitUrl} ${branch}`);
+          this._log('INFO', `请先提交或暂存本地改动后重试，或手动执行 git -C ${env.gitRoot} pull --ff-only ${redactUrl(gitUrl)} ${branch}`);
           this._log('INFO', '代码未被改动；处理完后可直接再次点击「立即更新」重试。');
           return;
         }
@@ -1184,7 +1391,7 @@ export class UpdateManager {
           return;
         }
         this._phase('fetch', 30, '改用快照通道');
-        this._log('WARN', `git 传输不可用，改用「快照通道」：普通 HTTPS 下载分支归档 ${snapUrl}`);
+        this._log('WARN', `git 传输不可用，改用「快照通道」：普通 HTTPS 下载分支归档 ${redactUrl(snapUrl)}`);
         try {
           const buf = await this._downloadSnapshot();
           const info = await this._applySnapshot(buf, env, latest);
@@ -1346,6 +1553,129 @@ export class UpdateManager {
     return run('npm', ['install', '--omit=dev', '--no-audit', '--no-fund'], { cwd: dir, timeout: 300000, env });
   }
 
+  /** 新依赖先「寄存」到基线旁边的临时目录，暂存区只留指向它的软链。
+   *
+   *  为什么不能像以前那样直接换基线：装依赖发生在 _swapIn 之前，那时正在跑的旧代码还在用
+   *  旧基线。若先把 <base> 挪走、把新依赖放到 <base>，一旦 _swapIn 失败，旧代码就带着新依赖继续跑
+   *  （better-sqlite3 这类原生模块换 ABI 直接崩），「更新失败 = 服务照常跑」的承诺当场失效。
+   *
+   *  返回 { base, newBase }（供切换成功后 _commitDepsBaseline 转正）；失败返回 null（依赖随代码留在运行目录，功能不受影响）。 */
+  _stageDepsBaseline(stageApp) {
+    const base = this.depsDir || '/opt/node_modules';
+    const newBase = `${base}.new-${process.pid}`;
+    const src = path.join(stageApp, 'node_modules');
+    try {
+      fs.rmSync(newBase, { recursive: true, force: true });
+      fs.mkdirSync(path.dirname(newBase), { recursive: true });
+      try {
+        fs.renameSync(src, newBase);
+      } catch {
+        // 跨文件系统（EXDEV）等：退回复制，再删掉暂存区里的实体目录
+        fs.cpSync(src, newBase, { recursive: true, dereference: true });
+        fs.rmSync(src, { recursive: true, force: true });
+      }
+      fs.rmSync(src, { recursive: true, force: true });
+      fs.symlinkSync(newBase, src, process.platform === 'win32' ? 'junction' : 'dir');
+      return { base, newBase };
+    } catch (e) {
+      // 尽力把依赖放回暂存区：宁可这次沿用旧做法（依赖随代码进运行目录），也不能让新版本没有依赖
+      try {
+        if (!fs.existsSync(src) && fs.existsSync(newBase)) {
+          try { fs.renameSync(newBase, src); } catch { fs.cpSync(newBase, src, { recursive: true, dereference: true }); }
+        }
+      } catch { /* 尽力而为 */ }
+      this._log('WARN', `新依赖没能暂存到基线旁（${e.message}）：本次依赖随代码留在运行目录，功能不受影响`);
+      return null;
+    }
+  }
+
+  /** 切换成功之后才把寄存的新依赖转正成基线：base.prev ← base ← newBase，并把运行目录的依赖入口指回 base。
+   *  失败不致命：新代码仍指向 <newBase>（可用），旧基线留在 base（下次容器重建时清理）。 */
+  _commitDepsBaseline({ base, newBase }, target) {
+    const prevBase = `${base}.prev`;
+    let movedPrev = false;
+    try {
+      fs.rmSync(prevBase, { recursive: true, force: true });
+      if (fs.existsSync(base)) { fs.renameSync(base, prevBase); movedPrev = true; }
+      fs.renameSync(newBase, base);
+    } catch (e) {
+      if (movedPrev && !fs.existsSync(base)) { try { fs.renameSync(prevBase, base); } catch { /* 还原不了就保持 base 缺位 */ } }
+      this._log('WARN', `依赖基线没能转正（${e.message}）：新版本仍指向 ${newBase}（可用），旧基线保持在 ${base}`);
+      return false;
+    }
+    try {
+      const link = path.join(target, 'node_modules');
+      let isLink = false;
+      try { isLink = fs.lstatSync(link).isSymbolicLink(); } catch { /* 不存在 */ }
+      if (isLink) fs.rmSync(link, { force: true });
+      fs.symlinkSync(base, link, process.platform === 'win32' ? 'junction' : 'dir');
+    } catch (e) {
+      // 指不回 base 也要给新版本留一个能用的依赖入口：退回指向寄存目录
+      try { if (!fs.existsSync(path.join(target, 'node_modules'))) fs.symlinkSync(newBase, path.join(target, 'node_modules'), process.platform === 'win32' ? 'junction' : 'dir'); } catch { /* 尽力而为 */ }
+      this._log('WARN', `运行目录的依赖入口没能指回 ${base}（${e.message}）：当前指向 ${newBase}，仍然可用`);
+    }
+    this._log('OK', `依赖已成为新的基线 ${base}（上一份留在 ${prevBase}，下次容器启动时清掉）`);
+    return true;
+  }
+
+  /* ---------- 跨进程更新锁 ---------- */
+
+  /** 锁文件放在落位目标旁边（<target>.update.lock）：和暂存区、备份同级，切换时不会被卷进去。 */
+  _lockFileFor(target) { return `${target}.update.lock`; }
+
+  /** 抢跨进程更新锁（O_CREAT|O_EXCL 创建，内容 = pid + 时间戳 + 主机名）。
+   *
+   *  为什么进程内 state.running 不够：宿主上可能有人手动跑更新脚本，容器里同时有人点「立即更新」，
+   *  两个进程会同时 rm/解包同一个 <运行目录>.stage，最后装出一份半新半旧的代码。
+   *  用 O_EXCL 建锁文件做仲裁：谁建成功谁干活，另一个直接报「另一个更新进程正在进行」。
+   *  超时（UPDATE_LOCK_TTL_MS）自动失效——更新进程被 kill 掉时锁会留下，不能让人永久无法更新。 */
+  _acquireUpdateLock(target) {
+    const file = this._lockFileFor(target);
+    const payload = JSON.stringify({ pid: process.pid, at: Date.now(), host: os.hostname() });
+    const take = () => {
+      const fd = fs.openSync(file, 'wx');   // 'wx' = O_CREAT | O_EXCL | O_WRONLY，已存在则 EEXIST
+      try { fs.writeSync(fd, payload); } finally { fs.closeSync(fd); }
+    };
+    try { fs.mkdirSync(path.dirname(file), { recursive: true }); } catch { /* 父目录已存在 */ }
+    try {
+      take();
+      this.state.lockFile = file;
+      return { file };
+    } catch (e) {
+      if (e.code !== 'EEXIST') throw new Error(`无法创建更新锁（${file}）：${e.code || e.message}`);
+      const info = this._readUpdateLock(file);
+      const age = Date.now() - (Number(info.at) || 0);
+      if (info.at && age >= 0 && age <= UPDATE_LOCK_TTL_MS) {
+        const who = info.pid ? `PID ${info.pid}` : '未知进程';
+        throw new Error(`另一个更新进程正在进行（${who}${info.host ? `@${info.host}` : ''}，已运行 ${Math.max(0, Math.round(age / 60000))} 分钟）：请等它结束后再试`);
+      }
+      this._log('WARN', `发现过期的更新锁（${file}${info.pid ? `，PID ${info.pid}` : ''}${info.at ? `，${Math.round(Math.max(0, age) / 60000)} 分钟前` : ''}），清理后继续`);
+      try { fs.rmSync(file, { force: true }); } catch { /* 忽略 */ }
+      try {
+        take();
+        this.state.lockFile = file;
+        return { file, reclaimed: true };
+      } catch (e2) {
+        throw new Error(`另一个更新进程正在进行（更新锁 ${file} 抢不到：${e2.code || e2.message}）：请稍后再试`);
+      }
+    }
+  }
+
+  _readUpdateLock(file) {
+    try { return JSON.parse(fs.readFileSync(file, 'utf8')) || {}; } catch { return {}; }
+  }
+
+  /** 放锁：只删自己创建的那把（pid 对不上说明已被别的进程接手，别动）。 */
+  _releaseUpdateLock(lock) {
+    if (!lock || !lock.file) return;
+    try {
+      const info = this._readUpdateLock(lock.file);
+      if (info.pid && Number(info.pid) !== process.pid) return;
+      fs.rmSync(lock.file, { force: true });
+    } catch { /* 忽略 */ }
+    if (this.state.lockFile === lock.file) this.state.lockFile = '';
+  }
+
   /** 下载源码归档（tar.gz，按 commit 或标签）。私有仓库带 token；走代理失败会自动直连（见 _fetch）。 */
   async _downloadArchive(url, label) {
     const headers = { 'User-Agent': UA };
@@ -1357,7 +1687,7 @@ export class UpdateManager {
     }
     const buf = Buffer.from(await r.arrayBuffer());
     if (!buf.length) throw new Error('归档内容为空');
-    if (buf.length > 128 * 1024 * 1024) throw new Error('归档过大（>128MB），已放弃');
+    if (buf.length > MAX_ARCHIVE_BYTES) throw new Error(`归档过大（>${Math.round(MAX_ARCHIVE_BYTES / 1048576)}MB），已放弃`);
     return buf;
   }
 
@@ -1365,73 +1695,114 @@ export class UpdateManager {
    *  成功后的旧目录不立刻删：此刻进程 cwd 还指着它，删掉会让「重启失败」失去退路；
    *  留着当手动回滚点（`mv .run.old .run`），下次更新开头才会被替换掉。
    *
+   *  注意：上一版的 <target>.old 是唯一的手动回滚点，**不能在动刀之前就 rm**——
+   *  改成先 rename 到旁边（同盘瞬时），切换成功后才彻底删；中途失败则原样挪回来。
+   *
    *  个别环境不允许对目标整目录改名（运行目录被挂成宿主 bind mount → EBUSY，跨文件系统 → EXDEV）：
    *  退回「备份 + 逐文件覆盖」，功能一致，只是切换不是原子操作。 */
   _swapIn(newApp, target, oldDir) {
     fs.mkdirSync(path.dirname(target), { recursive: true });
-    fs.rmSync(oldDir, { recursive: true, force: true });
-    const hadCur = fs.existsSync(target);
-    let moved = false; // 旧目录是否已改名挪走（失败时要挪回来）
+    // 先把上一版备份挪到旁边：保留到切换成功为止（失败要能还原成原来的回滚点）
+    const staleOld = `${oldDir}.stale-${process.pid}`;
+    let parkedOld = false;
     try {
-      if (hadCur) { fs.renameSync(target, oldDir); moved = true; }
-      fs.renameSync(newApp, target);
-      return { target, how: 'rename' };
-    } catch (e) {
-      if (moved) {
-        try { fs.renameSync(oldDir, target); } catch { /* 挪不回来也没关系：旧目录还在 <target>.old */ }
+      if (fs.existsSync(oldDir)) {
+        fs.rmSync(staleOld, { recursive: true, force: true });
+        fs.renameSync(oldDir, staleOld);
+        parkedOld = true;
       }
-      if (!hadCur) throw new Error(`切换新版本失败：${e.message}`);
-      this._log('WARN', `运行目录不能整目录改名（${e.code || e.message}），改用「备份 + 覆盖」方式切换`);
-    }
-    // 覆盖式切换：先把旧目录整体备份（留着回滚），再把新版本逐项覆盖进去
-    fs.rmSync(oldDir, { recursive: true, force: true });
-    fs.cpSync(target, oldDir, { recursive: true, dereference: false });
-    // 先读清单（relFiles 的 withFileTypes 不会跟进软链），再动文件
-    const names = fs.readdirSync(newApp);
-    // 依赖单独处理：老版本若把 node_modules 做成了目录，cpSync 会往「指向基线的软链」里继续写
-    // （→ 把基线污染成新旧混合）；所以先摘掉目标的依赖入口（软链只删链接本身，不碰基线）
-    const stagedDeps = path.join(newApp, 'node_modules');
-    for (const prefix of [target, oldDir]) {
-      const p = path.join(prefix, 'node_modules');
-      try { if (fs.lstatSync(p).isSymbolicLink()) fs.rmSync(p, { force: true }); else fs.rmSync(p, { recursive: true, force: true }); } catch { /* 不存在 */ }
-    }
-    for (const n of names) {
-      if (n === 'node_modules') continue;
-      fs.cpSync(path.join(newApp, n), path.join(target, n), { recursive: true, force: true, dereference: false });
-    }
-    // 新版本里已不存在的旧文件也清掉（递归比对，含子目录里的残留），别把上一版留在运行目录
-    const relEntries = (base, sub = '', out = []) => {
-      for (const e of fs.readdirSync(path.join(base, sub), { withFileTypes: true })) {
-        const rel = sub ? `${sub}/${e.name}` : e.name;
-        if (e.isDirectory()) relEntries(base, rel, out);
-        else out.push(rel);
-      }
-      return out;
+    } catch { /* 挪不动（跨盘/被占用）：退回原逻辑，后面按需覆盖 */ }
+    const dropParked = () => { try { fs.rmSync(staleOld, { recursive: true, force: true }); } catch { /* 忽略 */ } };
+    const restoreParked = () => {
+      if (!parkedOld) return;
+      try {
+        fs.rmSync(oldDir, { recursive: true, force: true });   // 可能是半途而废的备份
+        fs.renameSync(staleOld, oldDir);
+      } catch { /* 还原不了就只能靠 <target> 自身（仍指向旧版本）继续跑 */ }
     };
-    const fresh = new Set(relEntries(newApp));
-    for (const rel of relEntries(target)) {
-      if (rel === 'node_modules' || rel.startsWith('node_modules/') || rel.startsWith('node_modules\\')) continue; // 依赖与代码无关，保留
-      if (!fresh.has(rel)) fs.rmSync(path.join(target, rel), { recursive: true, force: true });
-    }
-    // 再放依赖入口：软链按「链接本身」整体复制，绝不 dereference（否则会把 27MB 基线拷进运行目录）
     try {
-      const link = fs.lstatSync(stagedDeps);
-      if (link.isSymbolicLink()) fs.symlinkSync(fs.readlinkSync(stagedDeps), path.join(target, 'node_modules'), process.platform === 'win32' ? 'junction' : 'dir');
-      else fs.cpSync(stagedDeps, path.join(target, 'node_modules'), { recursive: true, force: true, dereference: false });
-    } catch { /* 新版本没有依赖目录：保持上面摘除后的状态，启动时会由 entrypoint 补软链 */ }
-    fs.rmSync(newApp, { recursive: true, force: true });
-    return { target, how: 'copy' };
+      const hadCur = fs.existsSync(target);
+      let moved = false; // 旧目录是否已改名挪走（失败时要挪回来）
+      try {
+        if (hadCur) { fs.renameSync(target, oldDir); moved = true; }
+        fs.renameSync(newApp, target);
+        dropParked();
+        return { target, how: 'rename' };
+      } catch (e) {
+        if (moved) {
+          try { fs.renameSync(oldDir, target); } catch { /* 挪不回来也没关系：旧目录还在 <target>.old */ }
+        }
+        if (!hadCur) throw new Error(`切换新版本失败：${e.message}`);
+        this._log('WARN', `运行目录不能整目录改名（${e.code || e.message}），改用「备份 + 覆盖」方式切换`);
+      }
+      // 覆盖式切换：先把旧目录整体备份（留着回滚），再把新版本逐项覆盖进去
+      fs.rmSync(oldDir, { recursive: true, force: true });
+      fs.cpSync(target, oldDir, { recursive: true, dereference: false });
+      // 先读清单（relFiles 的 withFileTypes 不会跟进软链），再动文件
+      const names = fs.readdirSync(newApp);
+      // 依赖单独处理：老版本若把 node_modules 做成了目录，cpSync 会往「指向基线的软链」里继续写
+      // （→ 把基线污染成新旧混合）；所以先摘掉目标的依赖入口（软链只删链接本身，不碰基线）
+      const stagedDeps = path.join(newApp, 'node_modules');
+      for (const prefix of [target, oldDir]) {
+        const p = path.join(prefix, 'node_modules');
+        try { if (fs.lstatSync(p).isSymbolicLink()) fs.rmSync(p, { force: true }); else fs.rmSync(p, { recursive: true, force: true }); } catch { /* 不存在 */ }
+      }
+      for (const n of names) {
+        if (n === 'node_modules') continue;
+        fs.cpSync(path.join(newApp, n), path.join(target, n), { recursive: true, force: true, dereference: false });
+      }
+      // 新版本里已不存在的旧文件也清掉（递归比对，含子目录里的残留），别把上一版留在运行目录
+      const relEntries = (base, sub = '', out = []) => {
+        for (const e of fs.readdirSync(path.join(base, sub), { withFileTypes: true })) {
+          const rel = sub ? `${sub}/${e.name}` : e.name;
+          if (e.isDirectory()) relEntries(base, rel, out);
+          else out.push(rel);
+        }
+        return out;
+      };
+      const fresh = new Set(relEntries(newApp));
+      for (const rel of relEntries(target)) {
+        if (rel === 'node_modules' || rel.startsWith('node_modules/') || rel.startsWith('node_modules\\')) continue; // 依赖与代码无关，保留
+        if (!fresh.has(rel)) fs.rmSync(path.join(target, rel), { recursive: true, force: true });
+      }
+      // 再放依赖入口：软链按「链接本身」整体复制，绝不 dereference（否则会把 27MB 基线拷进运行目录）
+      try {
+        const link = fs.lstatSync(stagedDeps);
+        if (link.isSymbolicLink()) fs.symlinkSync(fs.readlinkSync(stagedDeps), path.join(target, 'node_modules'), process.platform === 'win32' ? 'junction' : 'dir');
+        else fs.cpSync(stagedDeps, path.join(target, 'node_modules'), { recursive: true, force: true, dereference: false });
+      } catch { /* 新版本没有依赖目录：保持上面摘除后的状态，启动时会由 entrypoint 补软链 */ }
+      fs.rmSync(newApp, { recursive: true, force: true });
+      dropParked();
+      return { target, how: 'copy' };
+    } catch (e) {
+      // 切换彻底失败：把挪走的上一版备份还原回 <target>.old（回滚点不能丢）
+      restoreParked();
+      throw e;
+    }
   }
 
   /** 容器内更新：查远端 HEAD →（commit 不同才）下载该提交的归档 → 解包校验 → 组装 → 原子切换 → 自重启。
-   *  commit 相同则什么都不下载、不重启，日志写一条「已是最新代码」。 */
+   *  commit 相同则什么都不下载、不重启，日志写一条「已是最新代码」。
+   *  互斥两层：进程内 state.running（同一进程并发点击）+ 落位目标旁的 O_EXCL 锁文件
+   *  （宿主手动更新与容器页面各跑一个进程，光靠内存态挡不住）。 */
   async _runArchiveUpdate(env, local) {
     // 落位目标 =「正在跑的那一份」目录（整目录替换，重启后仍是它）
     const t = this._runTarget();
     if (t.legacyImage) {
       this._log('WARN', `当前跑的是镜像内置代码（${t.runDir}）：镜像层目录不能整目录替换，新版本落位到 ${t.target}，重启后运行它；用新镜像重建容器后会自动改用运行目录`);
     }
+    // 锁必须在「建暂存区 / 解包」之前拿到：两个进程同时解包同一个 <target>.stage 会互相 rm，
+    // 最后装出一份半新半旧的代码。抢不到锁时抛错，页面/日志直接看到「另一个更新进程正在进行」。
+    const lock = this._acquireUpdateLock(t.target);
+    try {
+      await this._runArchiveUpdateLocked(t, local);
+    } finally {
+      this._releaseUpdateLock(lock);
+    }
+  }
 
+  /** 归档更新的主体（调用方已持有跨进程锁）。 */
+  async _runArchiveUpdateLocked(t, local) {
     await this.fetchRemote();
     const latest = this.state.latest;
     this.state.progress = 8;
@@ -1453,8 +1824,8 @@ export class UpdateManager {
     this._log('INFO', `发现新代码 ${label}（远端标签 ${latest.tag}，本地 ${from}），开始下载源码归档…`);
     this._phase('fetch', 20, `下载 ${label}`);
     const buf = await this._downloadArchive(url, label);
-    const mb = buf.length / 1048576;
-    this._log('OK', `归档下载完成（${mb >= 1 ? `${mb.toFixed(1)} MB` : `${Math.max(1, Math.round(buf.length / 1024))} KB`}）`);
+    const mbSize = buf.length / 1048576;
+    this._log('OK', `归档下载完成（${mbSize >= 1 ? `${mbSize.toFixed(1)} MB` : `${Math.max(1, Math.round(buf.length / 1024))} KB`}）`);
 
     // 解包到落位目标旁的暂存区：与之同一盘、同一层，后面才能用 rename 原子切换
     const stage = `${t.target}.stage`;
@@ -1463,8 +1834,11 @@ export class UpdateManager {
     fs.rmSync(stage, { recursive: true, force: true });
     fs.mkdirSync(stage, { recursive: true });
     let depsInstalled = false;
+    let pendingDeps = null;   // 新依赖的「寄存」位置：切换成功后才转正成基线
+    let switched = false;
     try {
-      const info = extractTarGzTo(buf, stage);
+      // 流式解包 + 单条目/解压总量上限（不再一次性 gunzipSync 整包，压缩炸弹解不动也炸不了内存）
+      const info = await extractTarGzTo(buf, stage);
       if (!fs.existsSync(path.join(stageApp, 'server', 'server.js')) || !fs.existsSync(path.join(stageApp, 'package.json'))) {
         throw new Error('归档结构异常（缺少 app/server/server.js 或 app/package.json），已放弃');
       }
@@ -1490,19 +1864,9 @@ export class UpdateManager {
         }
         depsInstalled = true;
         this._log('OK', '依赖安装完成');
-        // 装好的依赖挪进基线目录、运行目录里只留软链：维持「依赖独立于代码」——
-        // 之后每次更新都是整目录替换，永远不必重复下载依赖，也不会把依赖卷进切换目标。
-        try {
-          const base = this.depsDir || '/opt/node_modules';
-          const prevBase = `${base}.prev`;
-          fs.rmSync(prevBase, { recursive: true, force: true });
-          if (fs.existsSync(base)) fs.renameSync(base, prevBase);
-          fs.renameSync(path.join(stageApp, 'node_modules'), base);
-          fs.symlinkSync(base, path.join(stageApp, 'node_modules'), process.platform === 'win32' ? 'junction' : 'dir');
-          this._log('OK', `依赖已成为新的基线 ${base}（上一份留在 ${prevBase}，下次容器启动时清掉）`);
-        } catch (e) {
-          this._log('WARN', `依赖没能挪进基线目录（${e.message}）：本次依赖随代码留在运行目录，功能不受影响`);
-        }
+        // 新依赖先挪到基线「旁边」、暂存区只留软链：此刻绝不能动旧代码正在用的 base。
+        // 转正（base.prev ← base ← newBase）放在切换成功之后，见下面的 _commitDepsBaseline。
+        pendingDeps = this._stageDepsBaseline(stageApp);
       } else {
         const how = this._linkNodeModules(stageApp, t.target);
         this._log('OK', how === 'link'
@@ -1528,10 +1892,20 @@ export class UpdateManager {
 
       this._phase('switch', 82, `切换到 ${label}`);
       const sw = this._swapIn(stageApp, t.target, `${t.target}.old`);
+      switched = true;
       this._log('OK', `代码已切换到 ${label}（${sw.target}${sw.how === 'copy' ? '，覆盖式' : ''}）`);
+      // 切换成功之后才换依赖基线：早于切换的替换会让「更新失败、仍在跑的旧代码」用上新依赖
+      if (pendingDeps) this._commitDepsBaseline(pendingDeps, t.target);
     } catch (e) {
-      // 失败：整个暂存区丢掉，旧版本目录没被动过，服务继续正常录制
+      // 失败：暂存区整个丢掉（寄存的新依赖也在里面/旁边，一并清掉）。
+      // 旧运行目录、旧依赖基线、上一版备份 <target>.old 都没被替换——如实把改了什么写进日志。
+      // 已经切换成功时才不能删寄存的依赖：新代码的 node_modules 正指着它。
+      if (pendingDeps && !switched) { try { fs.rmSync(pendingDeps.newBase, { recursive: true, force: true }); } catch { /* 忽略 */ } }
       try { fs.rmSync(stage, { recursive: true, force: true }); } catch { /* 忽略 */ }
+      const backup = fs.existsSync(`${t.target}.old`) ? `，上一版备份仍在 ${t.target}.old` : '';
+      this._log('INFO', switched
+        ? `切换已完成但后续步骤失败（${e.message || e}）${backup}：可手动回滚`
+        : `本次更新已放弃${depsInstalled ? '（临时安装的依赖随暂存区一并丢弃）' : ''}：运行目录与依赖基线均未替换${backup}`);
       throw e;
     }
     try { fs.rmSync(stage, { recursive: true, force: true }); } catch { /* 忽略 */ }
@@ -1626,7 +2000,8 @@ export class UpdateManager {
       // 快照通道状态：非空表示工作区由 tar.gz 快照更新、.git 索引待对齐（前端据此提示）
       snapshot: s.snapshot || null,
       repo: this._repo(),
-      gitUrl: this._gitUrl(),
+      // 仓库地址可能带 userinfo（老配置）→ 一律脱敏：这个响应会直接显示在更新页上
+      gitUrl: redactUrl(this._gitUrl()),
       branch: this._branch(),
       tokenConfigured: !!this._token(),
       authHint: !!(s.latest && s.latest.authHint) ? s.latest.authHint : '',

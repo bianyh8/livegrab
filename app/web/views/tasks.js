@@ -24,6 +24,9 @@ const state = {
   pages: 1,
   hash: '',
   pending: false,
+  /* 请求飞行中用户又点了翻页/筛选：不能在 tick 开头静默丢弃，标记后由本轮 finally 再跑一次 */
+  reloadQueued: false,
+  reloadFull: false,
   bound: false,
   openNew: false,
   filterOpen: false, // 查询条件默认折叠
@@ -33,6 +36,9 @@ let boundRoot = null;
 let offModal = null;
 let offRefresh = null;
 let boundCtx = null;
+/* 搜索框防抖定时器提到模块级：destroy 里必须 clearTimeout，
+   否则切页后 300ms 到点仍会 tick() 打到旧视图（甚至重绘已卸载的根节点）。 */
+let searchTimer = null;
 
 /* 分页：默认每页 10 条（任务/文件/回收站统一） */
 const PAGE_SIZE = 10;
@@ -48,19 +54,30 @@ export async function render(root, ctx) {
   if (offRefresh) { offRefresh(); offRefresh = null; }
   offRefresh = ctx.onRefresh(() => tick(ctx, false));
   await tick(ctx, true);
+  /* 跨页「新建/详情」：app.js 把请求存在 runtime.pendingModal，这里渲染完成后取走执行
+     （不再靠 80ms setTimeout 猜挂载完成）。同页请求仍走 open-task-modal 事件。 */
+  if (typeof ctx.takePendingTaskModal === 'function') {
+    const pending = ctx.takePendingTaskModal();
+    if (pending) openTaskDialog(ctx, pending.id || null);
+  }
 }
 
 export function destroy() {
   if (offModal) { offModal(); offModal = null; }
   if (offRefresh) { offRefresh(); offRefresh = null; }
+  if (searchTimer) { clearTimeout(searchTimer); searchTimer = null; }
   state.bound = false;
   state.openNew = false;
   boundRoot = null;
 }
 
 async function tick(ctx, full) {
-  if (state.pending) return;
+  /* 请求还没回来时用户又点了翻页/筛选：老写法 `if (state.pending) return;` 会把这次点击
+     静默丢掉（页码变了但列表还是旧页）。改成脏标记，finally 里按最新 state 再跑一次。 */
+  if (state.pending) { state.reloadQueued = true; state.reloadFull = state.reloadFull || !!full; return; }
   state.pending = true;
+  state.reloadQueued = false;
+  state.reloadFull = false;
   try {
     if (!state.platforms.length) {
       try {
@@ -85,6 +102,12 @@ async function tick(ctx, full) {
     }
   } finally {
     state.pending = false;
+    if (state.reloadQueued) {
+      state.reloadQueued = false;
+      const queuedFull = state.reloadFull;
+      state.reloadFull = false;
+      void tick(ctx, queuedFull); // 期间被点掉的翻页/筛选：立刻按最新状态补跑
+    }
   }
 }
 
@@ -129,12 +152,18 @@ function platName(id) {
 
 /* ---------- 渲染 ---------- */
 
-/* 结果区指纹：paint 与 paintResults 共用同一套判据，数据/筛选/勾选/翻页无变化时跳过重绘。 */
+/* 结果区指纹：paint 与 paintResults 共用同一套判据，数据/筛选/勾选/翻页无变化时跳过重绘。
+   只收「真正出现在行模板里」的字段。曾经把 live.elapsedSec / live.bytes / updatedAt 也算进来，
+   而它们每 2 秒轮询都在变（录制中的时长与体积）→ 整个表格每 2 秒重建一次，
+   连 /api/tasks/:id/thumb 缩略图都被重复请求。这些数字行内本来就不展示，必须排除。 */
 function listHash() {
   const list = state.tasks;
   return JSON.stringify(list.map((t) => [
-    t.id, t.status, t.queueReason, t.retryCount, t.qualityLabel,
-    t.live && t.live.elapsedSec, t.live && t.live.bytes, t.live && t.live.segmentIndex, t.updatedAt,
+    t.id, t.status, t.liveStatus, t.platform, t.platformName,
+    t.anchorName, t.name, t.title, t.avatar,
+    t.queueReason, t.retryCount, t.qualityLabel,
+    t.sessionHold, t.monitorOnly, t.manualHeld, t.autoRecord,
+    t.live && t.live.segmentIndex,
   ])) + '|' + state.q + '|' + state.platform + '|' + state.liveStatus + '|' + state.status + '|' + state.sort + '|' + state.sortDir + '|' + Array.from(state.selected).join(',') + '|p' + state.page + '|tot' + state.total;
 }
 
@@ -157,7 +186,7 @@ function paintResults(ctx) {
   const sumEl = root.querySelector('#tkFilterToggle .tq-summary');
   if (sumEl) sumEl.innerHTML = filterSummary();
   bindTable(ctx);
-  bindPager(root, 'tkPager', state, () => { state.hash = ''; tick(ctx, false); });
+  bindPager(root, 'tkPager', state, () => { clearSelection(); state.hash = ''; tick(ctx, false); });
   syncBatchBar();
   restoreFocus(root, focus);
 }
@@ -238,6 +267,21 @@ async function fetchAllTasks() {
 async function fetchAllIds() {
   const all = await fetchAllTasks();
   return all.map((t) => t.id);
+}
+
+/* 筛选/排序/翻页后清空勾选：勾选项可能已经不在屏幕上（换了筛选条件或页码），
+   留着会让「批量删除」删掉用户看不见的行。同步批量条计数与表头/行内勾选态
+   （hash 一并清掉，下次重绘按新条件重建勾选框）。 */
+function clearSelection() {
+  if (!state.selected.size) return;
+  state.selected.clear();
+  state.hash = '';
+  syncBatchBar();
+  const root = boundRoot;
+  if (!root) return;
+  const all = root.querySelector('#tkAll');
+  if (all) all.checked = false;
+  root.querySelectorAll('[data-pick]').forEach((cb) => { cb.checked = false; });
 }
 
 /* 查询条件摘要（折叠头显示当前生效条件，无条件时显示"全部"） */function filterSummary() {
@@ -452,12 +496,12 @@ function bind(ctx) {
 
   const q = root.querySelector('#tkQ');
   if (q) {
-    let timer = null;
     q.oninput = () => {
       state.q = q.value;
-      clearTimeout(timer);
+      clearSelection(); // 关键字变了：旧勾选可能已不在结果里，先清掉
+      clearTimeout(searchTimer);
       // 只走局部重绘（paintResults），绝不重建搜索框；300ms 防抖给足连续输入/中文组词时间
-      timer = setTimeout(() => { state.page = 1; tick(ctx, false); }, 300);
+      searchTimer = setTimeout(() => { state.page = 1; tick(ctx, false); }, 300);
     };
   }
   const fToggle = root.querySelector('#tkFilterToggle');
@@ -465,7 +509,7 @@ function bind(ctx) {
   const bindSel = (id, key) => {
     const node = root.querySelector(id);
     if (!node) return;
-    node.onchange = () => { state[key] = node.value; state.page = 1; state.hash = ''; tick(ctx, true); };
+    node.onchange = () => { state[key] = node.value; state.page = 1; state.hash = ''; clearSelection(); tick(ctx, true); };
   };
   bindSel('#tkPlat', 'platform');
   bindSel('#tkLive', 'liveStatus');
@@ -492,8 +536,9 @@ function bind(ctx) {
   root.querySelectorAll('[data-batch]').forEach((btn) => {
     btn.onclick = () => batch(ctx, btn.dataset.batch);
   });
-  // 翻页需重新向后端请求对应页数据；走局部重绘，避免重建工具栏/搜索框
-  bindPager(root, 'tkPager', state, () => { state.hash = ''; tick(ctx, false); });
+  // 翻页需重新向后端请求对应页数据；走局部重绘，避免重建工具栏/搜索框。
+  // 翻页同时清空勾选：上一页的勾选在屏幕上看不见，留着会被批量删除带走。
+  bindPager(root, 'tkPager', state, () => { clearSelection(); state.hash = ''; tick(ctx, false); });
 
   bindTable(ctx);
   syncBatchBar();
@@ -516,6 +561,9 @@ async function batch(ctx, action) {
     // 选中可能跨页，统计需基于全量数据而非当前页
     const all = await fetchAllTasks();
     const picked = all.filter((t) => ids.includes(t.id));
+    /* 双保险：只删「当前筛选结果里仍在」的任务。筛选/翻页会清勾选，但假如有残留
+       （例如筛选结果在请求期间变了），也绝不能删掉屏幕上看不见的行。 */
+    const targets = picked.length ? picked.map((t) => t.id) : ids;
     const withFiles = picked.filter((t) => t.sessionId).length;
     const files = picked.reduce((n, t) => n + (t.segmentCount || 0), 0);
     const bytes = picked.reduce((n, t) => n + (Number(t.totalBytes) || Number(t.live && t.live.bytes) || 0), 0);
@@ -523,13 +571,13 @@ async function batch(ctx, action) {
       title: t('tasks.batchDeleteTitle'),
       danger: true,
       ok: t('common.delete'),
-      text: t('tasks.deleteBatchBody1', ids.length) + (withFiles ? t('tasks.deleteBatchBound', withFiles) : '') + t('tasks.deleteBatchBody2') + t('tasks.deleteBatchSize', files, formatBytes(bytes)),
+      text: t('tasks.deleteBatchBody1', targets.length) + (withFiles ? t('tasks.deleteBatchBound', withFiles) : '') + t('tasks.deleteBatchBody2') + t('tasks.deleteBatchSize', files, formatBytes(bytes)),
       onOk: async () => {
         try {
-          const r = await api.batch('delete', ids);
+          const r = await api.batch('delete', targets);
           const failed = (r && r.failed) || [];
-          if (failed.length) toast(t('tasks.deleteBatchPartial', ids.length - failed.length, failed.length, failed[0].message || ''), 'warn');
-          else toast(t('tasks.deleteBatchOk', ids.length));
+          if (failed.length) toast(t('tasks.deleteBatchPartial', targets.length - failed.length, failed.length, failed[0].message || ''), 'warn');
+          else toast(t('tasks.deleteBatchOk', targets.length));
           state.selected.clear();
           state.hash = '';
           ctx.invalidate('dashboard');

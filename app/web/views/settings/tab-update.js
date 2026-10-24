@@ -1,6 +1,11 @@
 /* LiveGrab · views/settings/tab-update.js —— ⑦ 系统更新
    从 GitHub 拉取最新版本对比 + 检查更新 / 立即更新 + 更新进度 + 更新说明/日志。
-   设计：版本对比卡（当前/最新）+ 操作区；进度卡仅更新进行中显示；左说明右日志分栏。 */
+   设计：版本对比卡（当前/最新）+ 操作区；进度卡仅更新进行中显示；左说明右日志分栏。
+
+   重绘约定（2026-10-24）：轮询（1.5s）不得整块 root.innerHTML 重绘 —— 那会把「更新源配置」卡里
+   正在输入的仓库/分支/Token 内容与焦点一起吃掉（输入一半就没了）。整块渲染只在首次进入/切页回来时做；
+   之后按区块（横幅 / 版本卡 / 进度卡 / 说明 / 日志）各自比对 HTML，只有变了的那块才替换，
+   配置卡渲染一次后永不重建。若焦点正落在本页输入框里，本轮干脆不更新（下一轮补）。 */
 
 import { api } from '../../api.js';
 import { esc, toast, confirmDialog, formatDateTime, formatDuration } from '../../ui.js';
@@ -18,6 +23,9 @@ let sawRestartPhase = false;    // 后端已进入 restart 阶段
 let lastStatus = null;          // 最近一次成功拿到的状态（轮询失败时用于判断）
 let reloadedAfterRestart = false;
 let kitRef = null;              // 模块级缓存 kit，便于 paint 内读取已保存的更新源配置
+
+/* 各区块上次渲染出的 HTML：key 不变就不动 DOM（配置卡不在此列 —— 它只渲染一次，永不被轮询覆盖） */
+const ui = { banners: '', version: '', progress: '', notes: '', log: '' };
 
 export async function render(root, ctx, kit) {
   kitRef = kit || null;
@@ -40,6 +48,15 @@ export async function render(root, ctx, kit) {
 
 export function destroy() {
   stopPolling();
+  resetBlocks();
+}
+
+function resetBlocks() {
+  ui.banners = '';
+  ui.version = '';
+  ui.progress = '';
+  ui.notes = '';
+  ui.log = '';
 }
 
 function startPolling(root) {
@@ -83,7 +100,10 @@ function verNum(local) {
   return local.tag && local.tag !== `v${local.version}` ? local.tag : `v${local.version}`;
 }
 
-function paint(root, st) {
+/* ================= 渲染：算值 → 拼各区块 HTML → 按区块落 DOM ================= */
+
+/** 把一次 status 算成「各区块的 HTML + 绑定要用的标量」。纯函数（除 sawRestartPhase 记号）。 */
+function computeView(st) {
   const local = st.local || {};
   const latest = st.latest || {};
   const running = !!st.running || !!st.checking;
@@ -123,83 +143,11 @@ function paint(root, st) {
   const snapshot = st.snapshot || null;
   const applyLabel = failed ? t('settings.upRetryBtn') : t('settings.upApplyBtn');
 
-  // 进度卡：仅更新/检查进行中显示
-  const progressCard = running ? `
-    <div class="card">
-      <div class="card-h"><h3>${t('settings.upProgressTitle')}</h3>
-        <span class="chip bili" style="margin-left:auto"><i class="dot"></i>${esc(phaseLabel(st.phase, st.mode))}</span></div>
-      <div class="card-b">
-        ${st.task ? `<div style="font-size:12.5px;color:var(--txt-2)">${t('settings.upTaskLabel')}<span class="mono" style="color:var(--bili-2)">${esc(st.task)}</span></div>` : ''}
-        <div class="up-bar"><i style="width:${clampNum(st.progress)}%"></i></div>
-        <div class="row" style="justify-content:space-between;font-size:12px;color:var(--txt-3);margin-top:2px">
-          <span>${t('settings.upElapsed')} <b style="color:var(--txt-2)">${esc(formatDuration(st.elapsedSec || 0))}</b></span>
-          <span>${t('settings.upEstimate')} <b style="color:var(--txt-2)">${esc(estimateLabel(st.phase))}</b></span>
-        </div>
-        ${isRestart ? `<div class="up-restart-note"><i class="up-spin"></i><span>${t('settings.upRestartingBanner')}</span></div>` : ''}
-      </div>
-    </div>` : '';
-
-  // 更新说明（左）：仅在有远端版本时展示
-  const notesBody = (!remoteUnavailable && latest.tag) ? `
-    <div class="row" style="align-items:center;gap:10px">
-      <span style="font-size:16px;font-weight:700;font-family:var(--mono,monospace)">${esc(latestVer)}</span>
-      ${hasUpdate ? `<span class="chip wait"><i class="dot"></i>${t('settings.upAvailable')}</span>` : `<span class="chip on"><i class="dot"></i>${t('settings.upLatestChip')}</span>`}
-      ${latest.commitAt ? `<span style="color:var(--txt-3);font-size:12px">${esc(fmtDate(latest.commitAt))}</span>` : ''}
-    </div>
-    <div class="divider"></div>
-    ${latest.releaseNotes ? `
-      <div style="font-size:12px;color:var(--txt-3);letter-spacing:.5px;margin-bottom:8px">${t('settings.upNotesMain')}</div>
-      <div style="font-size:13px;color:var(--txt-2);white-space:pre-wrap">${esc(latest.releaseNotes)}</div>` : `
-      <div class="empty" style="padding:10px 0">${t('settings.upNotesNone')}</div>`}
-    ${latest.commitMsg ? `<div class="hintline" style="margin-top:10px">${t('settings.upNotesFix')}：${esc(latest.commitMsg)}</div>` : ''}` : `
-    <div class="empty" style="padding:14px 0">${remoteUnavailable ? (st.authHint === 'private-repo-needs-token' ? t('settings.upPrivateRepoHint') : t('settings.upRemoteUnavailable')) : t('settings.upNotChecked')}</div>`;
-
-  // 更新日志（右）
-  const logs = (st.log || []).slice();
-  const logBody = logs.length ? logs.map((l) => `
-    <div>
-      <span class="dl-tl">${esc(fmtLogTime(l.ts))}</span>
-      <span class="${l.level === 'OK' ? 'dl-ok' : l.level === 'ERR' ? 'dl-err' : l.level === 'WARN' ? 'dl-warn' : 'dl-nfo'}">${esc(l.level === 'OK' ? '[OK]  ' : l.level === 'ERR' ? '[ERR] ' : l.level === 'WARN' ? '[WARN]' : '[INFO]')}</span>
-      <span class="dl-msg ${l.level === 'OK' ? 'dl-ok' : l.level === 'ERR' ? 'dl-err' : ''}">${esc(l.msg)}</span>
-    </div>`).join('')
-    : `<div class="empty" style="padding:14px 0">${t('settings.upLogEmpty')}</div>`;
-
-  // 更新源配置卡：允许覆盖默认仓库 / 分支 / Token（公共仓库可空，拉取时校验）。
-  // 输入框初值一律取自后端「当前生效的更新源」（已按 UI 配置 > 环境变量 > 默认解析），前端不写死仓库。
-  const custom = (kitRef && kitRef.state && kitRef.state.settings && kitRef.state.settings.customize) || {};
-  const repoVal = custom.updateRepo || st.repo || '';
-  const branchVal = custom.updateBranch || st.branch || 'main';
-  const tokenVal = custom.updateToken || ''; // 已配置时来自后端脱敏占位
-  const configCard = `
-    <div class="card">
-      <div class="card-h"><h3>${t('settings.upRepoCfgTitle')}</h3><span class="hint">${t('settings.upRepoCfgHint')}</span></div>
-      <div class="card-b">
-        <div class="row wrap" style="gap:16px 18px">
-          <div class="f1" style="min-width:260px"><label class="fl">${t('settings.upRepoAddrLabel')}</label>
-            <input class="input mono" id="upRepo" placeholder="owner/repo 或 https://github.com/owner/repo.git" value="${esc(repoVal)}" />
-            <div class="hintline">${t('settings.upRepoAddrHint')}</div></div>
-          <div class="f1" style="min-width:160px"><label class="fl">${t('settings.upBranch')}</label>
-            <input class="input" id="upBranch" placeholder="main" value="${esc(branchVal)}" /></div>
-          <div class="f1" style="min-width:260px"><label class="fl">${t('settings.upTokenLabel')}</label>
-            <input class="input mono" id="upToken" type="password" autocomplete="off" placeholder="${t('settings.upTokenHint')}" value="${esc(tokenVal)}" />
-            <div class="hintline">${t('settings.upTokenHint')}</div></div>
-        </div>
-        <div class="row" style="margin-top:16px;gap:10px;align-items:center;flex-wrap:wrap">
-          <button class="btn" id="upGithub">${ICON_GITHUB}${t('settings.upGotoGithub')}</button>
-          <button class="btn primary" id="upCfgSave">${t('settings.upSaveConfig')}</button>
-        </div>
-      </div>
-    </div>`;
-
-  root.innerHTML = `
-    <div class="stack" style="max-width:1100px">
-      ${isRestart ? `<div class="up-banner restart"><i class="up-spin"></i><span>${t('settings.upRestartingBanner')}</span></div>` : ''}
+  const banners = `${isRestart ? `<div class="up-banner restart"><i class="up-spin"></i><span>${t('settings.upRestartingBanner')}</span></div>` : ''}
       ${failed ? `<div class="up-banner err">${ICON_WARN}<span>${t('settings.upFailedBanner')}</span></div>` : ''}
-      ${snapshot ? `<div class="up-banner snap">${ICON_WARN}<span>${t('settings.upSnapshotHint', `<b class="mono">${esc(String(snapshot.commit || snapshot.tag || '').slice(0, 12))}</b>`, esc(String(snapshot.version || '')))}</span></div>` : ''}
+      ${snapshot ? `<div class="up-banner snap">${ICON_WARN}<span>${t('settings.upSnapshotHint', `<b class="mono">${esc(String(snapshot.commit || snapshot.tag || '').slice(0, 12))}</b>`, esc(String(snapshot.version || '')))}</span></div>` : ''}`;
 
-      ${configCard}
-
-      <div class="card">
+  const version = `
         <div class="card-h"><h3>${t('settings.upTitle')}</h3><span class="hint">${t('settings.upHint')}</span></div>
         <div class="card-b">
           <div class="up-grid">
@@ -229,24 +177,152 @@ function paint(root, st) {
             ${tip}
           </div>
           <div class="hintline" style="margin-top:10px">${t('settings.upRepo', esc(st.repo || st.gitUrl || '—'), esc(st.branch || 'main'))}</div>
+        </div>`;
+
+  // 进度卡：仅更新/检查进行中显示
+  const progress = running ? `
+    <div class="card">
+      <div class="card-h"><h3>${t('settings.upProgressTitle')}</h3>
+        <span class="chip bili" style="margin-left:auto"><i class="dot"></i>${esc(phaseLabel(st.phase, st.mode))}</span></div>
+      <div class="card-b">
+        ${st.task ? `<div style="font-size:12.5px;color:var(--txt-2)">${t('settings.upTaskLabel')}<span class="mono" style="color:var(--bili-2)">${esc(st.task)}</span></div>` : ''}
+        <div class="up-bar"><i style="width:${clampNum(st.progress)}%"></i></div>
+        <div class="row" style="justify-content:space-between;font-size:12px;color:var(--txt-3);margin-top:2px">
+          <span>${t('settings.upElapsed')} <b style="color:var(--txt-2)">${esc(formatDuration(st.elapsedSec || 0))}</b></span>
+          <span>${t('settings.upEstimate')} <b style="color:var(--txt-2)">${esc(estimateLabel(st.phase))}</b></span>
+        </div>
+        ${isRestart ? `<div class="up-restart-note"><i class="up-spin"></i><span>${t('settings.upRestartingBanner')}</span></div>` : ''}
+      </div>
+    </div>` : '';
+
+  // 更新说明（左）：仅在有远端版本时展示
+  const notes = (!remoteUnavailable && latest.tag) ? `
+    <div class="row" style="align-items:center;gap:10px">
+      <span style="font-size:16px;font-weight:700;font-family:var(--mono,monospace)">${esc(latestVer)}</span>
+      ${hasUpdate ? `<span class="chip wait"><i class="dot"></i>${t('settings.upAvailable')}</span>` : `<span class="chip on"><i class="dot"></i>${t('settings.upLatestChip')}</span>`}
+      ${latest.commitAt ? `<span style="color:var(--txt-3);font-size:12px">${esc(fmtDate(latest.commitAt))}</span>` : ''}
+    </div>
+    <div class="divider"></div>
+    ${latest.releaseNotes ? `
+      <div style="font-size:12px;color:var(--txt-3);letter-spacing:.5px;margin-bottom:8px">${t('settings.upNotesMain')}</div>
+      <div style="font-size:13px;color:var(--txt-2);white-space:pre-wrap">${esc(latest.releaseNotes)}</div>` : `
+      <div class="empty" style="padding:10px 0">${t('settings.upNotesNone')}</div>`}
+    ${latest.commitMsg ? `<div class="hintline" style="margin-top:10px">${t('settings.upNotesFix')}：${esc(latest.commitMsg)}</div>` : ''}` : `
+    <div class="empty" style="padding:14px 0">${remoteUnavailable ? (st.authHint === 'private-repo-needs-token' ? t('settings.upPrivateRepoHint') : t('settings.upRemoteUnavailable')) : t('settings.upNotChecked')}</div>`;
+
+  // 更新日志（右）
+  const logs = (st.log || []).slice();
+  const log = logs.length ? logs.map((l) => `
+    <div>
+      <span class="dl-tl">${esc(fmtLogTime(l.ts))}</span>
+      <span class="${l.level === 'OK' ? 'dl-ok' : l.level === 'ERR' ? 'dl-err' : l.level === 'WARN' ? 'dl-warn' : 'dl-nfo'}">${esc(l.level === 'OK' ? '[OK]  ' : l.level === 'ERR' ? '[ERR] ' : l.level === 'WARN' ? '[WARN]' : '[INFO]')}</span>
+      <span class="dl-msg ${l.level === 'OK' ? 'dl-ok' : l.level === 'ERR' ? 'dl-err' : ''}">${esc(l.msg)}</span>
+    </div>`).join('')
+    : `<div class="empty" style="padding:14px 0">${t('settings.upLogEmpty')}</div>`;
+
+  return {
+    st, local, latest, running, hasUpdate, remoteUnavailable, isRestart, failed, snapshot,
+    curVer, latestVer, tip, applyDisabled, applyLabel,
+    banners, version, progress, notes, log,
+  };
+}
+
+/* 更新源配置卡：只在首绘时渲染一次（之后永不重建，输入内容与焦点才不会被轮询吃掉）。 */
+function configCardHtml(st) {
+  const custom = (kitRef && kitRef.state && kitRef.state.settings && kitRef.state.settings.customize) || {};
+  const repoVal = custom.updateRepo || st.repo || '';
+  const branchVal = custom.updateBranch || st.branch || 'main';
+  const tokenVal = custom.updateToken || ''; // 已配置时来自后端脱敏占位
+  return `
+    <div class="card" id="upConfigCard">
+      <div class="card-h"><h3>${t('settings.upRepoCfgTitle')}</h3><span class="hint">${t('settings.upRepoCfgHint')}</span></div>
+      <div class="card-b">
+        <div class="row wrap" style="gap:16px 18px">
+          <div class="f1" style="min-width:260px"><label class="fl">${t('settings.upRepoAddrLabel')}</label>
+            <input class="input mono" id="upRepo" placeholder="owner/repo 或 https://github.com/owner/repo.git" value="${esc(repoVal)}" />
+            <div class="hintline">${t('settings.upRepoAddrHint')}</div></div>
+          <div class="f1" style="min-width:160px"><label class="fl">${t('settings.upBranch')}</label>
+            <input class="input" id="upBranch" placeholder="main" value="${esc(branchVal)}" /></div>
+          <div class="f1" style="min-width:260px"><label class="fl">${t('settings.upTokenLabel')}</label>
+            <input class="input mono" id="upToken" type="password" autocomplete="off" placeholder="${t('settings.upTokenHint')}" value="${esc(tokenVal)}" />
+            <div class="hintline">${t('settings.upTokenHint')}</div></div>
+        </div>
+        <div class="row" style="margin-top:16px;gap:10px;align-items:center;flex-wrap:wrap">
+          <button class="btn" id="upGithub">${ICON_GITHUB}${t('settings.upGotoGithub')}</button>
+          <button class="btn primary" id="upCfgSave">${t('settings.upSaveConfig')}</button>
         </div>
       </div>
+    </div>`;
+}
 
-      ${progressCard}
+function paint(root, st) {
+  if (!root || !root.isConnected) return;
+  /* 已经渲染过 → 局部更新（按区块 key 比对）。只有首次进入 / 切页回来（#upMain 不在了）才整块重建。 */
+  const v = computeView(st);
+  if (root.querySelector('#upMain')) { patchView(root, v); return; }
+
+  root.innerHTML = `
+    <div class="stack" style="max-width:1100px" id="upMain">
+      <div id="upBanners">${v.banners}</div>
+
+      ${configCardHtml(st)}
+
+      <div class="card" id="upVersionCard">${v.version}</div>
+
+      <div id="upProgressSlot">${v.progress}</div>
 
       <div class="up-two">
         <div class="card">
           <div class="card-h"><h3>${t('settings.upNotesTitle')}</h3></div>
-          <div class="card-b">${notesBody}</div>
+          <div class="card-b" id="upNotes">${v.notes}</div>
         </div>
         <div class="card">
           <div class="card-h"><h3>${t('settings.upLogTitle')}</h3><span class="hint">${t('settings.upLogAlsoInLogs')}</span></div>
-          <div class="card-b up-logbox">${logBody}</div>
+          <div class="card-b up-logbox" id="upLog">${v.log}</div>
         </div>
       </div>
     </div>`;
 
-  // ---- 事件 ----
+  ui.banners = v.banners;
+  ui.version = v.version;
+  ui.progress = v.progress;
+  ui.notes = v.notes;
+  ui.log = v.log;
+
+  bindConfig(root, v);
+  bindVersion(root, v);
+}
+
+/** 只替换内容真的变了的区块：配置卡不在列表里 —— 它渲染一次后就再也不会被轮询碰到。 */
+function patchView(root, v) {
+  const active = typeof document !== 'undefined' ? document.activeElement : null;
+  /* 用户正在本页输入（仓库/分支/Token）：这一轮什么都不动，1.5s 后再补。
+     进度数字晚一两秒不碍事，把输入打断才是硬伤。 */
+  if (active && root.contains(active) && /^(INPUT|TEXTAREA|SELECT)$/.test(active.tagName || '')) return;
+
+  const blocks = [
+    ['banners', '#upBanners'],
+    ['version', '#upVersionCard'],
+    ['progress', '#upProgressSlot'],
+    ['notes', '#upNotes'],
+    ['log', '#upLog'],
+  ];
+  for (const [key, sel] of blocks) {
+    if (ui[key] === v[key]) continue; // 这块没变：DOM 原样保留（含滚动位置）
+    const node = root.querySelector(sel);
+    if (!node) return; // 页面结构被整体换过（如重启态）：下一轮 paint 会整块渲染
+    ui[key] = v[key];
+    node.innerHTML = v[key];
+    if (key === 'version') bindVersion(root, v); // 版本卡里的按钮随卡片一起重建，需要重绑
+  }
+}
+
+/* ---- 事件绑定 ---- */
+
+function bindVersion(root, v) {
+  const st = v.st;
+  const applyLabel = v.applyLabel;
+
   const checkBtn = root.querySelector('#upCheck');
   if (checkBtn) checkBtn.onclick = async () => {
     checkBtn.disabled = true;
@@ -281,9 +357,9 @@ function paint(root, st) {
         reloadedAfterRestart = false;
         try {
           const r = await api.updateApply();
-            if (r && r.running) {
-              toast(t('settings.upApplyStarted'));
-              if (selfUpdate) expectingRestart = true; // 支持自更新：将自动重启
+          if (r && r.running) {
+            toast(t('settings.upApplyStarted'));
+            if (selfUpdate) expectingRestart = true; // 支持自更新：将自动重启
           } else if (r && r.busy) toast(t('settings.upApplyBusy'), 'warn');
           const s = await api.updateStatus();
           paint(root, s);
@@ -294,19 +370,24 @@ function paint(root, st) {
       },
     });
   };
+}
+
+function bindConfig(root, v) {
+  const st = v.st;
 
   // ---- 更新源配置：前往 GitHub 仓库 ----
   const ghBtn = root.querySelector('#upGithub');
   if (ghBtn) ghBtn.onclick = () => {
-    let url = (root.querySelector('#upRepo').value || '').trim();
+    const repoInput = root.querySelector('#upRepo');
+    let url = ((repoInput && repoInput.value) || '').trim();
     if (/^https?:\/\//.test(url)) {
       url = url.replace(/\.git$/, '');
     } else if (url) {
       url = 'https://github.com/' + url;
     } else if (st.gitUrl) {
       url = String(st.gitUrl).replace(/\.git$/, '');
-    } else if (repoVal) {
-      url = 'https://github.com/' + repoVal;
+    } else if (st.repo) {
+      url = 'https://github.com/' + st.repo;
     } else {
       toast(t('settings.upRepoEmpty'), 'warn');
       return;
@@ -317,9 +398,12 @@ function paint(root, st) {
   // ---- 更新源配置：保存 ----
   const saveBtn = root.querySelector('#upCfgSave');
   if (saveBtn) saveBtn.onclick = async () => {
-    const repo = (root.querySelector('#upRepo').value || '').trim();
-    const branch = (root.querySelector('#upBranch').value || '').trim();
-    const token = root.querySelector('#upToken').value; // 原始输入（占位或明文）
+    const repoInput = root.querySelector('#upRepo');
+    const branchInput = root.querySelector('#upBranch');
+    const tokenInput = root.querySelector('#upToken');
+    const repo = ((repoInput && repoInput.value) || '').trim();
+    const branch = ((branchInput && branchInput.value) || '').trim();
+    const token = (tokenInput && tokenInput.value) || ''; // 原始输入（占位或明文）
     const prev = saveBtn.innerHTML;
     saveBtn.disabled = true;
     saveBtn.innerHTML = t('common.saving');
@@ -333,7 +417,7 @@ function paint(root, st) {
         });
       }
       const s2 = await api.updateStatus();
-      paint(root, s2);
+      paint(root, s2); // 局部更新：配置卡不重建，输入框里的值就是刚保存的值
     } catch (e) {
       toast(t('settings.upSaveFailed', (e && e.message) || e), 'err');
       saveBtn.disabled = false;
@@ -366,6 +450,9 @@ function estimateLabel(phase) {
 
 /** 轮询失败（服务正在释放端口/重启）时，展示「自动重启中」全屏提示而非报错。 */
 function paintRestarting(root) {
+  if (!root || !root.isConnected) return;
+  if (root.querySelector('.restart-card')) return; // 已经是重启态：不必反复重建
+  resetBlocks(); // 整块换掉了：下次 paint 必须整块重建
   root.innerHTML = `
     <div class="stack" style="max-width:1100px">
       <div class="card restart-card">

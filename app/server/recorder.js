@@ -5,7 +5,7 @@ import fsp from 'node:fs/promises';
 import * as media from './media.js';
 import { buildOutputPattern, buildContext, pickProfile, renderName, reserveName, qualityLabel, seqText } from './naming.js';
 import { effectiveProxyForPlatform } from './proxy-fetch.js';
-import { nowIso, ensureDir, safeJoin, sleep, errText, formatBytes } from './util.js';
+import { nowIso, ensureDir, safeJoin, sleep, errText, formatBytes, redactUrl } from './util.js';
 
 const BACKOFF = [2000, 4000, 8000, 16000, 30000];
 // 403/401/429 是平台侧明确拒绝（风控/限流/签名失效），不是网络抖动。
@@ -102,6 +102,9 @@ export class Recorder extends EventEmitter {
     this._lastGrowAt = null;  // 上次落盘字节增长的时刻（僵死看门狗基准）
     this._lastGrowBytes = 0;  // 上次增长时的累计字节
     this._stallChecking = false; // 看门狗正在处理中（防重入）
+    this._tickBusy = false;      // _tick 重入互斥（定时器 1.5s 与内部 await 会重叠）
+    this._finalized = null;      // 收尾幂等：重复 _finalize 直接返回上次结果，不再二次 emit finished
+    this._finalizing = null;     // 收尾进行中的 promise（并发调用共享同一份结果）
     this._manualRestart = false; // 看门狗主动重连中：期间 ffmpeg 退出不算意外断流
   }
 
@@ -294,7 +297,7 @@ export class Recorder extends EventEmitter {
       userAgent: this.settings.userAgent,
       isHttp: /^https?:/i.test(this.streamUrl || ''),
     });
-    this.logger.info(`启动 ffmpeg（第 ${startNumber} 段起 · ${this.qualityLabelText} · 流地址 ${this.streamUrl}）`, this._meta());
+    this.logger.info(`启动 ffmpeg（第 ${startNumber} 段起 · ${this.qualityLabelText} · 流地址 ${redactUrl(this.streamUrl)}）`, this._meta());
     this.child = this.media.spawnFfmpeg({ args, onStderr: (line) => this._onStderr(line) });
     // 分段开录即上报路径：调度器把它登记进库（status=recording），文件库暂不展示；
     // 段收尾时 segment-close 改回 ok 自动显示。路径由 printf 模式确定性推导，无需等磁盘出现文件。
@@ -335,6 +338,14 @@ export class Recorder extends EventEmitter {
 
   async _tick() {
     if (!this.dir) return;
+    // 重入互斥：_tick 由 1.5s 定时器驱动，但内部有 ffprobe/stat/看门狗等 await（看门狗最长 8s+）。
+    // 没有这道闸门时两次 tick 会在 await 点交错 → 同一分段被重复统计、重复 emit segment-close。
+    if (this._tickBusy) return;
+    this._tickBusy = true;
+    try { await this._tickInner(); } finally { this._tickBusy = false; }
+  }
+
+  async _tickInner() {
     const segs = await this.scanSegments();
     if (!segs.length) return;
     // 只处理「本轮新闭合」的分段：已登记分段的 stat/probe 不必每 1.5s 重做一次，
@@ -362,7 +373,7 @@ export class Recorder extends EventEmitter {
     this._detailTick++;
     if (this._detailTick % 20 === 1 && (this.currentBytes > 0 || this._rateBits > 0)) {
       const mb = (n) => (n >= 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${Math.round(n / 1024)} KB`);
-      this.logger.info(`${cur.name} 从 ${this.streamUrl || '(未知 URL)'} 拉流，本段已写 ${mb(this.currentBytes)}，累计 ${mb(this._cumBase + this.currentBytes)}，实时 ${Math.round(this._rateBits / 1000)} kb/s`, this._meta());
+      this.logger.info(`${cur.name} 从 ${redactUrl(this.streamUrl) || '(未知 URL)'} 拉流，本段已写 ${mb(this.currentBytes)}，累计 ${mb(this._cumBase + this.currentBytes)}，实时 ${Math.round(this._rateBits / 1000)} kb/s`, this._meta());
     }
     if (this.task.segmentMode === 'size' && !this.rotating && !this.stopping && !this.paused) {
       const limit = Math.max(16, Number(this.task.segmentSizeMB) || 2048) * 1024 * 1024;
@@ -390,11 +401,14 @@ export class Recorder extends EventEmitter {
     try {
       const mins = Math.round(STALL_MS / 60000);
       const offline = await this._probeOfflineNow();
+      // 探活期间可能已被用户停止/暂停：此时绝不能继续收尾或重连（会二次 finalize / 暂停中又拉起）
+      if (this.stopping || this.paused) return;
       this._manualRestart = true;
       if (offline === true) {
         this.logger.warn(`连续 ${mins} 分钟没有新数据，且确认主播已下播 → 正常收尾本场`, this._meta());
         await this._quitGracefully();
         this._manualRestart = false;
+        if (this.stopping || this.paused) return;
         this.reconnectAttempt = 0;
         this._offlineStreak = 0;
         await this._finalize('offline');
@@ -583,7 +597,7 @@ export class Recorder extends EventEmitter {
         // 跨表示降级：当前候选这次没录到数据（如 _or4 404）→ 换下一个表示，不重新解析（秒级续上）
         this.streamIndex += 1;
         this._applyCandidate();
-        this.logger.info(`流地址降级到候选 ${this.streamIndex + 1}/${this.streamCandidates.length}：${this.streamUrl}`, this._meta());
+        this.logger.info(`流地址降级到候选 ${this.streamIndex + 1}/${this.streamCandidates.length}：${redactUrl(this.streamUrl)}`, this._meta());
       } else {
         /* 候选用尽（本档所有表示都不通）→ 按系统设置 qualityFallback 推进下一画质档；
            本段已有数据（真断流）则保持当前档，只重新解析刷新 token。 */
@@ -602,7 +616,7 @@ export class Recorder extends EventEmitter {
           }
         }
       }
-      this.logger.info(`重连成功，继续拉流（第 ${this.reconnectAttempt}/${max} 次 · 流地址 ${this.streamUrl || '(未知 URL)'}）`, this._meta());
+      this.logger.info(`重连成功，继续拉流（第 ${this.reconnectAttempt}/${max} 次 · 流地址 ${redactUrl(this.streamUrl) || '(未知 URL)'}）`, this._meta());
       const segs = await this.scanSegments();
       const next = segs.length ? segs[segs.length - 1].index + 1 : this.startNumber;
       await this._spawn(next);
@@ -666,6 +680,17 @@ export class Recorder extends EventEmitter {
   }
 
   async _finalize(reason) {
+    // 幂等 + 并发安全：用户停止、下播确认、僵死看门狗可能同时触发收尾。
+    // 重复执行会二次 emit finished → 调度器重复 _onFinished（二次转封装/刮削）。
+    if (this._finalized) return this._finalized;
+    if (!this._finalizing) {
+      this._finalizing = this._finalizeOnce(reason).then((p) => { this._finalized = p; return p; })
+        .finally(() => { this._finalizing = null; });
+    }
+    return this._finalizing;
+  }
+
+  async _finalizeOnce(reason) {
     this._stopWatcher();
     const segs = await this.scanSegments();
     await this._dropEmptySegments(segs); // 进程已退出：任何 0 字节分段都是垃圾

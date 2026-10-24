@@ -8,7 +8,11 @@ import { t } from '../i18n.js';
 
 export const page = 'trash';
 
-const state = { items: [], total: 0, bytes: 0, retentionDays: 7, page: 1, pages: 1, hash: '', pending: false, bound: false };
+const state = {
+  items: [], total: 0, bytes: 0, retentionDays: 7, page: 1, pages: 1, hash: '', pending: false, bound: false,
+  /* 请求飞行中用户又点了翻页/还原/清空：不能静默丢弃，标记后由本轮 finally 再跑一次 */
+  reloadQueued: false,
+};
 
 /* 分页：默认每页 10 条（任务/文件/回收站统一） */
 const PAGE_SIZE = 10;
@@ -31,8 +35,11 @@ export function destroy() {
 }
 
 async function tick(ctx, initial) {
-  if (state.pending) return;
+  /* 老写法 `if (state.pending) return;` 会把飞行期间的翻页点击静默丢掉
+     （页码已变、列表还是旧页）。改成脏标记，finally 里补跑一次。 */
+  if (state.pending) { state.reloadQueued = true; return; }
   state.pending = true;
+  state.reloadQueued = false;
   try {
     const r = await api.trash({ page: state.page, pageSize: PAGE_SIZE });
     state.items = (r && (r.items || [])) || [];
@@ -45,6 +52,10 @@ async function tick(ctx, initial) {
     if (initial && boundRoot) boundRoot.innerHTML = `<div class="card"><div class="empty">${t('trash.loadFail', esc(e.message || t('common.unknownError')))}</div></div>`;
   } finally {
     state.pending = false;
+    if (state.reloadQueued) {
+      state.reloadQueued = false;
+      void tick(ctx, initial);
+    }
   }
 }
 

@@ -27,11 +27,14 @@ const state = {
   pageSize: PAGE_SIZE,
   total: 0,
   pages: 1,
+  hash: '', // 结果区指纹：内容没变就跳过整表重绘（2s 轮询空转不再重建 innerHTML）
   limits: { logRetentionDays: 14, logLevel: 'INFO' },
 };
 
 let boundRoot = null;
 let offLog = null;
+/* 搜索框防抖定时器提到模块级：destroy 里必须 clearTimeout，否则切页后 300ms 到点仍在旧视图上请求/重绘。 */
+let searchTimer = null;
 
 export async function render(root, ctx) {
   boundRoot = root;
@@ -72,7 +75,9 @@ export async function render(root, ctx) {
 
 export function destroy() {
   if (offLog) { offLog(); offLog = null; }
+  if (searchTimer) { clearTimeout(searchTimer); searchTimer = null; }
   state.bound = false;
+  state.hash = '';
   boundRoot = null;
 }
 
@@ -196,6 +201,20 @@ function paint(ctx) {
   bind(ctx);
   restoreFocus(root, focus);
   syncCount();
+  state.hash = listHash(); // 全量重绘后对齐指纹，避免紧接着的轮询又白重绘一次
+}
+
+/** 结果区指纹：行（时间戳 + 消息摘要）、分页（page/pages/total）、筛选条件（level/taskId/q）、
+ *  排序方向、提示区依赖的文件清单。任一变化才需要重建表格。 */
+function listHash() {
+  const rows = filtered();
+  return JSON.stringify([
+    state.level, state.taskId, state.platform, String(state.q || '').trim(),
+    state.newestFirst ? 1 : 0, state.page, state.pages, state.total,
+    Number(state.limits.logRetentionDays) || 0, String(state.limits.logLevel || ''),
+    rows.map((l) => [new Date(l.ts || 0).getTime(), String(l.msg || '').slice(0, 80)]),
+    state.files.length, state.files.reduce((n, f) => n + (Number(f.bytes) || 0), 0),
+  ]);
 }
 
 /** 仅重绘结果区（表格 + 分页 + 计数 + 说明），不重建工具栏与搜索框。
@@ -203,6 +222,11 @@ function paint(ctx) {
 function paintResults(ctx) {
   const root = boundRoot;
   if (!root) return;
+  /* 指纹没变就直接返回：2s 轮询过去每轮都无条件重建整表（innerHTML），
+     白白丢掉滚动位置与文本选区，日志一多还明显卡顿。 */
+  const hash = listHash();
+  if (hash === state.hash) return;
+  state.hash = hash;
   const focus = captureFocus(root);
   const tbl = root.querySelector('#lgTable');
   if (tbl) tbl.innerHTML = table();
@@ -308,12 +332,11 @@ function bind(ctx) {
 
   const q = root.querySelector('#lgQ');
   if (q) {
-    let timer = null;
     q.oninput = () => {
       state.q = q.value;
-      clearTimeout(timer);
+      clearTimeout(searchTimer);
       // 局部更新结果（full=false）：不重建搜索框，输入可连续、中文输入法组合不被打断
-      timer = setTimeout(() => rerender(ctx, { q: q.value, page: 1 }, false), 300);
+      searchTimer = setTimeout(() => rerender(ctx, { q: q.value, page: 1 }, false), 300);
     };
   }
 

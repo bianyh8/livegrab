@@ -9,7 +9,7 @@ import { Store } from './store.js';
 import { openDb, schemaVersion, SCHEMA_VERSION } from './db.js';
 import { cleanupLegacyFiles } from './legacy-cleanup.js';
 import { Logger } from './logger.js';
-import { Auth } from './auth.js';
+import { Auth, parseCookies, COOKIE_NAME } from './auth.js';
 import { Storage, playModeOf } from './storage.js';
 import { sortFileRows } from './file-order.js';
 import { Notifier } from './notify.js';
@@ -23,6 +23,7 @@ import { previewNaming, VARIABLES, DEFAULT_OPTIONS, qualityLabel, NAMING_OPTION_
 import {
   ok, fail, HttpError, readBody, mimeByExt, parseRange, extOf, VERSION,
   ensureDir, formatBytes, tzName, safeJoin, errText, dateKey,
+  isPrivateHost, assertRemoteUrl,
 } from './util.js';
 
 // 播放日志节流：同一文件 10s 内只记一次，避免视频拖动/Range 请求刷屏日志
@@ -144,6 +145,7 @@ async function bootstrap() {
   // 容器首启事件 → 正式日志（前缀 [容器启动]）：克隆结果/回退/预热/依赖检查，重启后仍可查
   await ingestBootstrapEvents(CONFIG_DIR, logger);
   const auth = await new Auth(CONFIG_DIR).init();
+  auth.logger = logger; // 失败登录必须进日志（审计/暴力破解排查）
   const storage = new Storage({ store, logger });
   const notifier = new Notifier({ store, logger });
   const scheduler = new Scheduler({
@@ -212,10 +214,10 @@ async function bootstrap() {
   return { store, logger, auth, storage, notifier, scheduler, play, version, scan, update };
 }
 
-function isPrivateIp(ip) {
-  const s = String(ip || '').replace('::ffff:', '');
-  return s === '127.0.0.1' || s === '::1' || /^10\./.test(s) || /^192\.168\./.test(s)
-    || /^172\.(1[6-9]|2\d|3[01])\./.test(s) || s.startsWith('fc') || s.startsWith('fd') || s.startsWith('fe80');
+/** 是否 HTTPS（直连 TLS 或反代声明 https）→ 决定会话 Cookie 是否加 Secure */
+function isHttps(req) {
+  return req.socket?.encrypted === true
+    || String(req.headers?.['x-forwarded-proto'] || '').split(',')[0].trim() === 'https';
 }
 
 async function main() {
@@ -231,7 +233,8 @@ async function main() {
   };
 
   route('GET', '/api/health', async () => ({
-    status: 'ok', version, uptimeSec: Math.round(process.uptime()), tz: tzName(),
+    status: 'ok', version, tz: tzName(),
+    // 只保留部署探针/更新页需要的字段：uptime、完整引擎指纹等细节不再对未登录者暴露
     ffmpeg: {
       available: scheduler.engine.available,
       version: scheduler.engine.version,
@@ -241,14 +244,20 @@ async function main() {
   }), { publicRoute: true });
 
   route('GET', '/api/auth/mode', async (req) => ({
-    mode: auth.mode, lockRemainSec: auth.lockRemainSec(req.ip || 'local'), version,
+    mode: auth.mode, lockRemainSec: auth.lockRemainSec(req.ip || 'local'),
   }), { publicRoute: true });
 
   route('POST', '/api/auth/init', async (req, res) => {
+    // 首次初始化 = 创建管理员并直接签发会话。若允许经反向代理到达，任何公网访问者都能「先到先占」。
+    // 反代部署（Nginx/Traefik/Cloudflare）确实无法直连 → 用 ALLOW_PROXY_INIT=1 显式放行，默认拒绝。
+    if (req.viaProxy && process.env.ALLOW_PROXY_INIT !== '1') {
+      throw new HttpError('INIT_FORBIDDEN',
+        '检测到反向代理转发头，已拒绝首次初始化。请从局域网直连地址完成初始化；反代部署可设置环境变量 ALLOW_PROXY_INIT=1 后重启再试', 403);
+    }
     const body = await readBody(req);
     const user = await auth.createUser({ username: body.username, password: body.password });
     const s = auth.issue(true, store.settings.security?.sessionDays || 30);
-    res.setHeader('Set-Cookie', auth.cookieHeader(s.token, s.maxAge));
+    res.setHeader('Set-Cookie', auth.cookieHeader(s.token, s.maxAge, isHttps(req)));
     logger.info(`初始化管理员账号：${user.username}（密码以 scrypt 哈希保存，不可逆）`);
     return { user, expiresAt: s.expiresAt };
   }, { publicRoute: true });
@@ -261,15 +270,23 @@ async function main() {
       lockMin: store.settings.security?.failLockMin || 10,
     });
     const s = auth.issue(!!body.remember, store.settings.security?.sessionDays || 30);
-    res.setHeader('Set-Cookie', auth.cookieHeader(s.token, s.maxAge));
+    res.setHeader('Set-Cookie', auth.cookieHeader(s.token, s.maxAge, isHttps(req)));
     logger.info(`登录成功：${user.username}`);
     return { user, expiresAt: s.expiresAt };
   }, { publicRoute: true });
 
   route('POST', '/api/auth/logout', async (req, res) => {
-    res.setHeader('Set-Cookie', auth.clearCookieHeader());
+    auth.revoke(req); // 服务端撤销：只清 Cookie 时，被复制走的 token 仍能用到过期
+    res.setHeader('Set-Cookie', auth.clearCookieHeader(isHttps(req)));
     return { ok: true };
   }, { publicRoute: true });
+
+  route('POST', '/api/auth/logout-all', async (req, res) => {
+    await auth.revokeAll();
+    logger.warn('已注销所有会话：账号会话代次已自增，所有已签发 token 立即失效');
+    res.setHeader('Set-Cookie', auth.clearCookieHeader(isHttps(req)));
+    return { ok: true };
+  });
 
   route('GET', '/api/auth/me', async (req) => ({
     username: req.session.username,
@@ -280,11 +297,13 @@ async function main() {
     sessionExpiresAt: req.session.exp ? new Date(req.session.exp).toISOString() : null,
   }));
 
-  route('POST', '/api/auth/password', async (req) => {
+  route('POST', '/api/auth/password', async (req, res) => {
     const body = await readBody(req);
     await auth.changePassword({ oldPassword: body.oldPassword, newPassword: body.newPassword });
-    logger.info('管理员密码已更新');
-    return { ok: true };
+    // 改密后 epoch 自增 → 当前会话也已失效，必须清 Cookie 让前端回到登录页
+    res.setHeader('Set-Cookie', auth.clearCookieHeader(isHttps(req)));
+    logger.warn('管理员密码已更新：所有已登录会话已失效，请重新登录');
+    return { ok: true, relogin: true };
   });
 
   route('GET', '/api/platforms', async () => ({ items: platformList(store.settings).map((p) => ({
@@ -295,6 +314,9 @@ async function main() {
 
   route('POST', '/api/resolve', async (req) => {
     const body = await readBody(req);
+    // 服务端会拿这个地址去解析/拉流：只允许网络协议（拒绝 file:/data: 等），
+    // 私网地址仍放行（局域网自建流是合法用法）。
+    assertRemoteUrl(body.url || body.roomId || '', { label: '直播间地址', allowRtmp: true, allowPrivate: true });
     return resolveRoom(body.url || body.roomId || '', { platform: body.platform, settings: store.settings, logger });
   });
 
@@ -372,6 +394,19 @@ async function main() {
     // 设置页拿到的 customize.updateToken 是脱敏占位 '••••••••'，若随整包设置保存落库，
     // 会把真实 token 覆盖成占位符，导致「检查更新/立即更新」鉴权失败（用户无感知）。
     delete body.customize;
+    // trustLan = 一键关闭全站鉴权：只允许从「直连内网」修改，且变更写 WARN。
+    // 反代/公网来源即使已登录也不允许开启（一次会话泄漏就能让实例永久裸奔）。
+    if (body.security && Object.prototype.hasOwnProperty.call(body.security, 'trustLan')) {
+      const want = !!body.security.trustLan;
+      if (want && (req.viaProxy || !isPrivateHost(req.ip))) {
+        throw new HttpError('FORBIDDEN', '只能从局域网直连地址开启「允许局域网免登录」', 403);
+      }
+      if (want !== !!store.settings.security?.trustLan) {
+        logger.warn(`「允许局域网免登录」已${want ? '开启' : '关闭'}（来源 ${req.ip}${req.viaProxy ? ' · 经代理' : ''}）`);
+      }
+    }
+    // 录制根目录只由环境变量/部署决定：允许在线改写会让 safeJoin 的基准被换掉，历史记录的绝对路径也全部失配
+    delete body.recordRoot;
     const merged = await store.updateSettings(body);
     if (body.logLevel) logger.setLevel(body.logLevel);
     if (body.logRetentionDays) { logger.setRetention(body.logRetentionDays); await logger.purge(); }
@@ -610,6 +645,7 @@ async function main() {
   });
   route('POST', '/api/notify/test', async () => notifier.test());
   route('GET', '/api/events', async (req, res) => {
+    const token = parseCookies(req)[COOKIE_NAME];
     res.writeHead(200, {
       'Content-Type': 'text/event-stream; charset=utf-8',
       'Cache-Control': 'no-cache, no-transform',
@@ -619,7 +655,16 @@ async function main() {
     res.write('retry: 3000\n\n');
     res.write(`event: status\ndata: ${JSON.stringify(scheduler.status())}\n\n`);
     sseClients.add(res);
-    const ping = setInterval(() => { try { res.write(':ping\n\n'); } catch { /* ignore */ } }, 15000);
+    const ping = setInterval(() => {
+      // 长连接建立后会话可能已登出/改密/过期：每 15s 复检一次，失效就断开，不能继续推事件
+      if (!auth.verifyToken(token)) {
+        clearInterval(ping);
+        sseClients.delete(res);
+        try { res.end(); } catch { /* ignore */ }
+        return;
+      }
+      try { res.write(':ping\n\n'); } catch { /* ignore */ }
+    }, 15000);
     req.on('close', () => { clearInterval(ping); sseClients.delete(res); });
     return null;
   });
@@ -778,14 +823,25 @@ async function main() {
 
   // ---------- 静态资源 ----------
   async function serveStatic(req, res) {
-    let rel = decodeURIComponent(req.url.split('?')[0]);
+    let rel;
+    try { rel = decodeURIComponent(req.url.split('?')[0]); }
+    catch { res.writeHead(400, { 'Content-Type': 'text/plain; charset=utf-8' }); res.end('bad request'); return; }
     if (rel === '/' || rel === '') rel = '/index.html';
-    const target = path.join(WEB_DIR, rel);
-    if (!target.startsWith(WEB_DIR)) { res.writeHead(403); res.end('forbidden'); return; }
-    let st = await fsp.stat(target).catch(() => null);
-    let file = target;
+    const base = path.resolve(WEB_DIR);
+    // 前缀比较必须带分隔符：旧写法 '/app/webx/a'.startsWith('/app/web') 为 true，同名前缀的兄弟目录能越界读。
+    const target = path.resolve(base, '.' + (rel.startsWith('/') ? rel : `/${rel}`));
+    if (target !== base && !target.startsWith(base + path.sep)) { res.writeHead(403); res.end('forbidden'); return; }
+    // realpath 复核：web/ 内的软链不能把读取带到目录外
+    const realBase = await fsp.realpath(base).catch(() => base);
+    const realTarget = await fsp.realpath(target).catch(() => null);
+    if (realTarget && realTarget !== realBase && !realTarget.startsWith(realBase + path.sep)) {
+      res.writeHead(403); res.end('forbidden'); return;
+    }
+    const resolved = realTarget || target;
+    let st = await fsp.stat(resolved).catch(() => null);
+    let file = resolved;
     if (!st || st.isDirectory()) {
-      file = path.join(WEB_DIR, 'index.html');
+      file = path.join(realBase, 'index.html');
       st = await fsp.stat(file).catch(() => null);
     }
     if (!st) { res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' }); res.end('前端资源缺失：app/web/index.html 不存在'); return; }
@@ -800,9 +856,21 @@ async function main() {
   // ---------- 请求处理 ----------
   server.on('request', async (req, res) => {
     const started = Date.now();
-    const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
     const ip = req.socket.remoteAddress || 'local';
     req.ip = ip;
+    // 只有「直连」才允许按内网 IP 免登：反向代理 / Docker 端口映射下 remoteAddress 恒为
+    // 127.0.0.1 或 172.17.0.1，按 IP 放行等于对公网完全免鉴权。带任何转发头就强制走登录。
+    const hasProxyHeaders = !!(req.headers['x-forwarded-for'] || req.headers['x-real-ip']
+      || req.headers.forwarded || req.headers['x-forwarded-proto']);
+    req.viaProxy = hasProxyHeaders;
+    let url;
+    try {
+      url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+    } catch {
+      res.writeHead(400, { 'Content-Type': 'text/plain; charset=utf-8' });
+      res.end('bad request');
+      return;
+    }
     req.query = Object.fromEntries(url.searchParams.entries());
     try {
       if (!url.pathname.startsWith('/api/')) return void await serveStatic(req, res);
@@ -814,7 +882,7 @@ async function main() {
 
       if (!match.publicRoute) {
         const session = auth.sessionFrom(req);
-        const trustLan = store.settings.security?.trustLan && isPrivateIp(ip);
+        const trustLan = store.settings.security?.trustLan && !hasProxyHeaders && isPrivateHost(ip);
         if (!session && !trustLan) throw new HttpError('UNAUTHORIZED', '未登录或会话已过期', 401);
         req.session = session || { username: 'lan' };
       }

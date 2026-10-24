@@ -134,6 +134,7 @@ CREATE TABLE IF NOT EXISTS tasks (
   monitor_only        INTEGER,
   manual_held         INTEGER,
   session_hold        INTEGER,            -- 本场挂起：停止本场后下播前不再自动拉起，下播清除
+  live_notified_at    TEXT,               -- 本场直播「开播通知」发送时间（null = 本场未通知；下播清空）
   poll_interval_sec   INTEGER,
   start_delay_sec     INTEGER,
   stop_delay_sec      INTEGER,
@@ -291,6 +292,9 @@ CREATE TABLE IF NOT EXISTS trash_sessions (
 
 function applyPragmas(db) {
   db.pragma('foreign_keys = ON');
+  // 任何外部连接（诊断脚本/第二个实例/备份工具）持写锁时，默认 busy_timeout=0 会让写入立刻 SQLITE_BUSY。
+  // 5s 足够覆盖本项目的短事务；超时仍会抛错，由调用方回滚内存。
+  db.pragma('busy_timeout = 5000');
   let mode = 'delete';
   try {
     mode = db.pragma('journal_mode = WAL', { simple: true });
@@ -303,14 +307,20 @@ function applyPragmas(db) {
   } catch { /* 保持默认 */ }
 }
 
-/** 当前库的结构版本；无 meta 表（全新空库）返回 0；读取失败（损坏/非 SQLite/IO）抛错，由调用方决定处置 */
+/**
+ * 当前库的结构版本；无 meta 表（全新空库）返回 0；读取/解析失败抛错，由调用方决定处置。
+ * 只接受十进制整数字面量：`2abc`/`2.1`/空串以前会被 Number() 变成 NaN，然后被判成「版本不匹配」→ 删库重建。
+ */
 export function schemaVersion(db) {
   try {
     const row = db.prepare("SELECT value FROM meta WHERE key='schema_version'").get();
-    return row ? Number(row.value) : 0;
+    if (!row) return 0;
+    const raw = String(row.value ?? '').trim();
+    if (!/^\d+$/.test(raw)) throw new Error(`meta.schema_version 不是合法整数：「${raw}」`);
+    return Number(raw);
   } catch (e) {
     if (/no such table/i.test(e?.message || '')) return 0; // 全新空库（0 字节文件）→ 无 meta 表
-    throw e; // 其余读取失败：绝不静默当作旧库处理
+    throw e; // 其余读取失败：绝不静默当作旧库处理（尤其不能当 0）
   }
 }
 
@@ -344,6 +354,12 @@ export function openDb(dbPath, onLog = null) {
     throw new Error(`[db] 数据库文件无法读取（可能损坏或不是 SQLite 文件）：${dbPath}（${e?.message || e}）。已保留原文件、未作任何删除，请人工检查。`);
   }
 
+  // 比当前结构更新的库：绝不作废重建（降级会清空数据），直接拒绝启动
+  if (ver > SCHEMA_VERSION) {
+    try { db.close(); } catch { /* ignore */ }
+    throw new Error(`[db] 数据库结构版本 ${ver} 高于本程序支持的 ${SCHEMA_VERSION}：${dbPath}。通常是用旧版程序打开了新版数据库；原文件未作任何改动，请升级程序或改用备份库。`);
+  }
+
   const isRebuild = ver !== SCHEMA_VERSION;
   if (isRebuild) {
     // 二次校验：ver===0 且库里已有非 sqlite_ 表 = 有效但非 LiveGrab 的库 → 不碰原文件
@@ -354,34 +370,64 @@ export function openDb(dbPath, onLog = null) {
         throw new Error(`[db] 检测到有效但非 LiveGrab v2 的数据库（含 ${tbl.c} 张表、无 meta.schema_version）：${dbPath}。为避免误删已保留原文件，请人工确认后移除或改名再启动。`);
       }
     }
-    if (ver === 0) say('INFO', '全新空库，初始化 v2 表结构');
-    else say('WARN', `检测到旧版/未知数据库（schema_version=${ver} ≠ ${SCHEMA_VERSION}），按设计作废重建为 v2 空库（原文件已删除，不保留旧数据）`);
-    try { db.close(); } catch { /* ignore */ }
-    for (const suf of ['', '-wal', '-shm']) {
-      try { fs.rmSync(dbPath + suf, { force: true }); } catch { /* ignore */ }
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const bakOf = (suf) => `${dbPath}.bak-${stamp}${suf}`;
+    if (ver === 0) {
+      // 全新库（文件刚被 Database 创建）：没有数据可保，直接沿用连接建表，
+      // 不再把 0 字节文件改名成 .bak（否则每次首次部署都留一个空备份）。
+      say('INFO', '全新空库，初始化 v2 表结构');
+    } else {
+      say('WARN', `检测到旧版数据库（schema_version=${ver} ≠ ${SCHEMA_VERSION}），按设计作废重建为 v2 空库；原文件已备份为 ${path.basename(bakOf(''))}，不保留旧数据`);
+      try { db.close(); } catch { /* ignore */ }
+      // 先备 -wal/-shm、最后备主文件；任一步失败就把已改名的还原，绝不在备份未完成时删任何文件
+      const moved = [];
+      try {
+        for (const suf of ['-wal', '-shm', '']) {
+          const src = dbPath + suf;
+          if (!fs.existsSync(src)) continue;
+          fs.renameSync(src, bakOf(suf));
+          moved.push([src, bakOf(suf)]);
+        }
+      } catch (e) {
+        for (const [src, dst] of moved.reverse()) {
+          try { fs.renameSync(dst, src); } catch { /* ignore */ }
+        }
+        throw new Error(`[db] 作废旧库前备份失败：${e?.message || e}。已中止启动，原文件未删除。`);
+      }
+      db = new Database(dbPath);
     }
-    db = new Database(dbPath);
   }
 
   // 每次打开都执行幂等 DDL：正常 v2 库缺表/半损坏时可自愈；全新/重建路径由它建表
   db.exec(DDL);
   // 幂等补列迁移：旧 v2 库（schema_version 仍是 2）新增列用 ALTER 补齐。
   // 注意：不能靠提升 SCHEMA_VERSION 来做，openDb 对版本不匹配是「整库作废重建」，会删光用户数据。
+  // 每条独立执行且失败即抛：缺列时 store 的固定列清单会让所有写入抛 "no such column"，
+  // 以前整块 try/catch 静默兜底会把「一次缺列」放大成「整个文件库不落库」。
+  const ensureCol = (table, col, decl) => {
+    const cols = db.prepare(`SELECT name FROM pragma_table_info('${table}')`).all().map((c) => c.name);
+    if (cols.includes(col)) return;
+    try {
+      db.exec(`ALTER TABLE ${table} ADD COLUMN ${decl}`);
+      say('INFO', `数据库迁移：${table} 补列 ${col}`);
+    } catch (e) {
+      throw new Error(`[db] 迁移失败：${table}.${col} 补列失败（${e?.message || e}）。已中止启动——带缺列的表结构继续运行会让后续写入整批失败。`);
+    }
+  };
+  ensureCol('tasks', 'session_hold', 'session_hold INTEGER');
+  ensureCol('tasks', 'live_notified_at', 'live_notified_at TEXT');
+  ensureCol('files', 'end_reason', 'end_reason TEXT');
+  ensureCol('settings', 'default_monitor_only', 'default_monitor_only INTEGER');
+  ensureCol('settings', 'delete_after_merge', 'delete_after_merge INTEGER');
+  ensureCol('notify', 'on_live', 'on_live INTEGER');
+  ensureCol('notify', 'dedupe', 'dedupe INTEGER');
+  // 老库 ALTER 加列无 DEFAULT → 存量行 on_live 为 NULL，读取时 !!NULL=false 会把「开播通知」静默关掉（v0.1.36 bug）。
+  // 幂等修正：NULL 视为开启（默认值 onLive:true 的落库形态），每次打开都跑也无副作用。
   try {
-    const taskCols = db.prepare("SELECT name FROM pragma_table_info('tasks')").all().map((c) => c.name);
-    if (!taskCols.includes('session_hold')) db.exec('ALTER TABLE tasks ADD COLUMN session_hold INTEGER');
-    const fileCols = db.prepare("SELECT name FROM pragma_table_info('files')").all().map((c) => c.name);
-    if (!fileCols.includes('end_reason')) db.exec('ALTER TABLE files ADD COLUMN end_reason TEXT');
-    const setCols = db.prepare("SELECT name FROM pragma_table_info('settings')").all().map((c) => c.name);
-    if (!setCols.includes('default_monitor_only')) db.exec('ALTER TABLE settings ADD COLUMN default_monitor_only INTEGER');
-    if (!setCols.includes('delete_after_merge')) db.exec('ALTER TABLE settings ADD COLUMN delete_after_merge INTEGER');
-    const ntCols = db.prepare("SELECT name FROM pragma_table_info('notify')").all().map((c) => c.name);
-    if (!ntCols.includes('on_live')) db.exec('ALTER TABLE notify ADD COLUMN on_live INTEGER');
-    if (!ntCols.includes('dedupe')) db.exec('ALTER TABLE notify ADD COLUMN dedupe INTEGER');
-    // 老库 ALTER 加列无 DEFAULT → 存量行 on_live 为 NULL，读取时 !!NULL=false 会把「开播通知」静默关掉（v0.1.36 bug）。
-    // 幂等修正：NULL 视为开启（默认值 onLive:true 的落库形态），每次打开都跑也无副作用。
     db.exec('UPDATE notify SET on_live = 1 WHERE on_live IS NULL');
-  } catch { /* 幂等：这次没成功下次打开再补 */ }
+  } catch (e) {
+    throw new Error(`[db] 迁移失败：notify.on_live 回填失败（${e?.message || e}）`);
+  }
   applyPragmas(db);
   if (isRebuild) {
     setMeta(db, 'schema_version', SCHEMA_VERSION);

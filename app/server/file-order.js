@@ -22,20 +22,22 @@ const tsOf = (v) => {
 /** 场次分桶时间（秒级）：同一场次的毫秒级差异不应把它拆成两个桶 */
 const bucketOf = (v) => Math.floor(tsOf(v) / 1000);
 
-/** 段序键：字段值优先（>0）；缺失（独立场次/扫描登记的分段恒 0）时用文件名尾部序号兜底；
- *  两者都没有（派生/合并等无段号产物）→ 排到同场次末尾。 */
+/** 段序键：字段值优先（>0）；「分段」缺失（扫描登记的分段恒 0）时用文件名尾部序号兜底；
+ *  派生/合并等产物一律排到同场次末尾——用户把合并结果命名成「合集2」时，不能因为文件名带数字被插进 002/003 之间。 */
 export function segmentKeyOf(file) {
   const idx = Number(file && file.segmentIndex) || 0;
   if (idx > 0) return idx;
-  const m = /(\d+)(?=\.[^.]+$)/.exec(String((file && file.name) || ''));
+  if (!file || file.kind !== 'segment') return Number.MAX_SAFE_INTEGER;
+  const m = /(\d+)(?=\.[^.]+$)/.exec(String(file.name || ''));
   return m ? Number(m[1]) : Number.MAX_SAFE_INTEGER;
 }
 
-/** 行内文件类型排名：分段 0 < 派生 1 < 合并 2（派生含 mp4/m4a，合并最后） */
+/** 行内文件类型排名：分段 0 < 派生 1 < 合并 2。
+ *  只看结构字段 f.kind，不依赖展示文案（旧实现用 tag === '合并'，文案/i18n 一改排序档位就静默变化）。 */
 function kindRank(row) {
   const f = row && row.f;
   if (f && f.kind === 'segment') return 0;
-  if (row && row.tag === '合并') return 2;
+  if (f && f.kind === 'merged') return 2;
   return 1;
 }
 
@@ -52,21 +54,40 @@ export function compareFileRow(a, b) {
   const byTime = bucketOf(sb.startedAt) - bucketOf(sa.startedAt);
   if (byTime) return byTime;
 
-  // 2) 同目录聚拢（同主播同场次的多段连在一起；跨目录按目录名，避免随机 session id 打乱）
+  // 2) 同目录聚拢
   const byDir = String(sa.relDir || '').localeCompare(String(sb.relDir || ''));
   if (byDir) return byDir;
 
-  // 3) 场次内按段号升序（001→002→003→004）：字段值优先，段号缺失时用文件名尾部序号兜底
+  // 3) 场次块：同一场次（含同秒开录的两场）必须整块相邻，否则会按段号交叉排列成
+  //    sA/001, sB/0001, sA/002, sB/0002。
+  //    例外：主名（去扩展名与尾部序号）相同的两行虽然属于不同 session 记录，但其实是同一场次
+  //    被时序竞争拆散的历史产物——这种情况继续按段号排，绝不能拆成两块（线上实锤 002,004,001,003）。
+  if (sa.id !== sb.id) {
+    const sib = (f) => String(f.name || '').replace(/\.[^.]+$/, '').replace(/\d+$/, '');
+    const ka = sib(fa);
+    const samePhysical = ka && ka === sib(fb);
+    if (!samePhysical) {
+      const byFull = tsOf(sb.startedAt) - tsOf(sa.startedAt);
+      if (byFull) return byFull;
+      const byId = String(sa.id || '').localeCompare(String(sb.id || ''));
+      if (byId) return byId;
+    }
+  }
+
+  // 4) 场次内按段号升序（001→002→003→004）：字段值优先，段号缺失时用文件名尾部序号兜底
   const bySeg = segmentKeyOf(fa) - segmentKeyOf(fb);
   if (bySeg) return bySeg;
 
-  // 4) 同一段号/序号的行：源分段在前、派生居中、合并最后
+  // 5) 同一段号/序号的行：源分段在前、派生居中、合并最后
   const byKind = kindRank(A) - kindRank(B);
   if (byKind) return byKind;
 
-  // 5) 兜底：文件名（自然序，001<002<…；仅保证全序，不承担主排序职责）
-  return String(fa.name || fa.relPath || '')
+  // 6) 兜底：文件名自然序 → 路径。必须保证「任意两行都有非零比较结果」，
+  //    否则 sort 会退化成输入顺序（而输入顺序随重启/翻页变化），看起来就是「排序没生效」。
+  const byName = String(fa.name || fa.relPath || '')
     .localeCompare(String(fb.name || fb.relPath || ''), undefined, { numeric: true });
+  if (byName) return byName;
+  return String(fa.path || '').localeCompare(String(fb.path || ''));
 }
 
 /** 就地排序并返回（便于 `const rows = sortFileRows(rows)` 链式使用） */

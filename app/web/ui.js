@@ -271,11 +271,53 @@ export function promptDialog({ title = t('ui.promptTitle'), label = '', value = 
   });
 }
 
-/** 通用弹窗骨架：body 传 HTML 字符串，footer 传 (close, bodyEl)=>[buttons] */
-export function openDialog({ title = '', body = '', footer = null, wide = false, width = '', cls = '' }) {
+/* 弹窗栈管理：同一时刻 #modalMask 里只放一个弹窗，但每个 openDialog 都会注册自己的
+   document keydown（Esc）以及外部监听（如合并弹窗的拖动 pointermove）。
+   过去直接 mask.innerHTML='' 顶掉上一个弹窗 → 上一层注册的 keydown 只有它自己的 close()
+   才会摘除：叠加弹窗后按 Esc 会互相清 mask（下层弹窗把上层内容清空），拖动监听也会残留在
+   document 上。现在用模块级 dialogCleanup 统一收口：进入新弹窗前先执行上一个的清理函数，
+   close() 只在 mask 里仍是自己的内容时才清空。 */
+
+let dialogSeq = 0;
+let dialogOwner = 0;        // 当前 mask 内容属于哪个弹窗（0 = 空）
+let dialogCleanup = null;   // 当前弹窗的清理函数（摘 keydown / 外部监听 / 执行 onClose 钩子）
+
+/** #modalMask 与 #playerMask 任一打开都要锁滚动，两者都关才恢复 */
+export function syncBodyLock() {
+  const open = (id) => {
+    const node = document.getElementById(id);
+    return !!(node && node.classList.contains('show'));
+  };
+  document.body.style.overflow = (open('modalMask') || open('playerMask')) ? 'hidden' : '';
+}
+
+/** 关闭当前弹窗（切页/退出登录时也要调：浮层是 #view 的兄弟节点，不关会盖住新页面）。 */
+export function closeDialogs() {
+  const fn = dialogCleanup;
+  dialogCleanup = null;
+  dialogOwner = 0;
+  if (fn) { try { fn(); } catch { /* 清理失败不影响关窗 */ } }
   const mask = document.getElementById('modalMask');
-  if (!mask) return { close() {} };
+  if (mask) {
+    mask.classList.remove('show');
+    mask.innerHTML = '';
+    mask.onclick = null;
+  }
+  syncBodyLock();
+}
+
+/**
+ * 通用弹窗骨架：body 传 HTML 字符串，footer 传 (close, bodyEl)=>[buttons]
+ * onClose：弹窗关闭时的钩子（无论点✕、Esc、点遮罩、还是被新弹窗/切页顶掉都会执行），
+ *          用来摘除弹窗自己往 document 上挂的监听（如合并弹窗的拖动 pointermove/up）。
+ */
+export function openDialog({ title = '', body = '', footer = null, wide = false, width = '', cls = '', onClose = null }) {
+  const mask = document.getElementById('modalMask');
+  if (!mask) return { close() {}, body: null };
+  closeDialogs(); // 先收起上一个弹窗（执行它注册的清理函数，避免监听叠加）
   mask.innerHTML = '';
+  const myId = (dialogSeq += 1);
+  dialogOwner = myId;
   const modal = el('div', 'modal');
   if (wide) modal.style.width = 'min(1000px,94vw)';
   if (width) modal.style.width = width;
@@ -288,13 +330,27 @@ export function openDialog({ title = '', body = '', footer = null, wide = false,
   modal.appendChild(head);
   modal.appendChild(bodyEl);
 
-  const close = () => {
-    mask.classList.remove('show');
-    mask.innerHTML = '';
-    document.body.style.overflow = '';
+  let closed = false;
+  const cleanup = () => {
     document.removeEventListener('keydown', onKey);
+    if (typeof onClose === 'function') { try { onClose(); } catch { /* 钩子失败不影响关窗 */ } }
+  };
+  const close = () => {
+    if (closed) return; // 幂等：Esc/✕/遮罩/按钮可能连着触发
+    closed = true;
+    if (dialogCleanup === cleanup) dialogCleanup = null;
+    cleanup();
+    /* 只有 mask 里仍是自己这一层才清空：叠加弹窗时不能把上层内容抹掉 */
+    if (dialogOwner === myId) {
+      dialogOwner = 0;
+      mask.innerHTML = '';
+      mask.classList.remove('show');
+      mask.onclick = null;
+    }
+    syncBodyLock();
   };
   const onKey = (e) => { if (e.key === 'Escape') close(); };
+  dialogCleanup = cleanup;
 
   if (typeof footer === 'function') {
     const foot = el('div', 'modal-f');
@@ -305,7 +361,7 @@ export function openDialog({ title = '', body = '', footer = null, wide = false,
   mask.onclick = (e) => { if (e.target === mask) close(); };
   mask.appendChild(modal);
   mask.classList.add('show');
-  document.body.style.overflow = 'hidden';
+  syncBodyLock();
   document.addEventListener('keydown', onKey);
   return { close, body: bodyEl };
 }
@@ -408,7 +464,7 @@ export async function openPlayer(ctx, opts) {
     </div>`;
 
   mask.classList.add('show');
-  document.body.style.overflow = 'hidden';
+  syncBodyLock();
   mask.onclick = (e) => { if (e.target === mask) closePlayer(); };
 
   const video = mask.querySelector('#plVideo');
@@ -678,7 +734,7 @@ export function openMobilePlayer(ctx, opts, info, mode, url) {
       </div>
     </div>`;
   mask.classList.add('show');
-  document.body.style.overflow = 'hidden';
+  syncBodyLock();
 
   const playerEl = mask.querySelector('#plBox');
   const video = mask.querySelector('#plVideo');
@@ -844,7 +900,7 @@ export function closePlayer() {
   playerState = null;
   mask.classList.remove('show');
   mask.innerHTML = '';
-  document.body.style.overflow = '';
+  syncBodyLock(); // 弹窗还开着就继续保持锁滚动
 }
 
 /* ================= 剪贴板 ================= */
