@@ -1876,6 +1876,22 @@ function testViewGuards() {
   ok(/act === 'stop-once'[\s\S]{0,120}?api\.taskAction\(id, 'stop-once'\)/.test(dashSrc), '总览「停止本场」走任务列表同一个 taskAction(id, stop-once)');
   ok(/t\('tasks\.stopOnceTip'\)/.test(dashSrc) && /t\('tasks\.stopOnceDone'\)/.test(dashSrc), '总览「停止本场」复用既有文案（悬停说明 + 完成提示）');
 
+  /* 总览「正在录制」手机端四行卡片（2026-10-24 用户确认设计稿后落地，只改 ≤768px）：
+     ① 平台图标 + 主播名 + 直播中 ② 画质/分段/本段 三等分 ③ 分段信息 + 进度条
+     ④ 停止本场 / 停止录制；四行 48px 等高、同底色、行间 1px 虚线（同任务管理页）。
+     桌面结构（缩略图 + 横排信息 + 右侧计时）必须原样保留 —— 手机块用 .rec-m 单独渲染。 */
+  ok(/platIcon/.test(dashSrc.slice(0, dashSrc.indexOf('export async function render'))) && /class="rm-row rm-1"[\s\S]{0,160}?\$\{platIcon\(t\.platform/.test(dashSrc), '第一行平台只画图标（platIcon，不带平台名）');
+  ok(['rm-1', 'rm-2', 'rm-3', 'rm-4'].every((c, i, a) => dashSrc.indexOf(`rm-row ${c}`) > 0 && (i === 0 || dashSrc.indexOf(`rm-row ${c}`) > dashSrc.indexOf(`rm-row ${a[i - 1]}`))), '手机块四行顺序 图标/参数/分段/按钮');
+  ok(/class="rm-name">/.test(dashSrc) && /class="chip rm-live"/.test(dashSrc), '第一行 = 图标 + 主播名（可省略）+ 直播中 chip');
+  ok(/dashboard\.mQuality/.test(dashSrc) && /dashboard\.mSegment/.test(dashSrc) && /dashboard\.mCurrent/.test(dashSrc), '第二行三格 = 画质 / 分段 / 本段');
+  ok(/dashboard\.mSegIndex/.test(dashSrc) && /dashboard\.mSegDone/.test(dashSrc) && /dashboard\.mSegTotal/.test(dashSrc) && /const mTrack = isNone \? '' : segTrack/.test(dashSrc), '第三行 = 第 N 段 · 已录 N 段 · 共时长 · 体积 + 分段进度条');
+  ok(/data-live-curonly/.test(dashSrc) && /data-live-bytesonly/.test(dashSrc) && /data-live-elapsed="\$\{id\}"/.test(dashSrc), '手机块数字节点带 live 标记（本段/体积/共时长随录制刷新）');
+  ok(/\.rec-m\{display:none\}/.test(cssSrc), '手机四行块默认不渲染（桌面 display:none）');
+  ok(/\.rec-item > \.thumb,\.rec-item > \.rec-main,\.rec-item > \.rec-right\{display:none\}/.test(cssSrc), '≤768px 隐藏桌面缩略图/信息区/右侧计时');
+  ok(/\.rm-row\{[^}]*min-height:48px/.test(cssSrc) && /\.rm-row:not\(:last-child\)\{border-bottom:1px dashed var\(--line\)\}/.test(cssSrc), '四行 48px 等高 + 行间虚线（1px dashed var(--line)）');
+  ok(/\.rm-2 \.c\{flex:1 1 0/.test(cssSrc), '第二行三等分（flex:1 1 0）');
+  ok(/\.rm-4 \.btn\{flex:1 1 0/.test(cssSrc), '第四行两颗按钮等宽');
+
   /* 录制文件库查询框（用户报「输入主播还没输完就自动查询」+「自动查询和查询按钮逻辑重复」）：
      与任务管理一致——搜索输入走 300ms 防抖 + 局部重绘（paintResults），不重建 #flQ；
      去掉冗余的「查询」按钮（草稿/提交两套状态本就重复）；「刷新」给 toast 反馈。

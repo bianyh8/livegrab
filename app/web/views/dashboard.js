@@ -8,7 +8,7 @@ import { api } from '../api.js';
 import { t as _t } from '../i18n.js';
 import {
   esc, formatBytes, formatDuration,
-  platBadge, segTrack, emptyBox, toast, qualityLabelOf, segDurText,
+  platBadge, platIcon, segTrack, emptyBox, toast, qualityLabelOf, segDurText,
 } from '../ui.js';
 
 export const page = 'dashboard';
@@ -203,6 +203,21 @@ function patchNumbers() {
     if (node.textContent !== txt) node.textContent = txt;
   });
 
+  // 手机端四行卡片的独立数字节点（桌面节点仍走上面三条，互不影响）
+  root.querySelectorAll('[data-live-curonly]').forEach((node) => {
+    const rec = byId.get(String(node.dataset.liveCuronly));
+    if (!rec) return;
+    const txt = formatDuration(recNumbers(rec).current);
+    if (node.textContent !== txt) node.textContent = txt;
+  });
+
+  root.querySelectorAll('[data-live-bytesonly]').forEach((node) => {
+    const rec = byId.get(String(node.dataset.liveBytesonly));
+    if (!rec) return;
+    const txt = formatBytes(recNumbers(rec).bytes);
+    if (node.textContent !== txt) node.textContent = txt;
+  });
+
   root.querySelectorAll('[data-bytes]').forEach((node) => {
     const rec = byId.get(String(node.dataset.bytes));
     if (!rec) return;
@@ -287,6 +302,39 @@ function recItem(t) {
   const segOf = segLabel(t);
   const { segIndex, elapsed, bytes, current } = recNumbers(t);
   const total = segOf === 'none' ? 1 : Math.max(segIndex + 1, 6);
+  const isNone = segOf === 'none';
+  const id = esc(t.id);
+  const name = t.name || t.anchorName || _t('common.unnamed');
+  const segDone = Math.max(0, segIndex - 1);
+  const mTrack = isNone ? '' : segTrack(Math.max(0, segIndex - 1), segIndex - 1, total);
+  const mElapsed = `<b data-live-elapsed="${id}">${esc(formatDuration(elapsed))}</b>`;
+  const mBytes = `<b data-live-bytesonly="${id}">${esc(formatBytes(bytes))}</b>`;
+  const mCur = `<b data-live-curonly="${id}">${esc(formatDuration(current))}</b>`;
+  /* 手机端四行（≤768px，桌面结构与样式不变）：① 平台图标 + 主播名 + 直播中
+     ② 画质 / 分段 / 本段 三等分 ③ 分段信息 + 分段进度条 ④ 两颗粒度一致的动作按钮 */
+  const mobile = `
+      <div class="rec-m">
+        <div class="rm-row rm-1">
+          ${platIcon(t.platform, t.platformName)}
+          <span class="rm-name">${esc(name)}</span>
+          <span class="chip rm-live"><i class="dot"></i>${_t('tasks.live')}</span>
+        </div>
+        <div class="rm-row rm-2">
+          <span class="c">${_t('dashboard.mQuality', esc(quality))}</span>
+          <span class="c">${_t('dashboard.mSegment', esc(isNone ? _t('seg.none') : segOf))}</span>
+          <span class="c">${isNone ? _t('dashboard.mWritten', mBytes) : _t('dashboard.mCurrent', mCur)}</span>
+        </div>
+        <div class="rm-row rm-3">
+          <div class="rm-seg">${isNone
+            ? `${_t('dashboard.singleFile')} · ${_t('dashboard.mSegTotal', mElapsed)} · ${mBytes}`
+            : `${_t('dashboard.mSegIndex', segIndex)} · ${_t('dashboard.mSegDone', segDone)} · ${_t('dashboard.mSegTotal', mElapsed)} · ${mBytes}`}</div>
+          ${mTrack}
+        </div>
+        <div class="rm-row rm-4">
+          <button class="btn sm danger" data-act="stop-once" data-id="${id}" title="${_t('tasks.stopOnceTip')}">${_t('tasks.stopOnce')}</button>
+          <button class="btn sm danger" data-act="stop" data-id="${id}">${_t('common.stopRecord')}</button>
+        </div>
+      </div>`;
 
   return `
     <div class="rec-item">
@@ -314,6 +362,7 @@ function recItem(t) {
           <button class="btn sm danger" data-act="stop" data-id="${esc(t.id)}">${_t('common.stopRecord')}</button>
         </div>
       </div>
+      ${mobile}
     </div>`;
 }
 

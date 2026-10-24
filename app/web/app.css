@@ -301,6 +301,8 @@ select.select.ph{color:var(--txt-3)}
 /* 录制中条目 */
 .rec-item{display:flex;gap:13px;align-items:center;padding:13px 16px;border-bottom:1px solid var(--line)}
 .rec-item:last-child{border-bottom:0}
+/* 手机端四行卡片：宽屏不渲染（桌面沿用缩略图 + 横排信息 + 右侧计时） */
+.rec-m{display:none}
 .thumb{
   width:74px;height:44px;flex:0 0 74px;border-radius:var(--r-s);position:relative;overflow:hidden;
   background:linear-gradient(135deg,#26313f,#171d27);display:grid;place-items:center;color:var(--txt-3);font-size:10px;
@@ -822,7 +824,25 @@ table.tight th{padding:8px 12px}
   .pager-go{display:none}
 
   /* ---- 列表项压缩 ---- */
-  .rec-item{gap:10px;padding:11px 12px}
+  /* 「正在录制」手机端四行：图标+主播名+直播中 / 画质·分段·本段 / 分段信息+进度 / 两按钮。
+     行间用任务管理同款虚线（1px dashed var(--line)），四行背景统一（卡片本身底色）。 */
+  .rec-item{display:block;padding:0 12px;border-bottom:1px dashed var(--line)}
+  .rec-item > .thumb,.rec-item > .rec-main,.rec-item > .rec-right{display:none}
+  .rec-m{display:block}
+  .rm-row{display:flex;align-items:center;gap:9px;min-width:0;min-height:48px}
+  .rm-row:not(:last-child){border-bottom:1px dashed var(--line)}
+  .rm-name{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13.5px;font-weight:600;color:var(--txt-1)}
+  .rm-live{flex:0 0 auto;color:#ffb3b8;border-color:rgba(242,84,91,.35);background:rgba(242,84,91,.10)}
+  .rm-live .dot{background:#f2545b;animation:pulse 1.3s infinite}
+  .rm-2{gap:0}
+  .rm-2 .c{flex:1 1 0;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11.5px;color:var(--txt-3)}
+  .rm-2 .c b{color:var(--txt-1);font-weight:600}
+  .rm-3{flex-direction:column;align-items:stretch;justify-content:center;gap:4px;padding:7px 0}
+  .rm-seg{font-size:11.5px;color:var(--txt-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .rm-seg b{color:var(--txt-2);font-weight:600}
+  .rm-3 .seg-track{margin-top:0}
+  .rm-4{gap:8px}
+  .rm-4 .btn{flex:1 1 0;min-width:0;justify-content:center}
   .thumb{width:58px;height:36px;flex:0 0 58px}
   .tk-avatar{width:46px;height:30px;flex:0 0 46px}
   .fl-item{gap:10px;padding:11px 12px;flex-wrap:wrap}
