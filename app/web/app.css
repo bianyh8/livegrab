@@ -304,7 +304,7 @@ select.select.ph{color:var(--txt-3)}
 /* 手机端四行卡片：宽屏不渲染（桌面沿用缩略图 + 横排信息 + 右侧计时） */
 .rec-m{display:none}
 .thumb{
-  width:74px;height:44px;flex:0 0 74px;border-radius:var(--r-s);position:relative;overflow:hidden;
+  width:64px;height:36px;flex:0 0 64px;border-radius:var(--r-s);position:relative;overflow:hidden;
   background:linear-gradient(135deg,#26313f,#171d27);display:grid;place-items:center;color:var(--txt-3);font-size:10px;
   border:1px solid var(--line-2);
 }
@@ -313,7 +313,7 @@ select.select.ph{color:var(--txt-3)}
 /* 任务列表首帧缩略图：真实画面 <img> 盖在占位层上，取不到图时显示占位层 */
 .tk-cell{display:flex;gap:11px;align-items:center;min-width:0}
 .tk-avatar{
-  width:54px;height:34px;flex:0 0 54px;border-radius:6px;position:relative;overflow:hidden;
+  width:64px;height:36px;flex:0 0 64px;border-radius:6px;position:relative;overflow:hidden;
   background:linear-gradient(135deg,#26313f,#171d27);border:1px solid var(--line-2);
   display:grid;place-items:center;
 }
@@ -521,7 +521,7 @@ td .sub{font-size:11.5px;color:var(--txt-3);margin-top:3px}
   border-left:1px solid var(--line);border-right:1px solid var(--line)}
 .fl-item:last-child{border-bottom:0}
 .fl-item:hover{background:rgba(255,255,255,.022)}
-.fl-ico{width:66px;height:40px;flex:0 0 66px;border-radius:8px;display:grid;place-items:center;font-size:10px;font-weight:700;color:#0a0d13;position:relative;overflow:hidden;
+.fl-ico{width:64px;height:36px;flex:0 0 64px;border-radius:8px;display:grid;place-items:center;font-size:10px;font-weight:700;color:#0a0d13;position:relative;overflow:hidden;
   background:linear-gradient(135deg,var(--p1,#2b3648),var(--p2,#3a4761))}
 .fl-ico .th-ph{z-index:0}
 .fl-ico .tk-thumb{z-index:1}
@@ -827,8 +827,8 @@ table.tight th{padding:8px 12px}
   /* 「正在录制」手机端四行：图标+主播名+直播中 / 画质·分段·本段 / 分段信息+进度 / 两按钮。
      行间用任务管理同款虚线（1px dashed var(--line)），四行背景统一（卡片本身底色）。 */
   /* 网格：缩略图占左列、跨「名称行 + 参数行」；后两行（分段信息 / 按钮）通栏 */
-  .rec-item{display:grid;grid-template-columns:94px minmax(0,1fr);gap:0 10px;padding:0 12px;border-bottom:1px dashed var(--line)}
-  .rec-item > .thumb{display:block;grid-column:1;grid-row:1 / span 2;align-self:center;width:94px;height:56px;flex:none;margin:0}
+  .rec-item{display:grid;grid-template-columns:64px minmax(0,1fr);gap:0 10px;padding:0 12px;border-bottom:1px dashed var(--line)}
+  .rec-item > .thumb{display:block;grid-column:1;grid-row:1 / span 2;align-self:center;width:64px;height:36px;flex:none;margin:0}
   .rec-item > .rec-main,.rec-item > .rec-right{display:none}
   .rec-m{display:contents}
   .rm-row{display:flex;align-items:center;gap:9px;min-width:0;min-height:48px}
@@ -848,8 +848,6 @@ table.tight th{padding:8px 12px}
   .rm-3 .seg-track{margin-top:0}
   .rm-4{gap:8px}
   .rm-4 .btn{flex:1 1 0;min-width:0;justify-content:center}
-  .thumb{width:58px;height:36px;flex:0 0 58px}
-  .tk-avatar{width:46px;height:30px;flex:0 0 46px}
   .fl-item{gap:10px;padding:11px 12px;flex-wrap:wrap}
   .fl-selbar{padding:10px 28px 10px 28px;gap:8px}
   /* 手机端：三颗批量按钮整组独占一行、等宽均分（原来「删除文件」被顶到第一行右端，
@@ -867,7 +865,6 @@ table.tight th{padding:8px 12px}
   .fl-range{height:32px;padding:0 2px 0 8px}
   .fl-range-in{width:96px;font-size:12px}
   .fl-range-sep{padding:0 6px}
-  .fl-ico{width:56px;height:34px;flex:0 0 56px}
   /* 文件/回收站：操作按钮整行下移，避免挤压信息区 */
   .fl-item .acts{flex:1 1 100%;justify-content:flex-end;margin-top:4px;padding-top:8px;border-top:1px dashed var(--line)}
   .fl-item .acts .btn{padding:7px 11px}
