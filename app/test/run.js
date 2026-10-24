@@ -2017,7 +2017,7 @@ function testViewGuards() {
   /* 勾选栏：左边「全选 + 已选中 N 项」，spacer 之后是三个批量按钮（2026-10-22 用户要求
      去掉「已选中」与按钮之间的竖线分隔符）；按钮组右对齐，右内边距 32px 让「扫描磁盘」
      右边缘与行内「删除」按钮对齐。 */
-  ok(/id="flPickChip"[\s\S]{0,120}?<div class="spacer"><\/div>[\s\S]{0,200}?id="flDelPicked"/.test(filesSrc), '批量按钮组靠右：已选中 → spacer → 删除文件/合并文件/扫描磁盘');
+  ok(/id="flPickChip"[\s\S]{0,400}?<div class="spacer"><\/div>[\s\S]{0,200}?id="flDelPicked"/.test(filesSrc), '批量按钮组靠右：已选中（可带「翻页后保留」提示）→ spacer → 删除文件/合并文件/扫描磁盘');
   /* 三颗批量按钮必须是一个整体（.fl-actions）：手机端整组提到第一行等宽均分，
      「全选 / 已选中 N 项」落到第二行。旧结构三颗按钮直接挂在勾选栏里，412px 下
      「删除文件」被 spacer 顶到第一行右端、「合并/扫描」掉到第二行左端，像两组按钮。 */
@@ -2025,6 +2025,14 @@ function testViewGuards() {
   ok(/\.fl-actions\{display:flex;align-items:center;gap:8px;margin-left:auto/.test(cssSrc), '桌面端按钮组整组贴右（.fl-actions margin-left:auto）');
   ok(/@media \(max-width:768px\)[\s\S]*?\.fl-selbar \.fl-actions\{order:-1;flex:1 1 100%/.test(cssSrc), '手机端按钮组提到第一行（order:-1 + 独占整行）');
   ok(/\.fl-selbar \.fl-actions \.btn\{flex:1 1 0;min-width:0;justify-content:center/.test(cssSrc) && /\.fl-selbar \.spacer\{display:none\}/.test(cssSrc), '手机端三颗按钮等宽均分、隐藏 spacer（右侧不留空）');
+  /* 跨页勾选：翻页不能清空勾选（合并要能「第 1 页选 2 个 + 第 2 页选 1 个」），
+     只有筛选条件变化才清空（那些行会离开结果集，留着会被批量删除带走）。 */
+  const pagerNoClear = (filesSrc.match(/bindPager\(root, 'flPager', state, \(\) => \{ state\.hash = ''; tick\(ctx, false\); \}\);/g) || []).length;
+  ok(pagerNoClear === 2, '两处 bindPager 回调都不清空勾选（翻页保留）', `匹配 ${pagerNoClear} 处`);
+  ok(!/bindPager\(root, 'flPager', state, \(\) => \{ clearPicked\(\)/.test(filesSrc), '不存在「翻页即清空勾选」的旧写法');
+  ok(/function commitFilters\(\)[\s\S]{0,400}?clearPicked\(\);/.test(filesSrc), '筛选条件变化（commitFilters）仍清空勾选');
+  ok(/state\.picked\.size && state\.pages > 1[\s\S]{0,80}?files\.pickedKeep/.test(filesSrc), '多页且已勾选时显示「翻页后保留」提示');
+  ok(!!zhJson['files.pickedKeep'], 'i18n 有「翻页后保留」文案', zhJson['files.pickedKeep']);
   ok(!/fl-div/.test(filesSrc) && !/\.fl-div\{/.test(cssSrc), '「已选中」与批量按钮之间不再有竖线分隔符（DOM 与 CSS 都已移除）');
   ok(/\.fl-selbar\{[^}]*padding:10px 32px 12px 32px/.test(cssSrc), '勾选栏左右内边距 32px（左对齐行内复选框、右对齐行内「删除」按钮），上内边距 10px（与折叠栏/筛选行留呼吸）');
 

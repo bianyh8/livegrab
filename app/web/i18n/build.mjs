@@ -75,7 +75,7 @@ const ADD = {
   'files.libraryTitle': '录制文件库', 'files.videoCount': '{0} 个视频文件',
   'files.searchPlaceholder': '搜索 文件名/主播/标题', 'files.anchorPlaceholder': '主播名称',
   'files.allTypes': '全部类型', 'files.clear': '清除', 'files.extTs': '.ts 直播流', 'files.extMp4': '.mp4 / m4a',
-  'files.extM4a': '.m4a 音频', 'files.selectAll': '全选', 'files.selectedCount': '已选中 {0} 项',
+  'files.extM4a': '.m4a 音频', 'files.selectAll': '全选', 'files.selectedCount': '已选中 {0} 项', 'files.pickedKeep': '（翻页后保留）',
   'files.deleteSelected': '删除文件', 'files.noFilteredFiles': '没有符合筛选条件的录制文件',
   'files.selectThisFile': '选择该文件', 'files.missing': '文件缺失',
   'files.duration': '时长 {0}', 'files.play': '播放', 'files.query': '查询', 'files.download': '下载',

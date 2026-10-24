@@ -64,6 +64,7 @@ function commitFilters() {
   state.filters = { q: state.q, platform: state.platform, dateFrom: state.dateFrom, dateTo: state.dateTo, ext: state.ext };
   state.page = 1;
   state.hash = '';
+  // 筛选条件变了：旧勾选可能已不在结果集里，必须清空（翻页不清，见 bindPager）
   clearPicked();
 }
 
@@ -220,7 +221,9 @@ function paintResults(ctx) {
   const pagerEl = root.querySelector('#flPager');
   if (pagerEl) pagerEl.outerHTML = pagerHTML('flPager', state.page, state.pages, state.total);
   bindRows(ctx);
-  bindPager(root, 'flPager', state, () => { clearPicked(); state.hash = ''; tick(ctx, false); });
+  /* 翻页保留勾选：合并/删除需要跨页挑选（如同场次分段分布在多页）。
+     只有筛选条件变化（commitFilters）才清空——那时行会离开结果集，留着会误删屏幕外的文件。 */
+  bindPager(root, 'flPager', state, () => { state.hash = ''; tick(ctx, false); });
   syncPickedBar();
   restoreFocus(root, focus);
 }
@@ -266,6 +269,7 @@ function paint(ctx, force) {
       <div class="fl-selbar">
         <label class="fl-selall"><input type="checkbox" class="cb" id="flSelAll"${allSel ? ' checked' : ''} /> ${t('files.selectAll')}</label>
         <span class="chip ${state.picked.size ? 'on' : ''}" id="flPickChip"><i class="dot"></i>${t('files.selectedCount', state.picked.size)}</span>
+        ${state.picked.size && state.pages > 1 ? `<span class="fl-pick-keep">${t('files.pickedKeep')}</span>` : ''}
         <div class="spacer"></div>
         <div class="fl-actions">
           <button class="btn sm danger" id="flDelPicked"${state.picked.size && !state.merging.size ? '' : ' disabled'}>${t('files.deleteSelected')}</button>
@@ -396,8 +400,9 @@ function bind(ctx) {
     toast(t('files.queryApplied'));
   };
   // 翻页需重新向后端请求对应页数据（走局部重绘，不重建工具栏/搜索框）。
-  // 换页同时清空勾选：上一页的勾选在屏幕上看不见，留着会被「删除所选」带走。
-  bindPager(root, 'flPager', state, () => { clearPicked(); state.hash = ''; tick(ctx, false); });
+  // 勾选跨页保留：用户要能「第 1 页选两个 + 第 2 页选一个」再合并；删除时 targets 仍按
+  // 当前筛选结果过滤（fetchAllRows），屏幕外的行不会被误删。
+  bindPager(root, 'flPager', state, () => { state.hash = ''; tick(ctx, false); });
 
   const selAll = root.querySelector('#flSelAll');
   if (selAll) selAll.onchange = () => {

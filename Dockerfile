@@ -37,7 +37,7 @@ FROM node:22-bookworm-slim
 
 # 版本号由构建参数注入（compose 里从 .env 的 APP_VERSION 传），避免与 app/package.json
 # 长期漂移——此前这里写死 "0.1.35"，早已落后实际版本，镜像元数据因此不准。
-ARG APP_VERSION=0.1.60
+ARG APP_VERSION=0.1.61
 
 LABEL org.opencontainers.image.title="LiveGrab 直播录制台" \
       org.opencontainers.image.description="抖音/B站/快手/虎牙/斗鱼/小红书/微博 直播分段录制，带 Web 管理页面" \

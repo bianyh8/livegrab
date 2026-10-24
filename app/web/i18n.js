@@ -121,6 +121,7 @@ const DEFAULT_DICT = {
   "files.moveToTrash": "移入回收站",
   "files.noFilteredFiles": "没有符合筛选条件的录制文件",
   "files.permanentDelete": "永久删除",
+  "files.pickedKeep": "（翻页后保留）",
   "files.play": "播放",
   "files.query": "查询",
   "files.queryApplied": "已按当前条件查询",
