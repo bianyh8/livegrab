@@ -1876,9 +1876,9 @@ function testViewGuards() {
   ok(/act === 'stop-once'[\s\S]{0,120}?api\.taskAction\(id, 'stop-once'\)/.test(dashSrc), '总览「停止本场」走任务列表同一个 taskAction(id, stop-once)');
   ok(/t\('tasks\.stopOnceTip'\)/.test(dashSrc) && /t\('tasks\.stopOnceDone'\)/.test(dashSrc), '总览「停止本场」复用既有文案（悬停说明 + 完成提示）');
 
-  /* 总览「正在录制」手机端四行卡片（2026-10-24 用户确认设计稿后落地，只改 ≤768px）：
-     ① 平台图标 + 主播名 + 直播中 ② 画质/分段/本段 三等分 ③ 分段信息 + 进度条
-     ④ 停止本场 / 停止录制；四行 48px 等高、同底色、行间 1px 虚线（同任务管理页）。
+  /* 总览「正在录制」手机端卡片（2026-10-24 用户确认设计稿「方案 B」后落地，只改 ≤768px）：
+     缩略图 94×56 占左列、跨「名称行 + 参数行」；名称行 = 平台图标 + 主播名 + 直播中；
+     参数行 = 画质/分段/本段 三等分；分段信息行通栏（上下虚线）+ 进度条；按钮行通栏两颗等宽。
      桌面结构（缩略图 + 横排信息 + 右侧计时）必须原样保留 —— 手机块用 .rec-m 单独渲染。 */
   ok(/platIcon/.test(dashSrc.slice(0, dashSrc.indexOf('export async function render'))) && /class="rm-row rm-1"[\s\S]{0,160}?\$\{platIcon\(t\.platform/.test(dashSrc), '第一行平台只画图标（platIcon，不带平台名）');
   ok(['rm-1', 'rm-2', 'rm-3', 'rm-4'].every((c, i, a) => dashSrc.indexOf(`rm-row ${c}`) > 0 && (i === 0 || dashSrc.indexOf(`rm-row ${c}`) > dashSrc.indexOf(`rm-row ${a[i - 1]}`))), '手机块四行顺序 图标/参数/分段/按钮');
@@ -1887,8 +1887,12 @@ function testViewGuards() {
   ok(/dashboard\.mSegIndex/.test(dashSrc) && /dashboard\.mSegDone/.test(dashSrc) && /dashboard\.mSegTotal/.test(dashSrc) && /const mTrack = isNone \? '' : segTrack/.test(dashSrc), '第三行 = 第 N 段 · 已录 N 段 · 共时长 · 体积 + 分段进度条');
   ok(/data-live-curonly/.test(dashSrc) && /data-live-bytesonly/.test(dashSrc) && /data-live-elapsed="\$\{id\}"/.test(dashSrc), '手机块数字节点带 live 标记（本段/体积/共时长随录制刷新）');
   ok(/\.rec-m\{display:none\}/.test(cssSrc), '手机四行块默认不渲染（桌面 display:none）');
-  ok(/\.rec-item > \.thumb,\.rec-item > \.rec-main,\.rec-item > \.rec-right\{display:none\}/.test(cssSrc), '≤768px 隐藏桌面缩略图/信息区/右侧计时');
-  ok(/\.rm-row\{[^}]*min-height:48px/.test(cssSrc) && /\.rm-row:not\(:last-child\)\{border-bottom:1px dashed var\(--line\)\}/.test(cssSrc), '四行 48px 等高 + 行间虚线（1px dashed var(--line)）');
+  ok(/\.rec-item\{display:grid;grid-template-columns:94px minmax\(0,1fr\);gap:0 10px/.test(cssSrc), '≤768px rec-item = 94px + 自适应两列网格，无行距（缩略图跨行）');
+  ok(/\.rec-item > \.thumb\{[^}]*grid-column:1;grid-row:1 \/ span 2[^}]*width:94px;height:56px/.test(cssSrc), '缩略图 94×56 占左列并跨名称行/参数行');
+  ok(/\.rec-item > \.rec-main,\.rec-item > \.rec-right\{display:none\}/.test(cssSrc), '≤768px 隐藏桌面横排信息区/右侧计时（缩略图保留）');
+  ok(/\.rec-m\{display:contents\}/.test(cssSrc), '手机块 display:contents（四行参与网格定位）');
+  ok(/\.rm-row\{[^}]*min-height:48px/.test(cssSrc) && /\.rm-3\{[^}]*border-top:1px dashed var\(--line\);border-bottom:1px dashed var\(--line\)/.test(cssSrc), '四行 48px + 分段信息行上下 1px 虚线（通栏分隔）');
+  ok(/\.rm-2\{grid-column:2;grid-row:2\}/.test(cssSrc) && /\.rm-3\{grid-column:1 \/ -1/.test(cssSrc), '名称行/参数行在右列，分段信息行与按钮行通栏');
   ok(/\.rm-2 \.c\{flex:1 1 0/.test(cssSrc), '第二行三等分（flex:1 1 0）');
   ok(/\.rm-4 \.btn\{flex:1 1 0/.test(cssSrc), '第四行两颗按钮等宽');
 
