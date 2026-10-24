@@ -324,7 +324,9 @@ select.select.ph{color:var(--txt-3)}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
 .tk-bio{flex:1;min-width:0}
 .rec-main{flex:1;min-width:0}
-.rec-main .ttl{font-size:13.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.rec-main .ttl{display:flex;align-items:center;gap:7px;min-width:0;font-size:13.5px;font-weight:600}
+.rec-main .ttl .plat{flex:0 0 auto}
+.rec-main .ttl-n{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .rec-main .meta{display:flex;gap:10px;align-items:center;margin-top:5px;font-size:11.5px;color:var(--txt-3);flex-wrap:wrap}
 .rec-right{text-align:right;flex:0 0 auto}
 .rec-right .tm{font-size:15px;font-weight:600;letter-spacing:.5px}

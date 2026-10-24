@@ -1900,6 +1900,10 @@ function testViewGuards() {
   ok(/\.fl-ico\{width:74px;height:44px;flex:0 0 74px/.test(cssSrc), '文件管理缩略图桌面 74×44');
   ok(/\n\.thumb\{\s*\n\s*width:74px;height:44px;flex:0 0 74px/.test(cssSrc), '总览缩略图桌面 74×44');
   ok(/\.tk-avatar,\.fl-ico\{width:64px;height:36px;flex:0 0 64px\}/.test(cssSrc), '手机端任务/文件缩略图 64×36');
+  /* 桌面卡片标题行（2026-10-24 用户）：平台徽标移到第一行、主播名前；不再显示房间号 */
+  ok(/<div class="ttl">\$\{platBadge\(t\.platform, t\.platformName\)\}<span class="ttl-n">/.test(dashSrc), '桌面标题行 = 平台徽标 + 主播名（徽标在前）');
+  ok(!/common\.room/.test(dashSrc), '桌面不再显示房间号（common.room 已移除）');
+  ok(/\.rec-main \.ttl\{display:flex;align-items:center;gap:7px;min-width:0/.test(cssSrc) && /\.rec-main \.ttl-n\{[^}]*text-overflow:ellipsis/.test(cssSrc), '标题行 flex 对齐 + 名称单行省略');
   ok(!/\.tk-avatar\{width:46px/.test(cssSrc) && !/\.fl-ico\{width:56px/.test(cssSrc), '手机端不再单独缩小缩略图（三页同尺寸）');
 
   /* 录制文件库查询框（用户报「输入主播还没输完就自动查询」+「自动查询和查询按钮逻辑重复」）：

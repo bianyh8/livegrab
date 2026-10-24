@@ -138,7 +138,7 @@ function paint(ctx, status) {
     state.tasks.map((t) => [t.id, t.status, t.liveStatus, t.monitorOnly]),
     recording.map((r) => {
       const n = recNumbers(r);
-      return [r.id, r.name, r.anchorName, r.title, r.platform, r.platformName, r.roomId,
+      return [r.id, r.name, r.anchorName, r.title, r.platform, r.platformName,
         r.quality, r.qualityLabel, r.segmentMode, r.segmentMinutes, r.segmentSizeMB, n.segIndex];
     }),
     recCount, cap, queuedCount, waitNum, liveCount, monitorList.length, usePct,
@@ -343,9 +343,8 @@ function recItem(t) {
         <img class="tk-thumb" loading="lazy" src="/api/tasks/${esc(t.id)}/thumb" alt="" onerror="this.style.display='none'" />
       </div>
       <div class="rec-main">
-        <div class="ttl">${esc(t.name || t.anchorName || _t('common.unnamed'))}${t.title ? ' · ' + esc(t.title) : ''}</div>
+        <div class="ttl">${platBadge(t.platform, t.platformName)}<span class="ttl-n">${esc(t.name || t.anchorName || _t('common.unnamed'))}${t.title ? ' · ' + esc(t.title) : ''}</span></div>
         <div class="meta">
-          ${platBadge(t.platform, t.platformName)}<span>${_t('common.room', esc(t.roomId || '—'))}</span>
           <span class="chip">${esc(quality)}</span>
           <span class="chip">${segOf === 'none' ? _t('seg.none') : esc(segOf)}</span>
           <span class="chip on" data-live-bytes="${esc(t.id)}"><i class="dot"></i>${segOf === 'none' ? _t('dashboard.writtenSingle', esc(formatBytes(bytes))) : _t('dashboard.writtenSeg', segIndex, esc(formatBytes(bytes)))}</span>
