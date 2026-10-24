@@ -1888,11 +1888,11 @@ function testViewGuards() {
   ok(/data-live-curonly/.test(dashSrc) && /data-live-bytesonly/.test(dashSrc) && /data-live-elapsed="\$\{id\}"/.test(dashSrc), '手机块数字节点带 live 标记（本段/体积/共时长随录制刷新）');
   ok(/\.rec-m\{display:none\}/.test(cssSrc), '手机四行块默认不渲染（桌面 display:none）');
   ok(/\.rec-item\{display:grid;grid-template-columns:64px minmax\(0,1fr\);gap:0 10px/.test(cssSrc), '≤768px rec-item = 64px + 自适应两列网格，无行距（缩略图跨行）');
-  ok(/\.rec-item > \.thumb\{[^}]*grid-column:1;grid-row:1 \/ span 2[^}]*width:64px;height:36px/.test(cssSrc), '缩略图 64×36（三页统一）占左列并跨名称行/参数行');
+  ok(/\.rec-item > \.thumb\{[^}]*grid-column:1;grid-row:1;align-self:center[^}]*width:64px;height:36px/.test(cssSrc), '缩略图 64×36（三页统一）只在名称行、垂直居中');
   ok(/\.rec-item > \.rec-main,\.rec-item > \.rec-right\{display:none\}/.test(cssSrc), '≤768px 隐藏桌面横排信息区/右侧计时（缩略图保留）');
   ok(/\.rec-m\{display:contents\}/.test(cssSrc), '手机块 display:contents（四行参与网格定位）');
-  ok(/\.rm-row\{[^}]*min-height:48px/.test(cssSrc) && /\.rm-3\{[^}]*border-top:1px dashed var\(--line\);border-bottom:1px dashed var\(--line\)/.test(cssSrc), '四行 48px + 分段信息行上下 1px 虚线（通栏分隔）');
-  ok(/\.rm-2\{grid-column:2;grid-row:2\}/.test(cssSrc) && /\.rm-3\{grid-column:1 \/ -1/.test(cssSrc), '名称行/参数行在右列，分段信息行与按钮行通栏');
+  ok(/\.rm-row\{[^}]*min-height:48px/.test(cssSrc) && /\.rm-3\{[^}]*border-bottom:1px dashed var\(--line\)/.test(cssSrc), '四行 48px + 分段信息行下方 1px 虚线');
+  ok(/\.rm-2\{grid-column:1 \/ -1;grid-row:2;border-top:1px dashed var\(--line\);border-bottom:1px dashed var\(--line\)\}/.test(cssSrc), '参数行通栏，上下各一条虚线（缩略图不跨行）');
   ok(/\.rm-2\{gap:12px;justify-content:space-between\}/.test(cssSrc) && /\.rm-2 \.c\{flex:0 1 auto/.test(cssSrc), '参数行按内容定宽 + 余量均分（不再三等分，避免「分段」被挤、画质留空）');
   ok(/\.rm-4 \.btn\{flex:1 1 0/.test(cssSrc), '第四行两颗按钮等宽');
   /* 三页缩略图统一 64×36（严格 16:9，2026-10-24 用户拍板）：任务管理 .tk-avatar / 文件管理 .fl-ico / 总览 .thumb */
