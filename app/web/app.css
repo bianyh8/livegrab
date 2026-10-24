@@ -839,8 +839,8 @@ table.tight th{padding:8px 12px}
   .rm-name{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13.5px;font-weight:600;color:var(--txt-1)}
   .rm-live{flex:0 0 auto;color:#ffb3b8;border-color:rgba(242,84,91,.35);background:rgba(242,84,91,.10)}
   .rm-live .dot{background:#f2545b;animation:pulse 1.3s infinite}
-  .rm-2{gap:0}
-  .rm-2 .c{flex:1 1 0;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11.5px;color:var(--txt-3)}
+  .rm-2{gap:12px;justify-content:space-between}
+  .rm-2 .c{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11.5px;color:var(--txt-3)}
   .rm-2 .c b{color:var(--txt-1);font-weight:600}
   .rm-3{flex-direction:column;align-items:stretch;justify-content:center;gap:4px;padding:7px 0}
   .rm-seg{font-size:11.5px;color:var(--txt-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}

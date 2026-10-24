@@ -1893,7 +1893,7 @@ function testViewGuards() {
   ok(/\.rec-m\{display:contents\}/.test(cssSrc), '手机块 display:contents（四行参与网格定位）');
   ok(/\.rm-row\{[^}]*min-height:48px/.test(cssSrc) && /\.rm-3\{[^}]*border-top:1px dashed var\(--line\);border-bottom:1px dashed var\(--line\)/.test(cssSrc), '四行 48px + 分段信息行上下 1px 虚线（通栏分隔）');
   ok(/\.rm-2\{grid-column:2;grid-row:2\}/.test(cssSrc) && /\.rm-3\{grid-column:1 \/ -1/.test(cssSrc), '名称行/参数行在右列，分段信息行与按钮行通栏');
-  ok(/\.rm-2 \.c\{flex:1 1 0/.test(cssSrc), '第二行三等分（flex:1 1 0）');
+  ok(/\.rm-2\{gap:12px;justify-content:space-between\}/.test(cssSrc) && /\.rm-2 \.c\{flex:0 1 auto/.test(cssSrc), '参数行按内容定宽 + 余量均分（不再三等分，避免「分段」被挤、画质留空）');
   ok(/\.rm-4 \.btn\{flex:1 1 0/.test(cssSrc), '第四行两颗按钮等宽');
 
   /* 录制文件库查询框（用户报「输入主播还没输完就自动查询」+「自动查询和查询按钮逻辑重复」）：
