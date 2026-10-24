@@ -20,7 +20,7 @@ import { PlayManager } from '../server/play.js';
 import * as resolvers from '../server/resolvers/index.js';
 import * as proxyFetch from '../server/proxy-fetch.js';
 import { buildRecordArgs, buildPlayArgs, buildConcatList, buildMergeArgs, ffmpegEnv, spawnFfmpeg } from '../server/media.js';
-import { isPullBlocked, reconnectDelay, planReconnect, Recorder } from '../server/recorder.js';
+import { isPullBlocked, reconnectDelay, planReconnect, Recorder, STALL_MS, isOfflineResolveError } from '../server/recorder.js';
 import { sortFileRows } from '../server/file-order.js';
 import { byteLength, parseRange, safeJoin, formatBytes, formatDuration, HttpError, uid, VERSION, errText } from '../server/util.js';
 import { seekRatio } from '../web/ui.js';
@@ -1055,6 +1055,93 @@ async function testOfflineConfirm() {
   eq(grew, 30 * 1024 * 1024, 'grew = 磁盘总字节差值（本次拉流新增 30MB）');
 }
 
+/* 下播识别加固（v0.1.58）：
+   ① 开录时缓存的 liveStatus='live' 不得短路探活；② 重连解析「状态：未开播」算下播证据；
+   ③ 僵死看门狗：进程活着但 N 分钟零增长 → 探活/重连。 */
+async function testOfflineDetectHardening() {
+  suite('下播识别加固（缓存 live 不短路 + 未开播判据 + 僵死看门狗）');
+  const ff = { info() {}, warn() {}, error() {}, debug() {} };
+  const mk = (probeOffline) => new Recorder({
+    task: { id: 't_stale', platform: 'douyin', container: 'ts', segmentMode: 'time', quality: 'origin' },
+    getSettings: () => ({ reconnectMax: 5 }), naming: {}, logger: ff, resolveStream: async () => ({}), probeOffline,
+  });
+
+  // ① 缓存 live（开录那一刻的状态）不能短路探活
+  let probeCalls = 0;
+  const rec = mk(async () => { probeCalls += 1; return true; });
+  rec._setStream({ url: 'http://a/x.m3u8', candidates: [{ url: 'http://a/x.m3u8' }], headers: {}, liveStatus: 'live' }, 0);
+  eq(rec.streamLiveStatus, 'live', '开录时缓存 live');
+  eq(await rec._probeOfflineNow(), true, '缓存 live 时仍重新探播（旧实现直接判「仍在直播」→ 永远收不了尾）');
+  eq(probeCalls, 1, '探播确实被调用');
+  rec.streamLiveStatus = 'offline';
+  eq(await rec._probeOfflineNow(), true, '缓存 offline 直接采用');
+  eq(probeCalls, 1, '缓存 offline 时不重复探播（省一次接口请求）');
+  rec.streamLiveStatus = null;
+  rec.probeOffline = async () => { throw new Error('网络错误'); };
+  eq(await rec._probeOfflineNow(), null, '探活异常 → 未知（走重连，不误收尾）');
+
+  // ② 连续 2 次证据才收尾
+  rec._offlineStreak = 0;
+  rec.probeOffline = async () => true;
+  eq(rec._noteOfflineEvidence('独立探播'), false, '第 1 次证据不达门槛');
+  eq(rec._noteOfflineEvidence('重连解析'), true, '第 2 次证据达到收尾门槛');
+
+  // ③ 解析失败里的下播判据：只认明确的「状态：未开播」
+  ok(isOfflineResolveError(new Error('所有清晰度均不可用 (origin: 直播间没有可用流 (状态: 未开播), 可能未开播或需要登录 Cookie) (code=NO_STREAM status=502)')), '「状态：未开播」判定为下播证据');
+  ok(isOfflineResolveError(new Error('所有清晰度均不可用 (状态：未开播)')), '中文全角冒号同样识别');
+  ok(!isOfflineResolveError(new Error('主播未开播或未拿到流地址')), '泛化文案不算证据（主播可能仍在播、只是没取到流）');
+  ok(!isOfflineResolveError(new Error('read ECONNRESET')), '网络错误不算证据');
+
+  // ④ 僵死看门狗：零增长 + 确认下播 → 正常收尾（reason=offline），不重连
+  const rec2 = mk(async () => true);
+  rec2.dir = '/tmp/lg-stall-unused';
+  rec2.startNumber = 1;
+  rec2.scanSegments = async () => [];
+  rec2._quitGracefully = async () => true;
+  let finalized = null;
+  rec2._finalize = async (r) => { finalized = r; };
+  rec2._spawn = async () => { throw new Error('确认下播时不应重连'); };
+  rec2._lastGrowAt = Date.now() - (STALL_MS + 1000);
+  rec2._lastGrowBytes = 1024; rec2._cumBase = 0; rec2.currentBytes = 1024;
+  await rec2._checkStall();
+  eq(finalized, 'offline', '零增长且确认下播 → 收尾本场（reason=offline）');
+
+  // ⑤ 僵死但仍在直播 → 主动重连，续到下一段
+  const rec3 = mk(async () => false);
+  rec3.dir = '/tmp/lg-stall-unused';
+  rec3.startNumber = 1;
+  rec3.scanSegments = async () => [{ index: 4, name: 's004.ts', path: '/tmp/lg-stall-unused/s004.ts' }];
+  rec3._quitGracefully = async () => true;
+  rec3._finalize = async () => { throw new Error('仍在直播时不应收尾'); };
+  let spawned = null;
+  rec3._spawn = async (n) => { spawned = n; };
+  rec3._startWatcher = () => {};
+  rec3._lastGrowAt = Date.now() - (STALL_MS + 1000);
+  rec3._lastGrowBytes = 0; rec3._cumBase = 0; rec3.currentBytes = 0;
+  await rec3._checkStall();
+  eq(spawned, 5, '零增长但仍在直播 → 主动重连，续到下一段（4 → 5）');
+
+  // ⑥ 有新数据时看门狗不动手，并刷新增长基准
+  const rec4 = mk(async () => true);
+  rec4._lastGrowAt = Date.now() - (STALL_MS + 1000);
+  rec4._lastGrowBytes = 100; rec4._cumBase = 300; rec4.currentBytes = 200;
+  let touched = false;
+  rec4._finalize = async () => { touched = true; };
+  rec4._spawn = async () => { touched = true; };
+  await rec4._checkStall();
+  ok(!touched, '有增长时看门狗不动手');
+  ok(Date.now() - rec4._lastGrowAt < 5000, '增长基准已刷新为当前时间');
+
+  // ⑦ 看门狗在 stopping/paused 下不得触发（收尾/暂停路径自己会处理）
+  const rec5 = mk(async () => true);
+  rec5.stopping = true;
+  rec5._lastGrowAt = Date.now() - (STALL_MS + 1000);
+  let touched5 = false;
+  rec5._finalize = async () => { touched5 = true; };
+  await rec5._checkStall();
+  ok(!touched5, 'stopping 时看门狗不介入');
+}
+
 /* 全局一致性审计守卫：把「前后端契约 / 多处口径不一致」的真实缺陷钉死，防止回退。 */
 async function testAuditConsistency() {
   suite('全局一致性审计（前后端契约/口径）');
@@ -1776,6 +1863,15 @@ function testViewGuards() {
   ok(/function bindRows\s*\(/.test(filesSrc) && /bindRows\(ctx\)/.test(filesSrc), '局部重绘后重绑行内按钮（换数据不换操作）');
   ok(/function syncPickedBar\s*\(/.test(filesSrc), '勾选计数单独同步（勾选不整表重绘）');
 
+  /* 文件行的时间/时长必须按「这一行自己的文件」（2026-10-24 用户实锤）：
+     同一场次的 002/003/004 曾全部显示场次开始时间 19:35（用 s.startedAt 渲染），
+     时长也回落到场次总时长 → 每段看不出是几点录的、时长张冠李戴。
+     分段行用 f.createdAt；时长只认 f.durationSec（仅单文件场次才回落场次总时长）。 */
+  ok(/const isSegment = Number\(f\.segmentIndex\) > 0/.test(filesSrc) && /formatDateTime\(rowTime\)/.test(filesSrc), '文件行时间取该分段自己的 startedAt（f.createdAt），不共用场次开始时间');
+  ok(!/formatDateTime\(s\.startedAt\)/.test(filesSrc), '不再用 s.startedAt 渲染每一行（分段会全部显示同一时间）');
+  ok(/formatDuration\(durSec\)/.test(filesSrc) && /onlyFile = \(Number\(s\.segmentCount\) \|\| 0\) === 1/.test(filesSrc), '时长按文件自身 durationSec，只有单文件场次才回落场次总时长');
+  ok(/f\.createdAt, f\.durationSec\]/.test(filesSrc), '列表指纹含 f.createdAt / f.durationSec（时间与时长变化能触发重绘）');
+
   /* 勾选合并（2026-10-22 改为小弹框 + 可拖动排序）：点「合并」弹出窄弹框，
      按「文件库现有排序」列出勾选文件，可拖动调整顺序后按该顺序合并。
      顺序必须取列表展示顺序（fetchAllRows），不能用勾选顺序（勾选先后不代表播放顺序）。 */
@@ -2355,7 +2451,7 @@ async function testMergePicked() {
   console.log(`LiveGrab 测试开始（临时目录 ${tmpRoot}）`);
   await rmrf(tmpRoot);
   await fsp.mkdir(tmpRoot, { recursive: true });
-  const suites = [testUtil, testNaming, testStore, testResolvers, testAuth, testRecordChain, testRemuxFollowGlobal, testPullBlockedBackoff, testConcurrentStart, testRepeatSessionNaming, testRepeatSessionSeqContinuation, testRecordingFileRow, testUnregisteredGrouping, testTodayStats, testTaskStatusKeys, testQueue, testHttp, testViewGuards, testUpdateGuards, testProxy, testSegmentEndReason, testSegmentGuards, testFfmpegGuards, testFileScanGuards, testFileOrder, testRecorderLiveProxy, testStreamCandidates, testQualityFallbackBySetting, testResolveStreamPrecheck, testIsLiveFromResolve, testNoDoubleFallback, testOfflineConfirm, testAuditConsistency, testAuditRemainder, testDeadCodeRemainder, testMergeOnStopAndDeleteCount, testMergeDeleteSource, testMergePicked];
+  const suites = [testUtil, testNaming, testStore, testResolvers, testAuth, testRecordChain, testRemuxFollowGlobal, testPullBlockedBackoff, testConcurrentStart, testRepeatSessionNaming, testRepeatSessionSeqContinuation, testRecordingFileRow, testUnregisteredGrouping, testTodayStats, testTaskStatusKeys, testQueue, testHttp, testViewGuards, testUpdateGuards, testProxy, testSegmentEndReason, testSegmentGuards, testFfmpegGuards, testFileScanGuards, testFileOrder, testRecorderLiveProxy, testStreamCandidates, testQualityFallbackBySetting, testResolveStreamPrecheck, testIsLiveFromResolve, testNoDoubleFallback, testOfflineConfirm, testAuditConsistency, testAuditRemainder, testDeadCodeRemainder, testMergeOnStopAndDeleteCount, testMergeDeleteSource, testMergePicked, testOfflineDetectHardening];
   for (const s of suites) {
     try { await s(); } catch (e) {
       failed++;

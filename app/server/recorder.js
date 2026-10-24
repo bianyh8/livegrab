@@ -15,9 +15,24 @@ const BACKOFF = [2000, 4000, 8000, 16000, 30000];
 // 重新解析只会增加接口压力、拖慢恢复。
 const BLOCKED_BACKOFF = [15000, 30000, 60000, 120000, 120000];
 
+/** 录制僵死看门狗：ffmpeg 进程还活着、但落盘字节连续这么久零增长 → 主动探活/重连 */
+export const STALL_MS = 10 * 60 * 1000;
+
 /** ffmpeg stderr 是否为「平台侧拒绝拉流」（风控/限流/签名失效），区别于普通断流 */
 export function isPullBlocked(tail) {
   return /Forbidden|access denied|Too Many Requests|Unauthorized|returned\s+40[139]\b/i.test(String(tail || ''));
+}
+
+/**
+ * 解析失败里是否含着「主播已下播」的明确证据。
+ * 只认接口明确给出的「状态：未开播」（status != 2）——形如「主播未开播或未拿到流地址」的
+ * 泛化文案不算：那种情况下主播可能还在播、只是没取到流地址，据此收尾会砍断正常场次。
+ */
+export function isOfflineResolveError(e) {
+  if (!e) return false;
+  const msg = String(e.message || e);
+  if (/状态[：:]\s*未开播/.test(msg)) return true;
+  return false;
 }
 
 /** 重连等待时长：blocked 走长冷却，普通断流走短退避 */
@@ -84,6 +99,10 @@ export class Recorder extends EventEmitter {
     this._cumBase = 0;        // 已轮转关闭分段累计字节（保持整场单调，供速率采样）
     this._detailTick = 0;     // 周期详情日志计数
     this._segStartAt = null;  // 当前分段开始时间，用于实时「今日已录时长」
+    this._lastGrowAt = null;  // 上次落盘字节增长的时刻（僵死看门狗基准）
+    this._lastGrowBytes = 0;  // 上次增长时的累计字节
+    this._stallChecking = false; // 看门狗正在处理中（防重入）
+    this._manualRestart = false; // 看门狗主动重连中：期间 ffmpeg 退出不算意外断流
   }
 
   get settings() { return this._getSettings(); }
@@ -284,7 +303,10 @@ export class Recorder extends EventEmitter {
       : this.outputName.replace(/%0\dd/, seqText(startNumber, this.digits)));
     this.emit('segment-open', { index: startNumber, name: path.basename(opened), path: opened, startedAt: new Date().toISOString() });
     this._bytesAtSpawn = await this._bytesOnDisk(); // spawn 时刻磁盘总字节基线
-    this._offlineStreak = 0; // 每次拉流重置下播确认计数（新拉流 = 新的探测上下文）
+    this._lastGrowAt = Date.now();                  // 僵死看门狗：新拉流从「现在」开始计零增长
+    this._lastGrowBytes = this._bytesAtSpawn;
+    // 下播确认计数**不在这里清零**：清零只发生在「探到仍在直播」或收尾时。
+    // 若每次拉流都清零，反复出现「探到 offline → 解析短暂成功后 spawn → 立刻又断」时会永远凑不满 2 次。
     this.child.on('close', (code, signal) => this._onClose(code, signal));
     this.child.on('error', (e) => {
       // 带上最近一条 ffmpeg stderr（如有）：ENOENT 之外的「启动即失败」，stderr 往往是唯一线索
@@ -345,6 +367,50 @@ export class Recorder extends EventEmitter {
     if (this.task.segmentMode === 'size' && !this.rotating && !this.stopping && !this.paused) {
       const limit = Math.max(16, Number(this.task.segmentSizeMB) || 2048) * 1024 * 1024;
       if (this.currentBytes >= limit) await this._rotate();
+    }
+    await this._checkStall();
+  }
+
+  /**
+   * 僵死看门狗：ffmpeg 进程还活着、但落盘字节连续 STALL_MS 零增长。
+   * 真实场景（用户实测 12 小时）：主播下播后 CDN 仍在喂极少量残余数据，ffmpeg 不退出、
+   * segment 按流内时间戳照常每小时切一段 → 整夜产出 50MB/小时 的垃圾段，任务一直显示「录制中」。
+   * 处理：先探活，确认下播就正常收尾；仍在直播则主动重连（流卡死时只有重拉才能恢复）。
+   */
+  async _checkStall() {
+    if (this._stallChecking || this.stopping || this.paused || this.rotating) return;
+    const total = this._cumBase + (this.currentBytes || 0);
+    if (total > (this._lastGrowBytes || 0)) {
+      this._lastGrowBytes = total;
+      this._lastGrowAt = Date.now();
+      return;
+    }
+    if (!this._lastGrowAt || Date.now() - this._lastGrowAt < STALL_MS) return;
+    this._stallChecking = true;
+    try {
+      const mins = Math.round(STALL_MS / 60000);
+      const offline = await this._probeOfflineNow();
+      this._manualRestart = true;
+      if (offline === true) {
+        this.logger.warn(`连续 ${mins} 分钟没有新数据，且确认主播已下播 → 正常收尾本场`, this._meta());
+        await this._quitGracefully();
+        this._manualRestart = false;
+        this.reconnectAttempt = 0;
+        this._offlineStreak = 0;
+        await this._finalize('offline');
+        return;
+      }
+      this.logger.warn(`连续 ${mins} 分钟没有新数据（疑似流僵死，ffmpeg 未退出），主动重连`, this._meta());
+      const segs = await this.scanSegments();
+      const next = segs.length ? segs[segs.length - 1].index + 1 : this.startNumber;
+      await this._quitGracefully();
+      this._manualRestart = false;
+      if (this.stopping || this.paused) return;
+      this.reconnectAttempt = 0;
+      await this._spawn(next);
+      this._startWatcher();
+    } finally {
+      this._stallChecking = false;
     }
   }
 
@@ -418,13 +484,40 @@ export class Recorder extends EventEmitter {
   _onClose(code, signal) {
     if (this._exitResolve) { this._exitResolve(); this._exitResolve = null; }
     if (this.child) this.child = null;
-    if (this.stopping || this.paused || this.rotating) return;
+    if (this.stopping || this.paused || this.rotating || this._manualRestart) return;
     this._handleUnexpectedExit(code, signal).catch((e) => {
       this.logger.error(`重连流程异常：${errText(e)}`, this._meta());
     });
   }
 
-  async _handleUnexpectedExit(code, signal) {
+  /**
+   * 当下真实的直播状态（true=已下播 / false=仍在播 / null=未知）。
+   * 只有「解析结果明确是 offline」的缓存才直接采用；缓存 live 是开录时的旧值，必须重新探。
+   */
+  async _probeOfflineNow() {
+    if (this.streamLiveStatus === 'offline') return true;
+    if (!this.probeOffline) return null;
+    try {
+      const r = await this.probeOffline();
+      if (r === true) return true;
+      if (r === false) return false;
+      return null;
+    } catch { return null; } // 探活失败按「未知」处理，走重连而不是收尾
+  }
+
+  /**
+   * 记一次「主播已下播」证据，返回是否达到收尾门槛（连续 2 次）。
+   * 门槛存在的原因：平台接口会瞬时抖动/字段缺失，单次 offline 就把整场砍断过；
+   * 反过来只看 ffmpeg 是否退出也不行——流僵死时进程不退出，场次会一直录下去。
+   */
+  _noteOfflineEvidence(source) {
+    this._offlineStreak += 1;
+    if (this._offlineStreak >= 2) return true;
+    this.logger.info(`判定已下播（第 ${this._offlineStreak}/2 次确认，来源：${source}），继续重连观察：${this._meta().taskName}`, this._meta());
+    return false;
+  }
+
+  async _handleUnexpectedExit(code, signal, { offlineEvidence = false } = {}) {
     const tail = this.lastStderrError || this._stderrTail.slice(-2).join(' | ');
     // 兜底（heuristic，如去 _orN 变体）失败不算平台封禁：403/404 都应继续降级，而不是长冷却复用
     const curCand = this.streamCandidates[this.streamIndex] || {};
@@ -433,33 +526,26 @@ export class Recorder extends EventEmitter {
     // 403/401/429 是平台侧明确拒绝（风控/限流），不是下播：跳过探活，避免风控期间再加接口压力。
     // heuristic 候选（去 _orN 兜底）常 404/无数据，跳过探活：否则每次都「offline 误判」→ 提前收尾。
     if (!blocked && !curCand.heuristic) {
-      // 优先用解析返回的 liveStatus（StreamGet StreamData.is_live 模式）：与 URL 同一调用、同一次取房，
-      // 没有时序错位，可信度高于事后独立探播（独立探播可能与断流时刻错位/接口抖动）。
-      // 缓存只信本次解析的值；'unknown'（接口抖动/字段缺失）不判 offline，继续走独立探播。
       let offline = null;
+      // 只信「解析结果明确为 offline」的缓存。缓存为 'live' 时**不能**短路：
+      // 那是开录那一刻的状态，主播下播后它会一直停在 live，导致断流只当成重连、整场永远收不了尾。
       if (this.streamLiveStatus === 'offline') {
         offline = true;
-      } else if (this.streamLiveStatus === 'live') {
-        offline = false;
       } else if (this.probeOffline) {
-        // 无缓存或缓存为 unknown → 回退独立探播
-        try {
-          const r = await this.probeOffline();
-          if (r === true) offline = true;
-          else if (r === false) offline = false;
-        } catch { /* 探活失败按仍在直播处理，走重连 */ }
+        // 无缓存 / 缓存为 live / unknown → 一律独立探播，拿当下的真实状态
+        offline = await this._probeOfflineNow();
       }
       if (offline === true) {
-        this._offlineStreak += 1;
-        // 连续 2 次确认才收尾：抖音接口瞬时抖动/字段缺失会误判 offline，单次即收会把整场直播拦腰砍断
-        if (this._offlineStreak >= 2) {
+        const source = this.streamLiveStatus === 'offline' ? '解析 liveStatus' : '独立探播';
+        // 连续 2 次确认才收尾（同一次断流里已经记过一次证据时不重复计数）
+        if (!offlineEvidence && this._noteOfflineEvidence(source)) {
           this.logger.info(`连续 ${this._offlineStreak} 次确认已下播，正常结束录制（ffmpeg exit=${code}）`, this._meta());
           this.reconnectAttempt = 0;
           this._offlineStreak = 0;
           await this._finalize('offline');
           return;
         }
-        this.logger.info(`判定已下播（第 ${this._offlineStreak}/2 次确认，来源：${this.streamLiveStatus ? '解析 liveStatus' : '独立探播'}），继续重连观察：${this._meta().taskName}`, this._meta());
+        if (offlineEvidence) this.logger.info(`判定已下播（来源：独立探播，本轮流已记证据）`, this._meta());
       } else if (offline === false) {
         this._offlineStreak = 0; // 探到仍在直播 → 清零确认计数
       }
@@ -522,7 +608,16 @@ export class Recorder extends EventEmitter {
       await this._spawn(next);
     } catch (e) {
       this.logger.warn(`重连解析失败：${errText(e)}`, this._meta());
-      await this._handleUnexpectedExit(code, signal);
+      // 「所有清晰度均不可用（状态：未开播）」是下播铁证，不是普通重连失败：
+      // 以前它一律走重试，导致主播下播后还在不断重连、任务一直显示录制中/直播中。
+      if (isOfflineResolveError(e) && this._noteOfflineEvidence('重连解析')) {
+        this.reconnectAttempt = 0;
+        this._offlineStreak = 0;
+        this.logger.info(`连续确认已下播（重连解析返回未开播），正常结束录制：${this._meta().taskName}`, this._meta());
+        await this._finalize('offline');
+        return;
+      }
+      await this._handleUnexpectedExit(code, signal, { offlineEvidence: isOfflineResolveError(e) });
     }
   }
 

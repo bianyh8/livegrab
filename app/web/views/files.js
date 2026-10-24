@@ -173,7 +173,7 @@ async function fetchAllRows() {
 function listHash() {
   const list = state.rows;
   return JSON.stringify([
-    list.map(({ f, s }) => [f.id, f.status, s.platform, s.streamer, s.startedAt]),
+    list.map(({ f, s }) => [f.id, f.status, s.platform, s.streamer, s.startedAt, f.createdAt, f.durationSec]),
     state.q, state.platform, state.dateFrom, state.dateTo, state.ext,
     Array.from(state.picked), 'p' + state.page, state.total,
   ]);
@@ -267,6 +267,15 @@ function filenameRow({ f, s, tag }) {
   const missing = f.status === 'missing';
   const icoCls = platformInfo(s.platform).cls;
   const extLabel = tag || (f.ext ? f.ext.toUpperCase() : 'TS');
+  // 时间/时长按「这一行自己的文件」显示：
+  // 分段行用 f.createdAt（该段真实开录时间），派生行（转封装/合并）才回落到场次开始时间。
+  // 旧实现一律用 s.startedAt → 同一场次的 002/003/004 全显示同一个时间（19:35），看不出每段是几点录的。
+  const isSegment = Number(f.segmentIndex) > 0;
+  const rowTime = (isSegment ? f.createdAt : null) || s.startedAt || f.createdAt || '';
+  // 时长只认本文件；文件自带时长为 0 时，仅当这场次只有这一个文件才回落场次总时长（否则会张冠李戴）
+  const ownDur = Number(f.durationSec) || 0;
+  const onlyFile = (Number(s.segmentCount) || 0) === 1 && !s.merged && !s.mp4;
+  const durSec = ownDur || (onlyFile ? Number(s.durationSec) || 0 : 0);
   return `
     <div class="fl-item" style="align-items:flex-start" data-file="${esc(f.id)}">
       <input type="checkbox" class="cb" data-pick-file="${esc(f.id)}"${state.picked.has(f.id) ? ' checked' : ''} title="${t('files.selectThisFile')}" style="margin-top:6px" />
@@ -282,8 +291,8 @@ function filenameRow({ f, s, tag }) {
         <div style="display:flex;gap:10px;align-items:center;margin-top:5px;font-size:11.5px;color:var(--txt-3);flex-wrap:wrap">
           ${platBadge(s.platform, s.platformName)}
           <span>${esc(s.streamer || t('common.unknownAnchor'))}</span>
-          <span>${esc(formatDateTime(s.startedAt))}</span>
-          <span>${esc(t('files.duration', esc(formatDuration(f.durationSec || s.durationSec || 0))))}</span>
+          <span>${esc(formatDateTime(rowTime))}</span>
+          <span>${esc(t('files.duration', esc(formatDuration(durSec))))}</span>
           <span data-file-size="${esc(f.id)}">${esc(formatBytes(f.bytes || 0))}</span>
         </div>
       </div>

@@ -141,6 +141,50 @@ console.log('=== 8. 容错：间隔非法值兜底 ===');
   check('过小值下限 10 秒', s.pollIntervalOf(mkTask({ overrides: { pollIntervalSec: 1 } })) === 10, `${s.pollIntervalOf({ overrides: { pollIntervalSec: 1 } })}s`);
 }
 
+console.log('=== 9. 录制中：仍必须探测直播状态（下播要能被发现）===');
+{
+  // 历史 bug：录制中直接 continue 跳过轮询，主播下播后 ffmpeg 因残余数据不退出 → 整夜继续录垃圾段
+  const { s, task, calls } = makeScheduler({
+    settings: { pollIntervalSec: 60 },
+    task: mkTask({ status: 'recording', liveStatus: 'live', autoRecord: true, monitorOnly: false }),
+    probe: async () => ({ liveStatus: 'live' }),
+  });
+  const t0 = Date.now();
+  await s.tick();
+  check('录制中任务仍然探测（旧实现直接跳过）', calls.length === 1, `探测 ${calls.length} 次`);
+  check('录制中探测间隔取系统设置（60 秒，不加额外下限）', near(task.nextPollAt - t0, 60000, 1500), `Δ=${sec(task.nextPollAt - t0)}s`);
+  check('录制中探到直播 → 状态保持 recording', task.status === 'recording', task.status);
+}
+
+console.log('=== 10. 录制中连续 2 次 offline 才收尾本场 ===');
+{
+  const stops = [];
+  const { s, task } = makeScheduler({
+    settings: { pollIntervalSec: 60 },
+    task: mkTask({ status: 'recording', liveStatus: 'live', autoRecord: true, monitorOnly: false }),
+    probe: async () => ({ liveStatus: 'offline' }),
+  });
+  s.stopTask = async (id, opts = {}) => { stops.push({ id, reason: opts.reason }); };
+  await s.tick();
+  check('第 1 次探到 offline 只计数、不收尾（防单次抖动砍断场次）', stops.length === 0, `收尾 ${stops.length} 次`);
+  task.nextPollAt = 0;
+  await s.tick();
+  check('连续 2 次 offline → stopTask(reason=offline)', stops.length === 1 && stops[0].reason === 'offline', JSON.stringify(stops[0] || null));
+}
+
+console.log('=== 11. 录制中探活失败不得把任务判成 error ===');
+{
+  const { s, task } = makeScheduler({
+    settings: { pollIntervalSec: 60, reconnectMax: 2 },
+    task: mkTask({ status: 'recording', liveStatus: 'live', autoRecord: true, monitorOnly: false }),
+    probe: async () => { throw new Error('接口 502'); },
+  });
+  s.stopTask = async () => { throw new Error('不应停止'); };
+  for (let i = 0; i < 4; i++) { task.nextPollAt = 0; await s.tick(); }
+  check('连续失败后仍保持 recording（录制本身可能完全正常）', task.status === 'recording', task.status);
+  check('失败计数已累计但状态未被改写', task.failCount >= 2, `failCount=${task.failCount}`);
+}
+
 console.log('\n================ 结果 ================');
 console.log(`PASS ${pass} ｜ FAIL ${fail}`);
 process.exit(fail ? 1 : 0);

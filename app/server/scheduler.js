@@ -10,6 +10,9 @@ import {
 import { buildRoomUrl } from './resolvers/room-url.js';
 import { uid, nowIso, HttpError, formatBytes, formatDuration, dateKey, formatDate, formatTime, VERSION, errText } from './util.js';
 
+// 录制中的任务同样要定期探测直播状态（否则主播下播后无从发现，历史 bug：整夜继续录垃圾段）。
+// 间隔完全取系统设置/任务级配置（与未录制时同一口径，用户明确要求），不额外加下限。
+
 const LITE = (t) => ({
   id: t.id, name: t.anchorName || t.platformAnchorName || t.title || t.roomId,
   anchorName: t.anchorName || t.platformAnchorName || '', title: t.title, avatar: t.avatarFile || null,
@@ -38,6 +41,7 @@ export class Scheduler {
     this._persistTimer = null;
     this._ticking = false;   // tick 运行中互斥：防止探测慢导致的重叠轮询
     this._pendingStarts = new Map(); // 开播延时待启动定时器（taskId → {timer, rec}），延时改为非阻塞
+    this._recOfflineStreak = new Map(); // 录制中探测到 offline 的连续次数（taskId → n），连续 2 次才收尾
     this._probe = probeLive; // 开播探测入口（测试可注入假实现，避免打真实平台接口）
     // 让磁盘扫描跳过「正在写入的活动分段」，避免把未封口的当前分段误登记成独立会话
     // （否则文件库会出现一个录制中的 ts：点开不能播、首帧也没有）。
@@ -973,7 +977,9 @@ export class Scheduler {
     let polledAny = false; // 本轮是否有直播间实际进入轮询，避免无任务可轮询时空打「开始/结束」
     for (const task of this.store.tasks) {
       try {
-        if (['recording', 'stopping'].includes(task.status)) continue;
+        // stopping 正在收尾，不必再探；recording 必须继续探 —— 主播下播后 ffmpeg 可能因为
+        // CDN 还在喂残余数据而不退出，只靠「ffmpeg 退出」永远发现不了下播（历史 bug）。
+        if (task.status === 'stopping') continue;
         if (task.status === 'paused') continue;
         if (task.status === 'queued') {
           if (task.monitorOnly || task.manualHeld) {
@@ -1008,6 +1014,15 @@ export class Scheduler {
             await this.notifier.send('error', '开播检测连续失败', `${task.anchorName || task.roomId}（${p.name}）：${e.message}`, { taskId: task.id, taskName: task.anchorName });
           }
           if (task.failCount >= limit) {
+            // 录制中的任务不能因为「探活接口连续失败」被改成 error：录制本身可能完全正常，
+            // 改状态等于凭一次接口故障把正在进行的一场录制判死。只记日志、拉长重试间隔。
+            if (task.status === 'recording') {
+              task.nextPollAt = now + 10 * 60 * 1000;
+              this.logger.warn(`录制中任务探活连续失败 ${task.failCount} 次（保持录制，10 分钟后重试）：${errText(e)}`, { taskId: task.id, taskName: task.anchorName });
+              await this.store.saveTask(task);
+              this.onEvent({ type: 'task', task });
+              continue;
+            }
             task.status = 'error';
             task.nextPollAt = now + 10 * 60 * 1000;
             this.logger.error(`任务转入错误（${p.name} 解析连续失败 ${task.failCount} 次）：${errText(e)}`, { taskId: task.id, taskName: task.anchorName });
@@ -1024,6 +1039,7 @@ export class Scheduler {
         task.failNotified = false;
         // 本轮探测成功即按「任务生效间隔」安排下一次轮询。此前只有未开播分支更新 nextPollAt，
         // 直播中的直播间每个 tick（5 秒）都会被重新探测 —— 完全不按系统设置的时间运行。
+        // 录制中同样取系统设置/任务级间隔（用户明确要求，不加额外下限）。
         task.nextPollAt = now + this.pollIntervalOf(task) * 1000;
         // 轮询只刷新直播状态；主播信息仅在「编辑界面点解析 / 创建任务 / 开始录制」时刷新，
         // 避免每次轮询重写主播名与标题（减少流量与资源消耗，且不覆盖用户自定义名称）。
@@ -1050,6 +1066,15 @@ export class Scheduler {
         }
 
         if (info.liveStatus === 'live') {
+          if (task.status === 'recording') {
+            // 录制中：探到仍在直播 → 清空下播确认计数，状态保持不变（把 liveStatus 落盘即可）
+            this._recOfflineStreak.delete(task.id);
+            if (!wasLive) {
+              await this.store.saveTask(task);
+              this.onEvent({ type: 'task', task });
+            }
+            continue;
+          }
           if (task.monitorOnly) {
             // 仅监控任务「录制本场」进行中（recording/stopping）不能被重置回 waiting，否则状态显示错乱
             if (!['waiting', 'recording', 'stopping'].includes(task.status)) task.status = 'waiting';
@@ -1086,8 +1111,19 @@ export class Scheduler {
           // 注意：只有明确 offline 才停。探测结果 unknown（接口抖动/字段缺失）时**绝不能停录**——
           // 那会把一场好端端的直播拦腰砍成几段短文件（真实症状：设了 30 分钟却录出
           // 10-20 分钟的段，且全程没有任何错误信息）。
+          // 连续 2 次 offline 才收尾：单次抖动即停同样会砍断正常场次。
           if (info.liveStatus === 'offline' && task.status === 'recording') {
-            await this.stopTask(task.id, { reason: 'offline' });
+            const n = (this._recOfflineStreak.get(task.id) || 0) + 1;
+            this._recOfflineStreak.set(task.id, n);
+            if (n >= 2) {
+              this._recOfflineStreak.delete(task.id);
+              this.logger.info(`连续 ${n} 次探测到已下播，收尾本场录制：${pollLabel}`, { taskId: task.id, taskName: task.anchorName });
+              await this.stopTask(task.id, { reason: 'offline' });
+              continue;
+            }
+            this.logger.warn(`探测到已下播（第 ${n}/2 次确认，继续录制观察）：${pollLabel}`, { taskId: task.id, taskName: task.anchorName });
+            await this.store.saveTask(task);
+            this.onEvent({ type: 'task', task });
             continue;
           }
           if (info.liveStatus === 'unknown' && task.status === 'recording') {
