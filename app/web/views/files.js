@@ -406,14 +406,11 @@ function bind(ctx) {
 
   const selAll = root.querySelector('#flSelAll');
   if (selAll) selAll.onchange = () => {
-    // 后端分页后「全选」应选中符合当前筛选的全部文件（跨页），需拉全量
-    void (async () => {
-      const rows = await fetchAllRows();
-      if (selAll.checked) rows.forEach(({ f }) => state.picked.add(f.id));
-      else rows.forEach(({ f }) => state.picked.delete(f.id));
-      state.hash = '';
-      paint(ctx, true);
-    })();
+    /* 全选只作用于当前页：勾上=把本页所有行加入选择集，取消=把本页所有行移出。
+       其他页已选中的行保持不动（选择集按 id 记，跨页累积由用户自己逐个勾）。 */
+    state.rows.forEach(({ f }) => { selAll.checked ? state.picked.add(f.id) : state.picked.delete(f.id); });
+    state.hash = '';
+    paint(ctx, true);
   };
 
   /* 扫描磁盘：真的走 POST /api/files/scan 重扫录制目录（重新登记未入库文件、标出缺失、
@@ -506,7 +503,7 @@ function clearPicked() {
   if (!root) return;
   root.querySelectorAll('[data-pick-file]').forEach((cb) => { cb.checked = false; });
   const all = root.querySelector('#flSelAll');
-  if (all) all.checked = false;
+  if (all) { all.checked = false; all.indeterminate = false; }
 }
 
 /* 只更新「已选中 N 项 / 删除所选」这几个文本与可用态，不重建 DOM：
@@ -527,7 +524,9 @@ function syncPickedBar() {
   const selAll = root.querySelector('#flSelAll');
   if (selAll) {
     const list = state.rows;
-    selAll.checked = list.length > 0 && list.every(({ f }) => state.picked.has(f.id));
+    const pickedOnPage = list.filter(({ f }) => state.picked.has(f.id)).length;
+    selAll.checked = list.length > 0 && pickedOnPage === list.length;
+    selAll.indeterminate = pickedOnPage > 0 && pickedOnPage < list.length;
   }
 }
 
@@ -555,12 +554,10 @@ function filePlayer(f, s, tag) {
 
 async function deleteFiles(ids, ctx) {
   if (!ids.length) return;
-  // 选中可能跨页，统计需基于全量数据而非当前页
+  /* 勾选即契约：选中的就是用户要删的，跨页选中的同样删（不再按「当前筛选结果里可见」
+     过滤——那会让翻页/筛选后的选择静默失效）。统计仍按全量数据取，当前页没有的行也能算准大小。 */
+  const targets = Array.from(new Set(ids));
   const all = await fetchAllRows();
-  /* 双保险：只删当前筛选结果里仍在的文件（勾选跨筛选残留时，不能删掉屏幕上看不见的行）。 */
-  const visible = new Set(all.map((r) => r.f.id));
-  const targets = all.length ? ids.filter((id) => visible.has(id)) : ids;
-  if (!targets.length) return;
   const rows = targets.map((id) => all.find((r) => r.f.id === id)).filter(Boolean);
   let bytes = 0;
   rows.forEach(({ f }) => { bytes += Number(f.bytes) || 0; });

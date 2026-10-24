@@ -7,7 +7,7 @@ services:
       context: .
       dockerfile: Dockerfile
       args:
-        APP_VERSION: "${APP_VERSION:-0.1.62}"
+        APP_VERSION: "${APP_VERSION:-0.1.63}"
         # 提交号：留空即由 Dockerfile 的 gitinfo 阶段自动从构建上下文 .git 解析（git pull 后直接
         # up -d --build 就带上，无需任何参数）；显式传入则以此为准。
         BUILD_COMMIT: "${BUILD_COMMIT:-}"

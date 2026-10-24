@@ -2041,6 +2041,19 @@ function testViewGuards() {
   ok(/\.fl-actions,\.tk-actions\{display:flex;align-items:center;gap:8px;margin-left:auto/.test(cssSrc), '两个按钮组共用桌面贴右规则');
   ok(/\.tk-selbar \.tk-actions\{order:-1;flex:1 1 100%/.test(cssSrc) && /\.tk-selbar \.tk-actions \.btn\{flex:1 1 0/.test(cssSrc), '手机端任务按钮组整组第一行、四颗等宽均分');
   ok(/\.tk-selbar \.spacer\{display:none\}/.test(cssSrc) && /\.tk-selbar \.tk-onetask\{display:none\}/.test(cssSrc), '手机端隐藏 spacer 与长提示 chip（第二行只留全选与计数）');
+  /* 全选只勾当前页 + 选中即可删（允许跨页），两页同一套语义 */
+  const filesSelAllBlock = (filesSrc.match(/const selAll = root\.querySelector\('#flSelAll'\);([\s\S]{0,700}?)\}\);/) || [])[1] || '';
+  ok(/state\.rows\.forEach/.test(filesSelAllBlock) && !/fetchAllRows/.test(filesSelAllBlock), '文件库「全选」只作用于当前页（state.rows，不再拉全量）');
+  ok(/indeterminate/.test(filesSrc), '文件库全选框支持半选态（部分勾选时显示 indeterminate）');
+  ok(/const targets = Array\.from\(new Set\(ids\)\)/.test(filesSrc) && !/只删当前筛选结果里仍在的文件/.test(filesSrc), '文件库删除不再按当前筛选过滤，选中即可跨页删除');
+  ok(/<label class="fl-selall tk-selall"><input type="checkbox" class="cb" id="tkSelAll"/.test(tasksSrc), '任务管理「全选」改为复选框（与文件库同款 .fl-selall）');
+  ok(/togglePageSelection\(all\.checked, ctx\)/.test(tasksSrc) && /togglePageSelection\(selAllBar\.checked, ctx\)/.test(tasksSrc), '表头与勾选栏全选都走 togglePageSelection（只勾当前页）');
+  ok(/function togglePageSelection[\s\S]{0,260}?pageTaskIds\(\)\.forEach/.test(tasksSrc), 'togglePageSelection 只遍历当前页任务 id');
+  ok(/function syncSelAll\(\)[\s\S]{0,400}?indeterminate/.test(tasksSrc) && /\['#tkSelAll', '#tkAll'\]/.test(tasksSrc), '两个全选框同步三态（本页全选/半选/未选）');
+  const tasksPagerNoClear = (tasksSrc.match(/bindPager\(root, 'tkPager', state, \(\) => \{ state\.hash = ''; tick\(ctx, false\); \}\);/g) || []).length;
+  ok(tasksPagerNoClear === 2 && !/bindPager\(root, 'tkPager', state, \(\) => \{ clearSelection\(\)/.test(tasksSrc), '任务管理翻页不再清空勾选（两处，允许跨页选择）', `匹配 ${tasksPagerNoClear} 处`);
+  ok(/const targets = Array\.from\(new Set\(ids\)\)/.test(tasksSrc) && !/只删「当前筛选结果里仍在」的任务/.test(tasksSrc), '任务管理批量删除不再按当前筛选过滤，选中即可跨页删除');
+  ok(/\.tk-selall\{display:none\}/.test(cssSrc) && !/#tkSelAll\{display:none\}/.test(cssSrc), '桌面端隐藏整个「全选」label（不是只藏 input）');
   ok(!/fl-div/.test(filesSrc) && !/\.fl-div\{/.test(cssSrc), '「已选中」与批量按钮之间不再有竖线分隔符（DOM 与 CSS 都已移除）');
   ok(/\.fl-selbar\{[^}]*padding:10px 32px 12px 32px/.test(cssSrc), '勾选栏左右内边距 32px（左对齐行内复选框、右对齐行内「删除」按钮），上内边距 10px（与折叠栏/筛选行留呼吸）');
 

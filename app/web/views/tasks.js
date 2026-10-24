@@ -186,7 +186,8 @@ function paintResults(ctx) {
   const sumEl = root.querySelector('#tkFilterToggle .tq-summary');
   if (sumEl) sumEl.innerHTML = filterSummary();
   bindTable(ctx);
-  bindPager(root, 'tkPager', state, () => { clearSelection(); state.hash = ''; tick(ctx, false); });
+  // 翻页保留勾选（允许跨页批量删除/停止）；筛选、排序变化才清空（行已离开结果集）。
+  bindPager(root, 'tkPager', state, () => { state.hash = ''; tick(ctx, false); });
   syncBatchBar();
   restoreFocus(root, focus);
 }
@@ -235,7 +236,7 @@ function paint(ctx, force) {
         </select>
       </div>
       <div class="toolbar tk-selbar" style="border-top:1px dashed var(--line);padding-top:12px">
-        <button class="btn sm ghost" id="tkSelAll">${t('files.selectAll')}</button>
+        <label class="fl-selall tk-selall"><input type="checkbox" class="cb" id="tkSelAll" /> ${t('files.selectAll')}</label>
         <span class="chip ${state.selected.size ? 'on' : ''}" id="tkSelChip"><i class="dot"></i>${t('tasks.selected', state.selected.size)}</span>
         <span class="chip tk-onetask">${t('tasks.oneTaskTip')}</span>
         <div class="spacer"></div>
@@ -256,7 +257,7 @@ function paint(ctx, force) {
 }
 
 /* 拉取符合当前筛选的全量任务（不带分页参数时后端返回全量）：
-   用于跨页全选、批量删除统计与 CSV 导出。 */
+   用于跨页批量删除的统计与 CSV 导出（全选只勾当前页，不再需要全量 id 列表）。 */
 async function fetchAllTasks() {
   try {
     const r = await api.tasks({
@@ -265,10 +266,6 @@ async function fetchAllTasks() {
     });
     return (r && r.items) || [];
   } catch { return []; }
-}
-async function fetchAllIds() {
-  const all = await fetchAllTasks();
-  return all.map((t) => t.id);
 }
 
 /* 筛选/排序/翻页后清空勾选：勾选项可能已经不在屏幕上（换了筛选条件或页码），
@@ -282,7 +279,9 @@ function clearSelection() {
   const root = boundRoot;
   if (!root) return;
   const all = root.querySelector('#tkAll');
-  if (all) all.checked = false;
+  if (all) { all.checked = false; all.indeterminate = false; }
+  const bar = root.querySelector('#tkSelAll');
+  if (bar) { bar.checked = false; bar.indeterminate = false; }
   root.querySelectorAll('[data-pick]').forEach((cb) => { cb.checked = false; });
 }
 
@@ -436,13 +435,9 @@ function bindTable(ctx) {
 
   const all = root.querySelector('#tkAll');
   if (all) all.onchange = () => {
-    // 后端分页后「全选」应选中符合当前筛选的全部任务（跨页），需拉全量 id
-    void (async () => {
-      const ids = await fetchAllIds();
-      ids.forEach((id) => { all.checked ? state.selected.add(id) : state.selected.delete(id); });
-      state.hash = '';
-      paint(ctx, true);
-    })();
+    /* 表头全选只作用于当前页（分页在后端，跨页全选会让「已选 N 项」远超屏幕所见）。
+       其他页已选中的行保持不动。 */
+    togglePageSelection(all.checked, ctx);
   };
 
   root.querySelectorAll('[data-pick]').forEach((cb) => {
@@ -524,23 +519,18 @@ function bind(ctx) {
     openTaskDialog(ctx, null);
   };
 
-  const selAll = root.querySelector('#tkSelAll');
-  if (selAll) selAll.onclick = () => {
-    void (async () => {
-      const ids = await fetchAllIds();
-      const allSel = ids.length > 0 && ids.every((id) => state.selected.has(id));
-      ids.forEach((id) => { allSel ? state.selected.delete(id) : state.selected.add(id); });
-      state.hash = '';
-      paint(ctx, true);
-    })();
+  /* 勾选栏的全选（手机端显示，桌面端用表头那个）：只作用于当前页，不动其他页已选项。 */
+  const selAllBar = root.querySelector('#tkSelAll');
+  if (selAllBar) selAllBar.onchange = () => {
+    togglePageSelection(selAllBar.checked, ctx);
   };
 
   root.querySelectorAll('[data-batch]').forEach((btn) => {
     btn.onclick = () => batch(ctx, btn.dataset.batch);
   });
   // 翻页需重新向后端请求对应页数据；走局部重绘，避免重建工具栏/搜索框。
-  // 翻页同时清空勾选：上一页的勾选在屏幕上看不见，留着会被批量删除带走。
-  bindPager(root, 'tkPager', state, () => { clearSelection(); state.hash = ''; tick(ctx, false); });
+  // 翻页保留勾选：选择集按 id 记，跨页选中的任务可以一起批量操作。
+  bindPager(root, 'tkPager', state, () => { state.hash = ''; tick(ctx, false); });
 
   bindTable(ctx);
   syncBatchBar();
@@ -552,6 +542,34 @@ function syncBatchBar() {
     chip.className = 'chip' + (state.selected.size ? ' on' : '');
     chip.innerHTML = `<i class="dot"></i>${t('tasks.selected', state.selected.size)}`;
   }
+  syncSelAll();
+}
+
+/* 当前页任务 id（后端分页：state.tasks 只含本页） */
+function pageTaskIds() {
+  return (state.tasks || []).map((t) => t.id);
+}
+
+/* 勾选 / 取消当前页全部任务，其他页的选择保持不变 */
+function togglePageSelection(checked, ctx) {
+  pageTaskIds().forEach((id) => { checked ? state.selected.add(id) : state.selected.delete(id); });
+  state.hash = '';
+  paint(ctx, true);
+}
+
+/* 两个全选框（手机勾选栏 #tkSelAll / 桌面表头 #tkAll）保持同一套三态：
+   本页全选 → checked，部分选中 → indeterminate，未选 → 空。 */
+function syncSelAll() {
+  const root = boundRoot;
+  if (!root) return;
+  const ids = pageTaskIds();
+  const picked = ids.filter((id) => state.selected.has(id)).length;
+  for (const id of ['#tkSelAll', '#tkAll']) {
+    const el = root.querySelector(id);
+    if (!el) continue;
+    el.checked = ids.length > 0 && picked === ids.length;
+    el.indeterminate = picked > 0 && picked < ids.length;
+  }
 }
 
 async function batch(ctx, action) {
@@ -560,12 +578,11 @@ async function batch(ctx, action) {
   if (ids.length > 50) { toast(t('tasks.batchLimit'), 'warn'); return; }
 
   if (action === 'delete') {
-    // 选中可能跨页，统计需基于全量数据而非当前页
+    /* 勾选即契约：选中的任务全删，跨页选中的同样删。不再按「当前筛选结果里可见」过滤
+       （那会让翻页后的选择静默失效）。统计仍取全量数据，非当前页的行也能算准。 */
+    const targets = Array.from(new Set(ids));
     const all = await fetchAllTasks();
     const picked = all.filter((t) => ids.includes(t.id));
-    /* 双保险：只删「当前筛选结果里仍在」的任务。筛选/翻页会清勾选，但假如有残留
-       （例如筛选结果在请求期间变了），也绝不能删掉屏幕上看不见的行。 */
-    const targets = picked.length ? picked.map((t) => t.id) : ids;
     const withFiles = picked.filter((t) => t.sessionId).length;
     const files = picked.reduce((n, t) => n + (t.segmentCount || 0), 0);
     const bytes = picked.reduce((n, t) => n + (Number(t.totalBytes) || Number(t.live && t.live.bytes) || 0), 0);
