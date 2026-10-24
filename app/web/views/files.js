@@ -267,9 +267,11 @@ function paint(ctx, force) {
         <label class="fl-selall"><input type="checkbox" class="cb" id="flSelAll"${allSel ? ' checked' : ''} /> ${t('files.selectAll')}</label>
         <span class="chip ${state.picked.size ? 'on' : ''}" id="flPickChip"><i class="dot"></i>${t('files.selectedCount', state.picked.size)}</span>
         <div class="spacer"></div>
-        <button class="btn sm danger" id="flDelPicked"${state.picked.size && !state.merging.size ? '' : ' disabled'}>${t('files.deleteSelected')}</button>
-        <button class="btn sm ok" id="flMergePicked"${state.picked.size >= 2 && !state.merging.size ? '' : ' disabled'}>${t('files.mergeFileBtn')}</button>
-        <button class="btn sm ok" id="flScan">${t('files.scanDisk')}</button>
+        <div class="fl-actions">
+          <button class="btn sm danger" id="flDelPicked"${state.picked.size && !state.merging.size ? '' : ' disabled'}>${t('files.deleteSelected')}</button>
+          <button class="btn sm ok" id="flMergePicked"${state.picked.size >= 2 && !state.merging.size ? '' : ' disabled'}>${t('files.mergeFileBtn')}</button>
+          <button class="btn sm ok" id="flScan">${t('files.scanDisk')}</button>
+        </div>
       </div>
       <div style="padding:0 16px 16px" id="flBody">
         ${list.length ? list.map(filenameRow).join('') : emptyBox(t('files.noFilteredFiles'))}

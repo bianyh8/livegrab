@@ -2018,6 +2018,13 @@ function testViewGuards() {
      去掉「已选中」与按钮之间的竖线分隔符）；按钮组右对齐，右内边距 32px 让「扫描磁盘」
      右边缘与行内「删除」按钮对齐。 */
   ok(/id="flPickChip"[\s\S]{0,120}?<div class="spacer"><\/div>[\s\S]{0,200}?id="flDelPicked"/.test(filesSrc), '批量按钮组靠右：已选中 → spacer → 删除文件/合并文件/扫描磁盘');
+  /* 三颗批量按钮必须是一个整体（.fl-actions）：手机端整组提到第一行等宽均分，
+     「全选 / 已选中 N 项」落到第二行。旧结构三颗按钮直接挂在勾选栏里，412px 下
+     「删除文件」被 spacer 顶到第一行右端、「合并/扫描」掉到第二行左端，像两组按钮。 */
+  ok(/<div class="fl-actions">[\s\S]{0,400}?id="flDelPicked"[\s\S]{0,300}?id="flMergePicked"[\s\S]{0,300}?id="flScan"[\s\S]{0,160}?<\/div>/.test(filesSrc), '三颗批量按钮包在同一个 .fl-actions 组里');
+  ok(/\.fl-actions\{display:flex;align-items:center;gap:8px;margin-left:auto/.test(cssSrc), '桌面端按钮组整组贴右（.fl-actions margin-left:auto）');
+  ok(/@media \(max-width:768px\)[\s\S]*?\.fl-selbar \.fl-actions\{order:-1;flex:1 1 100%/.test(cssSrc), '手机端按钮组提到第一行（order:-1 + 独占整行）');
+  ok(/\.fl-selbar \.fl-actions \.btn\{flex:1 1 0;min-width:0;justify-content:center/.test(cssSrc) && /\.fl-selbar \.spacer\{display:none\}/.test(cssSrc), '手机端三颗按钮等宽均分、隐藏 spacer（右侧不留空）');
   ok(!/fl-div/.test(filesSrc) && !/\.fl-div\{/.test(cssSrc), '「已选中」与批量按钮之间不再有竖线分隔符（DOM 与 CSS 都已移除）');
   ok(/\.fl-selbar\{[^}]*padding:10px 32px 12px 32px/.test(cssSrc), '勾选栏左右内边距 32px（左对齐行内复选框、右对齐行内「删除」按钮），上内边距 10px（与折叠栏/筛选行留呼吸）');
 
