@@ -1895,10 +1895,11 @@ function testViewGuards() {
   ok(/\.rm-2\{grid-column:1 \/ -1;grid-row:2;border-top:1px dashed var\(--line\);border-bottom:1px dashed var\(--line\)\}/.test(cssSrc), '参数行通栏，上下各一条虚线（缩略图不跨行）');
   ok(/\.rm-2\{gap:12px;justify-content:space-between\}/.test(cssSrc) && /\.rm-2 \.c\{flex:0 1 auto/.test(cssSrc), '参数行按内容定宽 + 余量均分（不再三等分，避免「分段」被挤、画质留空）');
   ok(/\.rm-4 \.btn\{flex:1 1 0/.test(cssSrc), '第四行两颗按钮等宽');
-  /* 三页缩略图统一 64×36（严格 16:9，2026-10-24 用户拍板）：任务管理 .tk-avatar / 文件管理 .fl-ico / 总览 .thumb */
-  ok(/\.tk-avatar\{\s*width:64px;height:36px;flex:0 0 64px/.test(cssSrc), '任务管理缩略图 64×36');
-  ok(/\.fl-ico\{width:64px;height:36px;flex:0 0 64px/.test(cssSrc), '文件管理缩略图 64×36');
-  ok(/\n\.thumb\{\s*\n\s*width:64px;height:36px;flex:0 0 64px/.test(cssSrc), '总览桌面缩略图 64×36');
+  /* 三页缩略图分档（2026-10-24 用户拍板）：桌面统一 74×44，手机统一 64×36 */
+  ok(/\.tk-avatar\{\s*width:74px;height:44px;flex:0 0 74px/.test(cssSrc), '任务管理缩略图桌面 74×44');
+  ok(/\.fl-ico\{width:74px;height:44px;flex:0 0 74px/.test(cssSrc), '文件管理缩略图桌面 74×44');
+  ok(/\n\.thumb\{\s*\n\s*width:74px;height:44px;flex:0 0 74px/.test(cssSrc), '总览缩略图桌面 74×44');
+  ok(/\.tk-avatar,\.fl-ico\{width:64px;height:36px;flex:0 0 64px\}/.test(cssSrc), '手机端任务/文件缩略图 64×36');
   ok(!/\.tk-avatar\{width:46px/.test(cssSrc) && !/\.fl-ico\{width:56px/.test(cssSrc), '手机端不再单独缩小缩略图（三页同尺寸）');
 
   /* 录制文件库查询框（用户报「输入主播还没输完就自动查询」+「自动查询和查询按钮逻辑重复」）：
