@@ -234,15 +234,17 @@ function paint(ctx, force) {
             .map(([v, label]) => `<option value="${v}"${state.sortDir === v ? ' selected' : ''}>${label}</option>`).join('')}
         </select>
       </div>
-      <div class="toolbar" style="border-top:1px dashed var(--line);padding-top:12px">
-        <span class="chip ${state.selected.size ? 'on' : ''}" id="tkSelChip"><i class="dot"></i>${t('tasks.selected', state.selected.size)}</span>
+      <div class="toolbar tk-selbar" style="border-top:1px dashed var(--line);padding-top:12px">
         <button class="btn sm ghost" id="tkSelAll">${t('files.selectAll')}</button>
-        <span class="chip">${t('tasks.oneTaskTip')}</span>
+        <span class="chip ${state.selected.size ? 'on' : ''}" id="tkSelChip"><i class="dot"></i>${t('tasks.selected', state.selected.size)}</span>
+        <span class="chip tk-onetask">${t('tasks.oneTaskTip')}</span>
         <div class="spacer"></div>
-        <button class="btn sm ok" data-batch="refresh" title="${t('tasks.batchRefreshTip')}">${t('tasks.batchRefresh')}</button>
-        <button class="btn sm ok" data-batch="start">${t('tasks.batchStart')}</button>
-        <button class="btn sm danger" data-batch="stop">${t('common.stopRecord')}</button>
-        <button class="btn sm danger" data-batch="delete">${t('tasks.batchDelete')}</button>
+        <div class="tk-actions">
+          <button class="btn sm ok" data-batch="refresh" title="${t('tasks.batchRefreshTip')}">${t('tasks.batchRefresh')}</button>
+          <button class="btn sm ok" data-batch="start">${t('tasks.batchStart')}</button>
+          <button class="btn sm danger" data-batch="stop">${t('common.stopRecord')}</button>
+          <button class="btn sm danger" data-batch="delete">${t('tasks.batchDelete')}</button>
+        </div>
       </div>
       <div class="hintline" style="margin:0 0 12px 2px">${t('tasks.batchHint')}${state.sort === 'custom' ? t('tasks.customSortHint') : t('tasks.customSortTip')}</div>
       <div id="tkTable">${table(pageList)}</div>

@@ -2022,7 +2022,7 @@ function testViewGuards() {
      「全选 / 已选中 N 项」落到第二行。旧结构三颗按钮直接挂在勾选栏里，412px 下
      「删除文件」被 spacer 顶到第一行右端、「合并/扫描」掉到第二行左端，像两组按钮。 */
   ok(/<div class="fl-actions">[\s\S]{0,400}?id="flDelPicked"[\s\S]{0,300}?id="flMergePicked"[\s\S]{0,300}?id="flScan"[\s\S]{0,160}?<\/div>/.test(filesSrc), '三颗批量按钮包在同一个 .fl-actions 组里');
-  ok(/\.fl-actions\{display:flex;align-items:center;gap:8px;margin-left:auto/.test(cssSrc), '桌面端按钮组整组贴右（.fl-actions margin-left:auto）');
+  ok(/\.fl-actions,\.tk-actions\{display:flex;align-items:center;gap:8px;margin-left:auto/.test(cssSrc), '桌面端按钮组整组贴右（.fl-actions/.tk-actions 共用 margin-left:auto）');
   ok(/@media \(max-width:768px\)[\s\S]*?\.fl-selbar \.fl-actions\{order:-1;flex:1 1 100%/.test(cssSrc), '手机端按钮组提到第一行（order:-1 + 独占整行）');
   ok(/\.fl-selbar \.fl-actions \.btn\{flex:1 1 0;min-width:0;justify-content:center/.test(cssSrc) && /\.fl-selbar \.spacer\{display:none\}/.test(cssSrc), '手机端三颗按钮等宽均分、隐藏 spacer（右侧不留空）');
   /* 跨页勾选：翻页不能清空勾选（合并要能「第 1 页选 2 个 + 第 2 页选 1 个」），
@@ -2033,6 +2033,14 @@ function testViewGuards() {
   ok(/function commitFilters\(\)[\s\S]{0,400}?clearPicked\(\);/.test(filesSrc), '筛选条件变化（commitFilters）仍清空勾选');
   ok(/state\.picked\.size && state\.pages > 1[\s\S]{0,80}?files\.pickedKeep/.test(filesSrc), '多页且已勾选时显示「翻页后保留」提示');
   ok(!!zhJson['files.pickedKeep'], 'i18n 有「翻页后保留」文案', zhJson['files.pickedKeep']);
+  /* 任务管理勾选栏与文件库同一套排版：按钮组（4 颗）整组贴右；手机上整组第一行等宽，
+     「全选 + 已选 N 项」第二行；长提示 chip 手机端隐藏。 */
+  ok(/<div class="toolbar tk-selbar"/.test(tasksSrc), '任务管理勾选栏带 tk-selbar 类（与文件库共用媒体查询）');
+  ok(/<div class="tk-actions">[\s\S]{0,700}?data-batch="refresh"[\s\S]{0,400}?data-batch="start"[\s\S]{0,400}?data-batch="stop"[\s\S]{0,400}?data-batch="delete"[\s\S]{0,80}?<\/div>/.test(tasksSrc), '四颗批量按钮包在同一个 .tk-actions 组里');
+  ok(/id="tkSelAll"[\s\S]{0,160}?id="tkSelChip"/.test(tasksSrc), '任务管理勾选栏顺序 = 全选 → 已选 N 项（与文件库一致）');
+  ok(/\.fl-actions,\.tk-actions\{display:flex;align-items:center;gap:8px;margin-left:auto/.test(cssSrc), '两个按钮组共用桌面贴右规则');
+  ok(/\.tk-selbar \.tk-actions\{order:-1;flex:1 1 100%/.test(cssSrc) && /\.tk-selbar \.tk-actions \.btn\{flex:1 1 0/.test(cssSrc), '手机端任务按钮组整组第一行、四颗等宽均分');
+  ok(/\.tk-selbar \.spacer\{display:none\}/.test(cssSrc) && /\.tk-selbar \.tk-onetask\{display:none\}/.test(cssSrc), '手机端隐藏 spacer 与长提示 chip（第二行只留全选与计数）');
   ok(!/fl-div/.test(filesSrc) && !/\.fl-div\{/.test(cssSrc), '「已选中」与批量按钮之间不再有竖线分隔符（DOM 与 CSS 都已移除）');
   ok(/\.fl-selbar\{[^}]*padding:10px 32px 12px 32px/.test(cssSrc), '勾选栏左右内边距 32px（左对齐行内复选框、右对齐行内「删除」按钮），上内边距 10px（与折叠栏/筛选行留呼吸）');
 
